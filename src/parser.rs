@@ -1,4 +1,5 @@
 use std::iter::Peekable;
+use std::process::Stdio;
 use std::str::Chars;
 
 pub struct Command {
@@ -126,7 +127,19 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                 tokens.push(Token::RedirectIn);
             }
             _ => {
-                tokens.push(Token::Word(read_word(&mut chars)?));
+                let (word, has_glob) = read_word(&mut chars)?;
+                if has_glob {
+                    match crate::glob::expand(&word) {
+                        Some(matches) => {
+                            for m in matches {
+                                tokens.push(Token::Word(m));
+                            }
+                        }
+                        None => tokens.push(Token::Word(word)),
+                    }
+                } else {
+                    tokens.push(Token::Word(word));
+                }
             }
         }
     }
@@ -134,8 +147,9 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
     Ok(tokens)
 }
 
-fn read_word(chars: &mut Peekable<Chars>) -> Result<String, String> {
+fn read_word(chars: &mut Peekable<Chars>) -> Result<(String, bool), String> {
     let mut word = String::new();
+    let mut has_glob = false;
 
     while let Some(&ch) = chars.peek() {
         match ch {
@@ -159,7 +173,8 @@ fn read_word(chars: &mut Peekable<Chars>) -> Result<String, String> {
                             Some(c) => word.push(c),
                             None => return Err("unclosed double quote".into()),
                         },
-                        Some('$') => word.push_str(&expand_var(chars)),
+                        Some('$') => word.push_str(&handle_dollar(chars)),
+                        Some('`') => word.push_str(&read_backtick(chars)?),
                         Some(c) => word.push(c),
                         None => return Err("unclosed double quote".into()),
                     }
@@ -173,7 +188,11 @@ fn read_word(chars: &mut Peekable<Chars>) -> Result<String, String> {
             }
             '$' => {
                 chars.next();
-                word.push_str(&expand_var(chars));
+                word.push_str(&handle_dollar(chars));
+            }
+            '`' => {
+                chars.next();
+                word.push_str(&read_backtick(chars)?);
             }
             '~' if word.is_empty() => {
                 chars.next();
@@ -184,12 +203,27 @@ fn read_word(chars: &mut Peekable<Chars>) -> Result<String, String> {
             }
             _ => {
                 chars.next();
+                if ch == '*' || ch == '?' {
+                    has_glob = true;
+                }
                 word.push(ch);
             }
         }
     }
 
-    Ok(word)
+    Ok((word, has_glob))
+}
+
+fn handle_dollar(chars: &mut Peekable<Chars>) -> String {
+    if chars.peek() == Some(&'(') {
+        chars.next();
+        match read_subcommand(chars) {
+            Ok(subcmd) => capture_command(&subcmd),
+            Err(_) => String::new(),
+        }
+    } else {
+        expand_var(chars)
+    }
 }
 
 fn expand_var(chars: &mut Peekable<Chars>) -> String {
@@ -209,6 +243,55 @@ fn expand_var(chars: &mut Peekable<Chars>) -> String {
     }
 
     std::env::var(&name).unwrap_or_default()
+}
+
+fn read_subcommand(chars: &mut Peekable<Chars>) -> Result<String, String> {
+    let mut cmd = String::new();
+    let mut depth = 1;
+    loop {
+        match chars.next() {
+            Some('(') => {
+                depth += 1;
+                cmd.push('(');
+            }
+            Some(')') => {
+                depth -= 1;
+                if depth == 0 {
+                    return Ok(cmd);
+                }
+                cmd.push(')');
+            }
+            Some(c) => cmd.push(c),
+            None => return Err("unclosed $(".into()),
+        }
+    }
+}
+
+fn read_backtick(chars: &mut Peekable<Chars>) -> Result<String, String> {
+    let mut cmd = String::new();
+    loop {
+        match chars.next() {
+            Some('`') => return Ok(capture_command(&cmd)),
+            Some(c) => cmd.push(c),
+            None => return Err("unclosed backtick".into()),
+        }
+    }
+}
+
+fn capture_command(cmd: &str) -> String {
+    std::process::Command::new("sh")
+        .args(["-c", cmd])
+        .stderr(Stdio::inherit())
+        .output()
+        .ok()
+        .map(|o| {
+            let mut s = String::from_utf8_lossy(&o.stdout).into_owned();
+            while s.ends_with('\n') {
+                s.pop();
+            }
+            s
+        })
+        .unwrap_or_default()
 }
 
 fn structure_pipeline(tokens: Vec<Token>) -> Result<Pipeline, String> {
@@ -278,4 +361,195 @@ fn structure_pipeline(tokens: Vec<Token>) -> Result<Pipeline, String> {
     });
 
     Ok(Pipeline { commands })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn first_cmd(input: &str) -> Command {
+        let cl = parse(input).unwrap();
+        assert!(cl.rest.is_empty());
+        assert_eq!(cl.first.commands.len(), 1);
+        cl.first.commands.into_iter().next().unwrap()
+    }
+
+    #[test]
+    fn simple_command() {
+        let cmd = first_cmd("ls -la /tmp");
+        assert_eq!(cmd.program, "ls");
+        assert_eq!(cmd.args, ["-la", "/tmp"]);
+    }
+
+    #[test]
+    fn single_quoted_arg() {
+        let cmd = first_cmd("echo 'hello world'");
+        assert_eq!(cmd.args, ["hello world"]);
+    }
+
+    #[test]
+    fn double_quoted_arg() {
+        let cmd = first_cmd("echo \"hello world\"");
+        assert_eq!(cmd.args, ["hello world"]);
+    }
+
+    #[test]
+    fn backslash_escape() {
+        let cmd = first_cmd("echo hello\\ world");
+        assert_eq!(cmd.program, "echo");
+        assert_eq!(cmd.args, ["hello world"]);
+    }
+
+    #[test]
+    fn stdout_redirect() {
+        let cmd = first_cmd("echo hello > out.txt");
+        assert_eq!(cmd.program, "echo");
+        assert_eq!(cmd.args, ["hello"]);
+        assert_eq!(cmd.stdout_file.as_deref(), Some("out.txt"));
+        assert!(!cmd.append);
+    }
+
+    #[test]
+    fn stdout_append() {
+        let cmd = first_cmd("echo hello >> out.txt");
+        assert_eq!(cmd.stdout_file.as_deref(), Some("out.txt"));
+        assert!(cmd.append);
+    }
+
+    #[test]
+    fn stdin_redirect() {
+        let cmd = first_cmd("cat < input.txt");
+        assert_eq!(cmd.program, "cat");
+        assert_eq!(cmd.stdin_file.as_deref(), Some("input.txt"));
+    }
+
+    #[test]
+    fn pipe() {
+        let cl = parse("ls | grep foo").unwrap();
+        let cmds = &cl.first.commands;
+        assert_eq!(cmds.len(), 2);
+        assert_eq!(cmds[0].program, "ls");
+        assert_eq!(cmds[1].program, "grep");
+        assert_eq!(cmds[1].args, ["foo"]);
+    }
+
+    #[test]
+    fn multi_pipe() {
+        let cl = parse("cat file | grep x | wc -l").unwrap();
+        assert_eq!(cl.first.commands.len(), 3);
+        assert_eq!(cl.first.commands[2].program, "wc");
+    }
+
+    #[test]
+    fn and_chain() {
+        let cl = parse("a && b").unwrap();
+        assert_eq!(cl.first.commands[0].program, "a");
+        assert_eq!(cl.rest.len(), 1);
+        assert!(matches!(cl.rest[0].0, Connector::And));
+        assert_eq!(cl.rest[0].1.commands[0].program, "b");
+    }
+
+    #[test]
+    fn or_chain() {
+        let cl = parse("a || b").unwrap();
+        assert!(matches!(cl.rest[0].0, Connector::Or));
+    }
+
+    #[test]
+    fn semicolon_chain() {
+        let cl = parse("a; b; c").unwrap();
+        assert_eq!(cl.rest.len(), 2);
+        assert!(matches!(cl.rest[0].0, Connector::Seq));
+        assert!(matches!(cl.rest[1].0, Connector::Seq));
+    }
+
+    #[test]
+    fn trailing_semicolon() {
+        let cl = parse("a; b;").unwrap();
+        assert_eq!(cl.rest.len(), 1);
+    }
+
+    #[test]
+    fn comment_strips_tail() {
+        let cmd = first_cmd("echo hello # world");
+        assert_eq!(cmd.args, ["hello"]);
+    }
+
+    #[test]
+    fn command_substitution() {
+        let cmd = first_cmd("echo $(echo inner)");
+        assert_eq!(cmd.args, ["inner"]);
+    }
+
+    #[test]
+    fn backtick_substitution() {
+        let cmd = first_cmd("echo `echo back`");
+        assert_eq!(cmd.args, ["back"]);
+    }
+
+    #[test]
+    fn nested_substitution() {
+        let cmd = first_cmd("echo $(echo $(echo deep))");
+        assert_eq!(cmd.args, ["deep"]);
+    }
+
+    #[test]
+    fn quoted_glob_not_expanded() {
+        let cmd = first_cmd("echo '*.rs'");
+        assert_eq!(cmd.args, ["*.rs"]);
+    }
+
+    #[test]
+    fn empty_input_is_error() {
+        assert!(parse("").is_err());
+    }
+
+    #[test]
+    fn only_comment_is_error() {
+        assert!(parse("# just a comment").is_err());
+    }
+
+    #[test]
+    fn lone_pipe_is_error() {
+        assert!(parse("|").is_err());
+    }
+
+    #[test]
+    fn trailing_pipe_is_error() {
+        assert!(parse("ls |").is_err());
+    }
+
+    #[test]
+    fn lone_ampersand_is_error() {
+        assert!(parse("&").is_err());
+    }
+
+    #[test]
+    fn missing_redirect_file() {
+        assert!(parse("echo >").is_err());
+        assert!(parse("cat <").is_err());
+    }
+
+    #[test]
+    fn unclosed_quote() {
+        assert!(parse("echo 'hello").is_err());
+        assert!(parse("echo \"hello").is_err());
+    }
+
+    #[test]
+    fn pipe_with_redirect() {
+        let cl = parse("cat file | grep x > out.txt").unwrap();
+        let cmds = &cl.first.commands;
+        assert_eq!(cmds.len(), 2);
+        assert!(cmds[0].stdout_file.is_none());
+        assert_eq!(cmds[1].stdout_file.as_deref(), Some("out.txt"));
+    }
+
+    #[test]
+    fn mixed_chain_and_pipe() {
+        let cl = parse("a | b && c | d").unwrap();
+        assert_eq!(cl.first.commands.len(), 2);
+        assert_eq!(cl.rest.len(), 1);
+        assert_eq!(cl.rest[0].1.commands.len(), 2);
+    }
 }

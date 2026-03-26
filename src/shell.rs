@@ -32,3 +32,50 @@ impl Shell {
 pub fn error(msg: impl Display) {
     eprintln!("\x1b[1;31mgrfsh:\x1b[0m {}", msg);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_aliases() {
+        let shell = Shell::new();
+        assert_eq!(shell.aliases.get("ls").unwrap(), "ls --color=auto");
+        assert_eq!(shell.aliases.get("grep").unwrap(), "grep --color=auto");
+    }
+
+    #[test]
+    fn expand_known_alias() {
+        let shell = Shell::new();
+        assert_eq!(shell.expand_aliases("ls -la").as_ref(), "ls --color=auto -la");
+    }
+
+    #[test]
+    fn expand_unknown_returns_borrowed() {
+        let shell = Shell::new();
+        let input = "echo hello";
+        let result = shell.expand_aliases(input);
+        assert!(matches!(result, Cow::Borrowed(_)));
+        assert_eq!(result.as_ref(), "echo hello");
+    }
+
+    #[test]
+    fn expand_bare_alias() {
+        let shell = Shell::new();
+        assert_eq!(shell.expand_aliases("ls").as_ref(), "ls --color=auto");
+    }
+
+    #[test]
+    fn expand_preserves_args() {
+        let mut shell = Shell::new();
+        shell.aliases.insert("g".into(), "git".into());
+        assert_eq!(shell.expand_aliases("g status --short").as_ref(), "git status --short");
+    }
+
+    #[test]
+    fn expand_empty_input() {
+        let shell = Shell::new();
+        let result = shell.expand_aliases("");
+        assert_eq!(result.as_ref(), "");
+    }
+}

@@ -1,6 +1,7 @@
 mod builtins;
 mod completer;
 mod executor;
+mod glob;
 mod parser;
 mod prompt;
 mod shell;
