@@ -1,0 +1,9 @@
+[package]
+name = "grfsh"
+version = "0.1.0"
+edition = "2024"
+description = "A lightweight Unix shell"
+license = "MIT"
+
+[dependencies]
+rustyline = "15"
