@@ -6,12 +6,13 @@ mod control;
 mod directory;
 mod jobs;
 mod output;
+mod script;
 mod variables;
 
 const BUILTINS: &[&str] = &[
     "cd", "pwd", "exit", "export", "unset", "echo", "alias", "unalias", "true", "false", ":",
     "return", "break", "continue", "local", "shift", "type", "command", "eval", "jobs", "fg", "bg",
-    "wait", "kill",
+    "wait", "kill", "source", ".", "read", "set",
 ];
 
 pub(crate) fn is_builtin(name: &str) -> bool {
@@ -52,6 +53,12 @@ pub(crate) fn run(shell: &mut Shell, argv: &[String]) -> i32 {
             };
         }
         "kill" => jobs::kill(shell, args, &mut out),
+        "set" => script::set(shell, args, &mut out),
+        "read" => script::read(shell, args),
+        "source" | "." => {
+            drop(out);
+            return script::source(shell, args);
+        }
         "eval" => {
             drop(out);
             return shell.run_source(&args.join(" "));

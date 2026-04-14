@@ -25,6 +25,36 @@ impl Shell {
         }
     }
 
+    pub(crate) fn run_lines(&mut self, mut next_line: impl FnMut() -> Option<String>) -> i32 {
+        let mut buffer = String::new();
+        while let Some(line) = next_line() {
+            buffer.push_str(&line);
+            if !buffer.ends_with('\n') {
+                buffer.push('\n');
+            }
+            match parser::parse_with_aliases(&buffer, &self.aliases) {
+                Err(error) if error.incomplete => continue,
+                Err(error) => {
+                    shell::error(error);
+                    self.last_status = 2;
+                }
+                Ok(list) => {
+                    self.run_list(&list);
+                    self.reap_jobs();
+                }
+            }
+            buffer.clear();
+            match self.flow {
+                Flow::Exit | Flow::Return => return self.last_status,
+                _ => self.flow = Flow::Normal,
+            }
+        }
+        if !buffer.trim().is_empty() {
+            self.run_source(&buffer);
+        }
+        self.last_status
+    }
+
     pub(crate) fn run_list(&mut self, list: &List) -> i32 {
         for item in list {
             if self.flow != Flow::Normal {

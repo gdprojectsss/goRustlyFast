@@ -7,24 +7,71 @@ use rustyline::Editor;
 use rustyline::error::ReadlineError;
 
 use crate::shell::{self, Flow, Shell};
-use crate::syntax::parser;
 use crate::sys;
 
 use completer::ShellHelper;
 
+const USAGE: &str = "usage: grfsh [-c command [name [args...]]] [script [args...]]";
+
 pub fn run() -> i32 {
+    let args: Vec<String> = std::env::args().skip(1).collect();
     let mut shell = Shell::new();
-    load_rc(&mut shell);
-    if shell.flow != Flow::Exit {
-        if sys::isatty(0) {
-            shell.shell_pgid = sys::init_job_control();
-            shell.interactive = true;
-            interactive(&mut shell);
-        } else {
-            run_lines(&mut shell, || sys::read_line(0));
+
+    match args.first().map(String::as_str) {
+        Some("-h") | Some("--help") => {
+            println!("{USAGE}");
+            0
+        }
+        Some("-V") | Some("--version") => {
+            println!("grfsh {}", env!("CARGO_PKG_VERSION"));
+            0
+        }
+        Some("-c") => {
+            let Some(command) = args.get(1) else {
+                shell::error("-c: option requires an argument");
+                return 2;
+            };
+            if let Some(name) = args.get(2) {
+                shell.arg0 = name.clone();
+            }
+            shell.positional = args.iter().skip(3).cloned().collect();
+            shell.run_source(command);
+            shell.last_status
+        }
+        Some(option) if option.starts_with('-') && option != "-" => {
+            shell::error(format!("{option}: unknown option\n{USAGE}"));
+            2
+        }
+        Some(script) => run_script(&mut shell, script, &args[1..]),
+        None => {
+            load_rc(&mut shell);
+            if shell.flow == Flow::Exit {
+                return shell.last_status;
+            }
+            if sys::isatty(0) {
+                shell.shell_pgid = sys::init_job_control();
+                shell.interactive = true;
+                interactive(&mut shell);
+            } else {
+                shell.run_lines(|| sys::read_line(0));
+            }
+            shell.last_status
         }
     }
-    shell.last_status
+}
+
+fn run_script(shell: &mut Shell, path: &str, args: &[String]) -> i32 {
+    let contents = match std::fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(error) => {
+            shell::error(format!("{path}: {}", sys::error_message(&error)));
+            return 127;
+        }
+    };
+    shell.arg0 = path.to_string();
+    shell.positional = args.to_vec();
+    let mut lines = contents.lines().map(String::from);
+    shell.run_lines(|| lines.next())
 }
 
 fn home_dir() -> PathBuf {
@@ -46,36 +93,7 @@ fn load_rc(shell: &mut Shell) {
         return;
     };
     let mut lines = contents.lines().map(String::from);
-    run_lines(shell, || lines.next());
-}
-
-fn run_lines(shell: &mut Shell, mut next_line: impl FnMut() -> Option<String>) {
-    let mut buffer = String::new();
-    while let Some(line) = next_line() {
-        buffer.push_str(&line);
-        if !buffer.ends_with('\n') {
-            buffer.push('\n');
-        }
-        match parser::parse_with_aliases(&buffer, &shell.aliases) {
-            Err(error) if error.incomplete => continue,
-            Err(error) => {
-                shell::error(error);
-                shell.last_status = 2;
-            }
-            Ok(list) => {
-                shell.run_list(&list);
-                shell.reap_jobs();
-            }
-        }
-        buffer.clear();
-        if shell.flow == Flow::Exit {
-            return;
-        }
-        shell.flow = Flow::Normal;
-    }
-    if !buffer.trim().is_empty() {
-        shell.run_source(&buffer);
-    }
+    shell.run_lines(|| lines.next());
 }
 
 fn interactive(shell: &mut Shell) {
