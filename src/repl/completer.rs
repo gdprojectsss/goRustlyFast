@@ -1,6 +1,4 @@
 use std::borrow::Cow;
-use std::collections::BTreeSet;
-use std::os::unix::fs::PermissionsExt;
 
 use rustyline::Context;
 use rustyline::completion::{Completer, FilenameCompleter, Pair};
@@ -10,6 +8,7 @@ use rustyline::history::SearchDirection;
 use rustyline::validate::{ValidationContext, ValidationResult, Validator};
 
 use crate::builtins;
+use crate::commands;
 use crate::syntax::parser;
 
 const CYAN: &str = "\x1b[36m";
@@ -375,32 +374,10 @@ impl Validator for ShellHelper {
 impl rustyline::Helper for ShellHelper {}
 
 fn collect_commands() -> Vec<String> {
-    let mut commands = BTreeSet::new();
-
-    for b in builtins::names() {
-        commands.insert(b.to_string());
-    }
-
-    let Ok(path) = std::env::var("PATH") else {
-        return commands.into_iter().collect();
-    };
-
-    for dir in path.split(':') {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let Ok(meta) = entry.metadata() else {
-                continue;
-            };
-            if meta.is_file()
-                && meta.permissions().mode() & 0o111 != 0
-                && let Ok(name) = entry.file_name().into_string()
-            {
-                commands.insert(name);
-            }
-        }
-    }
-
-    commands.into_iter().collect()
+    let path = std::env::var("PATH").unwrap_or_default();
+    let mut commands = commands::on_path(&path);
+    commands.extend(builtins::names().iter().map(|name| name.to_string()));
+    commands.sort();
+    commands.dedup();
+    commands
 }

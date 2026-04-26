@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::builtins;
+use crate::commands;
 use crate::expand;
 use crate::shell::{self, Flow, Shell};
 use crate::syntax::ast::*;
@@ -304,7 +305,35 @@ impl Shell {
     }
 
     pub(crate) fn command_not_found(&mut self, name: &str) {
-        shell::error(format!("{name}: command not found"));
+        let suggestion = self.suggest_command(name);
+        match suggestion {
+            Some(candidate) => shell::error(format!(
+                "{name}: command not found, did you mean '{candidate}'?"
+            )),
+            None => shell::error(format!("{name}: command not found")),
+        }
+    }
+
+    fn suggest_command(&mut self, name: &str) -> Option<String> {
+        let path = self.get_variable("PATH").unwrap_or_default();
+        if self
+            .path_commands
+            .as_ref()
+            .is_none_or(|(cached, _)| *cached != path)
+        {
+            let found = commands::on_path(&path);
+            self.path_commands = Some((path, found));
+        }
+        let on_path = self
+            .path_commands
+            .iter()
+            .flat_map(|(_, names)| names.iter());
+        let candidates = on_path
+            .chain(self.functions.keys())
+            .chain(self.aliases.keys())
+            .map(String::as_str)
+            .chain(builtins::names().iter().copied());
+        commands::closest(name, candidates).map(String::from)
     }
 
     pub(crate) fn resolve(&self, name: &str) -> Option<String> {
