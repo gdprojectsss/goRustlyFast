@@ -9,8 +9,10 @@ mod output;
 mod script;
 mod variables;
 
+pub(crate) use directory::change_directory;
+
 const BUILTINS: &[&str] = &[
-    "cd", "pwd", "exit", "export", "unset", "echo", "alias", "unalias", "true", "false", ":",
+    "cd", "z", "pwd", "exit", "export", "unset", "echo", "alias", "unalias", "true", "false", ":",
     "return", "break", "continue", "local", "shift", "type", "command", "eval", "jobs", "fg", "bg",
     "wait", "kill", "source", ".", "read", "set",
 ];
@@ -28,6 +30,7 @@ pub(crate) fn run(shell: &mut Shell, argv: &[String]) -> i32 {
     let mut out = io::stdout().lock();
     let status = match argv[0].as_str() {
         "cd" => directory::cd(shell, args, &mut out),
+        "z" => directory::jump(shell, args, &mut out),
         "pwd" => directory::pwd(shell, &mut out),
         "exit" => control::exit(shell, args),
         "export" => variables::export(shell, args, &mut out),

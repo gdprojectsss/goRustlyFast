@@ -1,5 +1,6 @@
 mod builtins;
 mod commands;
+mod directories;
 mod exec;
 mod expand;
 mod jobs;

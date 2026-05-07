@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::rc::Rc;
 
+use crate::directories::DirectoryHistory;
 use crate::jobs::JobTable;
 use crate::syntax::ast::Command;
 use crate::sys;
@@ -34,6 +35,7 @@ pub struct Shell {
     pub loop_depth: u32,
     pub source_depth: u32,
     pub path_commands: Option<(String, Vec<String>)>,
+    pub directories: DirectoryHistory,
 }
 
 impl Shell {
@@ -59,6 +61,10 @@ impl Shell {
             loop_depth: 0,
             source_depth: 0,
             path_commands: None,
+            directories: DirectoryHistory::new(
+                std::env::var_os("HOME")
+                    .map(|home| std::path::Path::new(&home).join(".grfsh_dirs")),
+            ),
         };
         shell.init_working_directory();
         shell

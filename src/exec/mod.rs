@@ -279,7 +279,16 @@ impl Shell {
             });
         }
 
-        let Some(path) = self.resolve(name) else {
+        let resolved = self.resolve(name);
+        if self.interactive
+            && argv.len() == 1
+            && assignments.is_empty()
+            && std::path::Path::new(name).is_dir()
+            && (resolved.is_none() || name.contains('/'))
+        {
+            return builtins::change_directory(self, name);
+        }
+        let Some(path) = resolved else {
             self.command_not_found(name);
             return 127;
         };
