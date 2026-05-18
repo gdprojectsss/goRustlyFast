@@ -1,138 +1,59 @@
-use std::borrow::Cow;
-
-use rustyline::Context;
-use rustyline::completion::{Completer, FilenameCompleter, Pair};
-use rustyline::highlight::Highlighter;
-use rustyline::hint::Hinter;
-use rustyline::history::SearchDirection;
-use rustyline::validate::{ValidationContext, ValidationResult, Validator};
-
-use crate::builtins;
-use crate::commands;
-use crate::syntax::parser;
-
 const CYAN: &str = "\x1b[36m";
 const BOLD_GREEN: &str = "\x1b[1;32m";
 const BOLD_RED: &str = "\x1b[1;31m";
+const MAGENTA: &str = "\x1b[35m";
 const YELLOW: &str = "\x1b[33m";
-const DIM: &str = "\x1b[90m";
-const RESET: &str = "\x1b[0m";
+pub(super) const DIM: &str = "\x1b[90m";
+pub(super) const RESET: &str = "\x1b[0m";
 
-pub struct ShellHelper {
-    file_completer: FilenameCompleter,
-    commands: Vec<String>,
-}
+const KEYWORDS: &[&str] = &[
+    "if", "then", "else", "elif", "fi", "while", "until", "for", "in", "do", "done", "function",
+    "{", "}", "!",
+];
 
-impl ShellHelper {
-    pub fn new() -> Self {
-        ShellHelper {
-            file_completer: FilenameCompleter::new(),
-            commands: collect_commands(),
-        }
-    }
+pub(super) fn highlight(line: &str, is_command: impl Fn(&str) -> bool) -> String {
+    let mut out = String::with_capacity(line.len() + 128);
+    let mut expecting_command = true;
 
-    fn is_valid_command(&self, name: &str) -> bool {
-        builtins::is_builtin(name)
-            || self
-                .commands
-                .binary_search_by(|c| c.as_str().cmp(name))
-                .is_ok()
-    }
-}
-
-impl Completer for ShellHelper {
-    type Candidate = Pair;
-
-    fn complete(
-        &self,
-        line: &str,
-        pos: usize,
-        ctx: &Context<'_>,
-    ) -> rustyline::Result<(usize, Vec<Pair>)> {
-        let before = &line[..pos];
-
-        let cmd_start = before.rfind(['|', ';', '&']).map(|i| i + 1).unwrap_or(0);
-
-        let fragment = before[cmd_start..].trim_start();
-
-        if fragment.contains(' ') {
-            return self.file_completer.complete(line, pos, ctx);
-        }
-
-        let word_start = pos - fragment.len();
-        let matches = self
-            .commands
-            .iter()
-            .filter(|c| c.starts_with(fragment))
-            .map(|c| Pair {
-                display: c.clone(),
-                replacement: c.clone(),
-            })
-            .collect();
-
-        Ok((word_start, matches))
-    }
-}
-
-impl Highlighter for ShellHelper {
-    fn highlight<'l>(&self, line: &'l str, _pos: usize) -> Cow<'l, str> {
-        if line.is_empty() {
-            return line.into();
-        }
-
-        let mut out = String::with_capacity(line.len() + 128);
-        let mut expecting_command = true;
-
-        let spans = extract_spans(line);
-        for span in &spans {
-            match span.kind {
-                SpanKind::Whitespace => out.push_str(span.text),
-                SpanKind::Comment => color(&mut out, DIM, span.text),
-                SpanKind::Operator => {
-                    color(&mut out, CYAN, span.text);
-                    if matches!(span.text, "|" | "||" | "&&" | ";") {
-                        expecting_command = true;
-                    }
-                }
-                SpanKind::SingleQuoted | SpanKind::DoubleQuoted => {
-                    color(&mut out, YELLOW, span.text);
-                    expecting_command = false;
-                }
-                SpanKind::Variable | SpanKind::Substitution => {
-                    color(&mut out, CYAN, span.text);
-                    expecting_command = false;
-                }
-                SpanKind::Word => {
-                    if expecting_command && is_plain_command(span.text) {
-                        let c = if self.is_valid_command(span.text) {
-                            BOLD_GREEN
-                        } else {
-                            BOLD_RED
-                        };
-                        color(&mut out, c, span.text);
-                    } else {
-                        out.push_str(span.text);
-                    }
-                    expecting_command = false;
+    for span in &extract_spans(line) {
+        match span.kind {
+            SpanKind::Whitespace => out.push_str(span.text),
+            SpanKind::Comment => color(&mut out, DIM, span.text),
+            SpanKind::Operator => {
+                color(&mut out, CYAN, span.text);
+                if matches!(span.text, "|" | "||" | "&&" | ";" | "&") {
+                    expecting_command = true;
                 }
             }
+            SpanKind::SingleQuoted | SpanKind::DoubleQuoted => {
+                color(&mut out, YELLOW, span.text);
+                expecting_command = false;
+            }
+            SpanKind::Variable | SpanKind::Substitution => {
+                color(&mut out, CYAN, span.text);
+                expecting_command = false;
+            }
+            SpanKind::Word if expecting_command && KEYWORDS.contains(&span.text) => {
+                color(&mut out, MAGENTA, span.text);
+                expecting_command = !matches!(span.text, "for" | "function" | "in");
+            }
+            SpanKind::Word => {
+                if expecting_command && is_plain_command(span.text) {
+                    let shade = if is_command(span.text) {
+                        BOLD_GREEN
+                    } else {
+                        BOLD_RED
+                    };
+                    color(&mut out, shade, span.text);
+                } else {
+                    out.push_str(span.text);
+                }
+                expecting_command = false;
+            }
         }
-
-        out.into()
     }
 
-    fn highlight_hint<'h>(&self, hint: &'h str) -> Cow<'h, str> {
-        format!("{DIM}{hint}{RESET}").into()
-    }
-
-    fn highlight_char(
-        &self,
-        _line: &str,
-        _pos: usize,
-        _kind: rustyline::highlight::CmdKind,
-    ) -> bool {
-        true
-    }
+    out
 }
 
 fn color(out: &mut String, ansi: &str, text: &str) {
@@ -341,43 +262,34 @@ fn extract_spans(line: &str) -> Vec<Span<'_>> {
     spans
 }
 
-impl Hinter for ShellHelper {
-    type Hint = String;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    fn hint(&self, line: &str, pos: usize, ctx: &Context<'_>) -> Option<String> {
-        if line.is_empty() || pos < line.len() {
-            return None;
-        }
-
-        let history = ctx.history();
-        for idx in (0..history.len()).rev() {
-            let Ok(Some(entry)) = history.get(idx, SearchDirection::Forward) else {
-                continue;
-            };
-            if entry.entry.starts_with(line) && entry.entry.len() > line.len() {
-                return Some(entry.entry[line.len()..].to_string());
+    fn strip(text: &str) -> String {
+        let mut out = String::new();
+        let mut in_escape = false;
+        for character in text.chars() {
+            match character {
+                '\x1b' => in_escape = true,
+                'm' if in_escape => in_escape = false,
+                _ if in_escape => {}
+                _ => out.push(character),
             }
         }
-
-        None
+        out
     }
-}
 
-impl Validator for ShellHelper {
-    fn validate(&self, context: &mut ValidationContext) -> rustyline::Result<ValidationResult> {
-        match parser::parse(context.input()) {
-            Err(error) if error.incomplete => Ok(ValidationResult::Incomplete),
-            _ => Ok(ValidationResult::Valid(None)),
-        }
+    #[test]
+    fn highlighting_keeps_the_text() {
+        let line = "if true; then echo \"$HOME\" | grep x; fi # note";
+        assert_eq!(strip(&highlight(line, |_| true)), line);
     }
-}
-impl rustyline::Helper for ShellHelper {}
 
-fn collect_commands() -> Vec<String> {
-    let path = std::env::var("PATH").unwrap_or_default();
-    let mut commands = commands::on_path(&path);
-    commands.extend(builtins::names().iter().map(|name| name.to_string()));
-    commands.sort();
-    commands.dedup();
-    commands
+    #[test]
+    fn keywords_and_unknown_commands_are_colored() {
+        let colored = highlight("if nope", |name| name != "nope");
+        assert!(colored.contains(&format!("{MAGENTA}if{RESET}")));
+        assert!(colored.contains(&format!("{BOLD_RED}nope{RESET}")));
+    }
 }

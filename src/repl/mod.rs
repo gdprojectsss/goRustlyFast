@@ -1,4 +1,6 @@
-mod completer;
+mod completion;
+mod helper;
+mod highlight;
 mod prompt;
 
 use std::path::PathBuf;
@@ -7,10 +9,12 @@ use std::time::{Duration, Instant};
 use rustyline::Editor;
 use rustyline::error::ReadlineError;
 
+use crate::builtins;
 use crate::shell::{self, Flow, Shell};
 use crate::sys;
 
-use completer::ShellHelper;
+use completion::ShellNames;
+use helper::ShellHelper;
 use prompt::PromptState;
 
 const USAGE: &str = "usage: grfsh [-c command [name [args...]]] [script [args...]]";
@@ -108,6 +112,9 @@ fn interactive(shell: &mut Shell) {
 
     loop {
         shell.reap_jobs();
+        if let Some(helper) = editor.helper_mut() {
+            helper.update(completion_names(shell));
+        }
         let state = PromptState {
             status: shell.last_status,
             duration,
@@ -148,4 +155,27 @@ fn interactive(shell: &mut Shell) {
     }
 
     let _ = editor.save_history(&history);
+}
+
+fn completion_names(shell: &mut Shell) -> ShellNames {
+    let mut commands = shell.path_command_names().to_vec();
+    commands.extend(builtins::names().iter().map(|name| name.to_string()));
+    commands.extend(shell.functions.keys().cloned());
+    commands.extend(shell.aliases.keys().cloned());
+
+    let mut variables: Vec<String> = std::env::vars().map(|(name, _)| name).collect();
+    variables.extend(shell.variables.keys().cloned());
+    variables.sort();
+    variables.dedup();
+
+    ShellNames {
+        commands,
+        variables,
+        aliases: shell.aliases.keys().cloned().collect(),
+        jobs: shell
+            .jobs
+            .iter()
+            .map(|job| format!("%{}", job.id))
+            .collect(),
+    }
 }
