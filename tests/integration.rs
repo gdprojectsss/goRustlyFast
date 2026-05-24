@@ -415,3 +415,17 @@ fn z_jumps_to_the_most_frecent_match() {
         format!("{target}\n{other}")
     );
 }
+
+#[test]
+fn pipeline_writers_die_quietly_on_closed_pipe() {
+    let output = Command::new(env!("CARGO_BIN_EXE_grfsh"))
+        .args(["-c", "yes | head -1"])
+        .output()
+        .expect("failed to run grfsh");
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "y");
+    assert!(
+        output.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

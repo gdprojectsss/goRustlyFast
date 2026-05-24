@@ -256,17 +256,17 @@ const JOB_SIGNALS: [libc::c_int; 5] = [
 ];
 
 pub fn ignore_job_signals() {
-    for sig in JOB_SIGNALS {
+    for signal in JOB_SIGNALS {
         unsafe {
-            libc::signal(sig, libc::SIG_IGN);
+            libc::signal(signal, libc::SIG_IGN);
         }
     }
 }
 
 pub fn reset_child_signals() {
-    for sig in JOB_SIGNALS {
+    for signal in JOB_SIGNALS.into_iter().chain([libc::SIGPIPE]) {
         unsafe {
-            libc::signal(sig, libc::SIG_DFL);
+            libc::signal(signal, libc::SIG_DFL);
         }
     }
 }
