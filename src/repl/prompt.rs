@@ -49,9 +49,9 @@ fn format_default() -> String {
     let cwd = get_cwd();
 
     match git_branch() {
-        Some(b) => format!(
-            "{GREEN}{user}@{host}{RESET}:{BLUE}{cwd}{RESET} {MAGENTA}({b}){RESET} $ "
-        ),
+        Some(b) => {
+            format!("{GREEN}{user}@{host}{RESET}:{BLUE}{cwd}{RESET} {MAGENTA}({b}){RESET} $ ")
+        }
         None => format!("{GREEN}{user}@{host}{RESET}:{BLUE}{cwd}{RESET} $ "),
     }
 }

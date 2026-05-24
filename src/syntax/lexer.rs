@@ -1,0 +1,804 @@
+use std::fmt;
+
+use crate::syntax::ast::{
+    ParameterOperation, ParameterOperationKind, RedirectKind, Word, WordPart,
+};
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Token {
+    Word(Word),
+    Operator(&'static str),
+    Newline,
+    Redirect(i32, RedirectKind),
+    Heredoc { fd: i32, index: usize },
+    Eof,
+}
+
+#[derive(Debug, Clone)]
+pub struct Spanned {
+    pub token: Token,
+    pub start: usize,
+    pub end: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParseError {
+    pub message: String,
+    pub incomplete: bool,
+}
+
+impl ParseError {
+    pub fn syntax(message: impl Into<String>) -> Self {
+        ParseError {
+            message: message.into(),
+            incomplete: false,
+        }
+    }
+
+    pub fn incomplete(message: impl Into<String>) -> Self {
+        ParseError {
+            message: message.into(),
+            incomplete: true,
+        }
+    }
+}
+
+impl fmt::Display for ParseError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+#[derive(Debug)]
+pub struct Lexed {
+    pub tokens: Vec<Spanned>,
+    pub heredocs: Vec<Word>,
+}
+
+pub fn lex(source: &str) -> Result<Lexed, ParseError> {
+    Lexer::new(source).run()
+}
+
+pub fn parse_double_quoted_text(text: &str) -> Result<Word, ParseError> {
+    let parts = Lexer::new(text).double_quoted_until(None)?;
+    Ok(Word { parts })
+}
+
+struct PendingDoc {
+    index: usize,
+    delim: String,
+    strip_tabs: bool,
+    expand: bool,
+}
+
+struct Lexer {
+    chars: Vec<char>,
+    position: usize,
+    tokens: Vec<Spanned>,
+    heredocs: Vec<Word>,
+    pending: Vec<PendingDoc>,
+}
+
+#[derive(Default)]
+struct WordBuf {
+    parts: Vec<WordPart>,
+}
+
+impl WordBuf {
+    fn literal(&mut self, character: char) {
+        match self.parts.last_mut() {
+            Some(WordPart::Literal(text)) => text.push(character),
+            _ => self.parts.push(WordPart::Literal(character.to_string())),
+        }
+    }
+
+    fn quoted(&mut self, character: char) {
+        match self.parts.last_mut() {
+            Some(WordPart::Quoted(text)) => text.push(character),
+            _ => self.parts.push(WordPart::Quoted(character.to_string())),
+        }
+    }
+
+    fn quoted_text(&mut self, addition: &str) {
+        match self.parts.last_mut() {
+            Some(WordPart::Quoted(text)) => text.push_str(addition),
+            _ => self.parts.push(WordPart::Quoted(addition.into())),
+        }
+    }
+
+    fn part(&mut self, part: WordPart) {
+        match part {
+            WordPart::Literal(text) => text.chars().for_each(|character| self.literal(character)),
+            WordPart::Quoted(text) => self.quoted_text(&text),
+            other => self.parts.push(other),
+        }
+    }
+
+    fn finish(self) -> Word {
+        Word { parts: self.parts }
+    }
+}
+
+fn is_name_start(character: char) -> bool {
+    character == '_' || character.is_ascii_alphabetic()
+}
+
+fn is_name_char(character: char) -> bool {
+    character == '_' || character.is_ascii_alphanumeric()
+}
+
+fn is_word_break(character: char) -> bool {
+    matches!(
+        character,
+        ' ' | '\t' | '\r' | '\n' | ';' | '&' | '|' | '(' | ')' | '<' | '>'
+    )
+}
+
+impl Lexer {
+    fn new(source: &str) -> Self {
+        Lexer {
+            chars: source.chars().collect(),
+            position: 0,
+            tokens: Vec::new(),
+            heredocs: Vec::new(),
+            pending: Vec::new(),
+        }
+    }
+
+    fn peek(&self) -> Option<char> {
+        self.chars.get(self.position).copied()
+    }
+
+    fn peek_at(&self, offset: usize) -> Option<char> {
+        self.chars.get(self.position + offset).copied()
+    }
+
+    fn bump(&mut self) -> Option<char> {
+        let character = self.peek()?;
+        self.position += 1;
+        Some(character)
+    }
+
+    fn eat(&mut self, character: char) -> bool {
+        if self.peek() == Some(character) {
+            self.position += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn push(&mut self, token: Token, start: usize) {
+        self.tokens.push(Spanned {
+            token,
+            start,
+            end: self.position,
+        });
+    }
+
+    fn run(mut self) -> Result<Lexed, ParseError> {
+        while let Some(character) = self.peek() {
+            let start = self.position;
+            match character {
+                ' ' | '\t' | '\r' => self.position += 1,
+                '\\' if self.peek_at(1) == Some('\n') => self.position += 2,
+                '\n' => {
+                    self.position += 1;
+                    self.push(Token::Newline, start);
+                    self.read_heredocs()?;
+                }
+                '#' => {
+                    while self.peek().is_some_and(|character| character != '\n') {
+                        self.position += 1;
+                    }
+                }
+                '&' => {
+                    self.position += 1;
+                    if self.eat('&') {
+                        self.push(Token::Operator("&&"), start);
+                    } else if self.eat('>') {
+                        let kind = if self.eat('>') {
+                            RedirectKind::AppendAndError
+                        } else {
+                            RedirectKind::OutAndError
+                        };
+                        self.push(Token::Redirect(1, kind), start);
+                    } else {
+                        self.push(Token::Operator("&"), start);
+                    }
+                }
+                '|' => {
+                    self.position += 1;
+                    let operator = if self.eat('|') { "||" } else { "|" };
+                    self.push(Token::Operator(operator), start);
+                }
+                ';' => {
+                    self.position += 1;
+                    let operator = if self.eat(';') { ";;" } else { ";" };
+                    self.push(Token::Operator(operator), start);
+                }
+                '(' => {
+                    self.position += 1;
+                    self.push(Token::Operator("("), start);
+                }
+                ')' => {
+                    self.position += 1;
+                    self.push(Token::Operator(")"), start);
+                }
+                '<' | '>' => self.redirect(None, start)?,
+                character if character.is_ascii_digit() && self.io_number().is_some() => {
+                    let fd = self.io_number().unwrap_or(0);
+                    while self
+                        .peek()
+                        .is_some_and(|character| character.is_ascii_digit())
+                    {
+                        self.position += 1;
+                    }
+                    self.redirect(Some(fd), start)?;
+                }
+                _ => {
+                    let word = self.word()?;
+                    self.push(Token::Word(word), start);
+                }
+            }
+        }
+
+        if !self.pending.is_empty() {
+            return Err(ParseError::incomplete("unterminated here-document"));
+        }
+        let end = self.position;
+        self.tokens.push(Spanned {
+            token: Token::Eof,
+            start: end,
+            end,
+        });
+        Ok(Lexed {
+            tokens: self.tokens,
+            heredocs: self.heredocs,
+        })
+    }
+
+    fn io_number(&self) -> Option<i32> {
+        let mut end = self.position;
+        while self
+            .chars
+            .get(end)
+            .is_some_and(|character| character.is_ascii_digit())
+        {
+            end += 1;
+        }
+        match self.chars.get(end) {
+            Some('<') | Some('>') => self.chars[self.position..end]
+                .iter()
+                .collect::<String>()
+                .parse()
+                .ok(),
+            _ => None,
+        }
+    }
+
+    fn redirect(&mut self, fd: Option<i32>, start: usize) -> Result<(), ParseError> {
+        let character = self.bump();
+        let (default_fd, kind) = if character == Some('>') {
+            let kind = if self.eat('>') {
+                RedirectKind::Append
+            } else if self.eat('&') {
+                RedirectKind::DuplicateOut
+            } else {
+                self.eat('|');
+                RedirectKind::Out
+            };
+            (1, kind)
+        } else if self.eat('<') {
+            if self.eat('<') {
+                (0, RedirectKind::HereString)
+            } else {
+                let strip_tabs = self.eat('-');
+                return self.heredoc(fd.unwrap_or(0), strip_tabs, start);
+            }
+        } else if self.eat('&') {
+            (0, RedirectKind::DuplicateIn)
+        } else if self.eat('>') {
+            (0, RedirectKind::ReadWrite)
+        } else {
+            (0, RedirectKind::In)
+        };
+        self.push(Token::Redirect(fd.unwrap_or(default_fd), kind), start);
+        Ok(())
+    }
+
+    fn heredoc(&mut self, fd: i32, strip_tabs: bool, start: usize) -> Result<(), ParseError> {
+        while matches!(self.peek(), Some(' ' | '\t')) {
+            self.position += 1;
+        }
+        let word = self.word()?;
+        if word.parts.is_empty() {
+            return Err(ParseError::syntax(
+                "expected here-document delimiter after '<<'",
+            ));
+        }
+        let expand = word
+            .parts
+            .iter()
+            .all(|part| matches!(part, WordPart::Literal(_)));
+        let delim = word
+            .parts
+            .iter()
+            .map(|part| match part {
+                WordPart::Literal(text) | WordPart::Quoted(text) => text.as_str(),
+                _ => "",
+            })
+            .collect();
+        let index = self.heredocs.len();
+        self.heredocs.push(Word::default());
+        self.pending.push(PendingDoc {
+            index,
+            delim,
+            strip_tabs,
+            expand,
+        });
+        self.push(Token::Heredoc { fd, index }, start);
+        Ok(())
+    }
+
+    fn read_heredocs(&mut self) -> Result<(), ParseError> {
+        for doc in std::mem::take(&mut self.pending) {
+            let mut body = String::new();
+            loop {
+                if self.peek().is_none() {
+                    return Err(ParseError::incomplete("unterminated here-document"));
+                }
+                let mut line = String::new();
+                while let Some(character) = self.bump() {
+                    if character == '\n' {
+                        break;
+                    }
+                    line.push(character);
+                }
+                let line = if doc.strip_tabs {
+                    line.trim_start_matches('\t')
+                } else {
+                    &line
+                };
+                if line == doc.delim {
+                    break;
+                }
+                body.push_str(line);
+                body.push('\n');
+            }
+            self.heredocs[doc.index] = if doc.expand {
+                parse_double_quoted_text(&body)?
+            } else {
+                Word {
+                    parts: vec![WordPart::Quoted(body)],
+                }
+            };
+        }
+        Ok(())
+    }
+
+    fn word(&mut self) -> Result<Word, ParseError> {
+        let mut word = WordBuf::default();
+        while let Some(character) = self.peek() {
+            if is_word_break(character) {
+                break;
+            }
+            self.position += 1;
+            match character {
+                '\\' => match self.bump() {
+                    Some('\n') => {}
+                    Some(character) => word.quoted(character),
+                    None => return Err(ParseError::incomplete("trailing backslash")),
+                },
+                '\'' => {
+                    let text = self.single_quoted()?;
+                    word.quoted_text(&text);
+                }
+                '"' => {
+                    let parts = self.double_quoted_until(Some('"'))?;
+                    if parts.is_empty() {
+                        word.quoted_text("");
+                    }
+                    parts.into_iter().for_each(|part| word.part(part));
+                }
+                '$' => {
+                    let part = self.dollar(false)?;
+                    word.part(part);
+                }
+                '`' => {
+                    let source = self.backtick()?;
+                    word.part(WordPart::CommandSubstitution {
+                        source,
+                        quoted: false,
+                    });
+                }
+                '~' if word.parts.is_empty() => {
+                    let mut user = String::new();
+                    while let Some(character) = self.peek() {
+                        if character == '/'
+                            || is_word_break(character)
+                            || matches!(character, '\'' | '"' | '$' | '`' | '\\')
+                        {
+                            break;
+                        }
+                        user.push(character);
+                        self.position += 1;
+                    }
+                    word.part(WordPart::Tilde(user));
+                }
+                character => word.literal(character),
+            }
+        }
+        Ok(word.finish())
+    }
+
+    fn single_quoted(&mut self) -> Result<String, ParseError> {
+        let mut text = String::new();
+        loop {
+            match self.bump() {
+                Some('\'') => return Ok(text),
+                Some(character) => text.push(character),
+                None => return Err(ParseError::incomplete("unclosed single quote")),
+            }
+        }
+    }
+
+    fn double_quoted_until(&mut self, end: Option<char>) -> Result<Vec<WordPart>, ParseError> {
+        let mut word = WordBuf::default();
+        loop {
+            match self.bump() {
+                None if end.is_none() => break,
+                None => return Err(ParseError::incomplete("unclosed double quote")),
+                Some(character) if Some(character) == end => break,
+                Some('\\') => match self.peek() {
+                    Some('\n') => self.position += 1,
+                    Some(character)
+                        if matches!(character, '$' | '`' | '\\') || Some(character) == end =>
+                    {
+                        self.position += 1;
+                        word.quoted(character);
+                    }
+                    _ => word.quoted('\\'),
+                },
+                Some('$') => {
+                    let part = self.dollar(true)?;
+                    word.part(part);
+                }
+                Some('`') => {
+                    let source = self.backtick()?;
+                    word.part(WordPart::CommandSubstitution {
+                        source,
+                        quoted: true,
+                    });
+                }
+                Some(character) => word.quoted(character),
+            }
+        }
+        Ok(word.parts)
+    }
+
+    fn dollar(&mut self, quoted: bool) -> Result<WordPart, ParseError> {
+        match self.peek() {
+            Some('(') if self.peek_at(1) == Some('(') => {
+                self.position += 2;
+                let source = self.scan_arithmetic()?;
+                let expression = parse_double_quoted_text(&source)?;
+                Ok(WordPart::Arithmetic { expression, quoted })
+            }
+            Some('(') => {
+                self.position += 1;
+                let source = self.scan_substitution()?;
+                Ok(WordPart::CommandSubstitution { source, quoted })
+            }
+            Some('{') => {
+                self.position += 1;
+                self.brace_parameter(quoted)
+            }
+            Some(character) if is_name_start(character) => {
+                let name = self.read_name();
+                Ok(WordPart::Parameter {
+                    name,
+                    operator: None,
+                    quoted,
+                })
+            }
+            Some(character) if character.is_ascii_digit() || "?$#@*!-".contains(character) => {
+                self.position += 1;
+                Ok(WordPart::Parameter {
+                    name: character.to_string(),
+                    operator: None,
+                    quoted,
+                })
+            }
+            _ if quoted => Ok(WordPart::Quoted("$".into())),
+            _ => Ok(WordPart::Literal("$".into())),
+        }
+    }
+
+    fn read_name(&mut self) -> String {
+        let mut name = String::new();
+        while let Some(character) = self.peek().filter(|&character| is_name_char(character)) {
+            name.push(character);
+            self.position += 1;
+        }
+        name
+    }
+
+    fn brace_parameter(&mut self, quoted: bool) -> Result<WordPart, ParseError> {
+        if self.peek() == Some('#') && self.peek_at(1).is_some_and(|character| character != '}') {
+            self.position += 1;
+            let name = self.parameter_name()?;
+            if !self.eat('}') {
+                return Err(ParseError::syntax("bad substitution"));
+            }
+            return Ok(WordPart::Length(name));
+        }
+
+        let name = self.parameter_name()?;
+        if self.eat('}') {
+            return Ok(WordPart::Parameter {
+                name,
+                operator: None,
+                quoted,
+            });
+        }
+        let colon = self.eat(':');
+        let kind = match self.bump() {
+            Some('-') => ParameterOperationKind::Default,
+            Some('=') => ParameterOperationKind::Assign,
+            Some('+') => ParameterOperationKind::Alternative,
+            Some('?') => ParameterOperationKind::Error,
+            None => return Err(ParseError::incomplete("unclosed ${")),
+            _ => return Err(ParseError::syntax("bad substitution")),
+        };
+        let word = self.brace_word()?;
+        Ok(WordPart::Parameter {
+            name,
+            operator: Some(Box::new(ParameterOperation { kind, colon, word })),
+            quoted,
+        })
+    }
+
+    fn parameter_name(&mut self) -> Result<String, ParseError> {
+        match self.peek() {
+            Some(character) if is_name_start(character) => Ok(self.read_name()),
+            Some(character) if character.is_ascii_digit() => {
+                let mut digits = String::new();
+                while let Some(digit) = self.peek().filter(|character| character.is_ascii_digit()) {
+                    digits.push(digit);
+                    self.position += 1;
+                }
+                Ok(digits)
+            }
+            Some(character) if "?$#@*!-".contains(character) => {
+                self.position += 1;
+                Ok(character.to_string())
+            }
+            None => Err(ParseError::incomplete("unclosed ${")),
+            _ => Err(ParseError::syntax("bad substitution")),
+        }
+    }
+
+    fn brace_word(&mut self) -> Result<Word, ParseError> {
+        let mut word = WordBuf::default();
+        loop {
+            match self.bump() {
+                None => return Err(ParseError::incomplete("unclosed ${")),
+                Some('}') => break,
+                Some('\\') => match self.bump() {
+                    Some(character) => word.quoted(character),
+                    None => return Err(ParseError::incomplete("unclosed ${")),
+                },
+                Some('\'') => {
+                    let text = self.single_quoted()?;
+                    word.quoted_text(&text);
+                }
+                Some('"') => {
+                    let parts = self.double_quoted_until(Some('"'))?;
+                    parts.into_iter().for_each(|part| word.part(part));
+                }
+                Some('$') => {
+                    let part = self.dollar(false)?;
+                    word.part(part);
+                }
+                Some('`') => {
+                    let source = self.backtick()?;
+                    word.part(WordPart::CommandSubstitution {
+                        source,
+                        quoted: false,
+                    });
+                }
+                Some(character) => word.literal(character),
+            }
+        }
+        Ok(word.finish())
+    }
+
+    fn scan_substitution(&mut self) -> Result<String, ParseError> {
+        let start = self.position;
+        let mut depth = 1;
+        loop {
+            match self.bump() {
+                None => return Err(ParseError::incomplete("unclosed $(")),
+                Some('\\') => {
+                    self.bump();
+                }
+                Some('\'') => {
+                    self.single_quoted()?;
+                }
+                Some('"') => self.skip_double_quoted()?,
+                Some('(') => depth += 1,
+                Some(')') => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Ok(self.chars[start..self.position - 1].iter().collect());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn skip_double_quoted(&mut self) -> Result<(), ParseError> {
+        loop {
+            match self.bump() {
+                None => return Err(ParseError::incomplete("unclosed double quote")),
+                Some('\\') => {
+                    self.bump();
+                }
+                Some('"') => return Ok(()),
+                _ => {}
+            }
+        }
+    }
+
+    fn scan_arithmetic(&mut self) -> Result<String, ParseError> {
+        let start = self.position;
+        let mut depth = 0;
+        loop {
+            match self.bump() {
+                None => return Err(ParseError::incomplete("unclosed $((")),
+                Some('(') => depth += 1,
+                Some(')') if depth > 0 => depth -= 1,
+                Some(')') => {
+                    if self.eat(')') {
+                        return Ok(self.chars[start..self.position - 2].iter().collect());
+                    }
+                    return Err(ParseError::syntax("expected '))'"));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn backtick(&mut self) -> Result<String, ParseError> {
+        let mut source = String::new();
+        loop {
+            match self.bump() {
+                None => return Err(ParseError::incomplete("unclosed backtick")),
+                Some('`') => return Ok(source),
+                Some('\\') => match self.bump() {
+                    Some(character @ ('`' | '\\' | '$')) => source.push(character),
+                    Some(character) => {
+                        source.push('\\');
+                        source.push(character);
+                    }
+                    None => return Err(ParseError::incomplete("unclosed backtick")),
+                },
+                Some(character) => source.push(character),
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn words(source: &str) -> Vec<Word> {
+        lex(source)
+            .unwrap()
+            .tokens
+            .into_iter()
+            .filter_map(|spanned| match spanned.token {
+                Token::Word(word) => Some(word),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn plain_words() {
+        let word = words("echo hi");
+        assert_eq!(word[0].as_literal(), Some("echo"));
+        assert_eq!(word[1].as_literal(), Some("hi"));
+    }
+
+    #[test]
+    fn quoting_produces_quoted_parts() {
+        let word = words("a'b c'\"d\"");
+        assert_eq!(
+            word[0].parts,
+            vec![
+                WordPart::Literal("a".into()),
+                WordPart::Quoted("b cd".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_quotes_make_a_word() {
+        let word = words("''");
+        assert_eq!(word[0].parts, vec![WordPart::Quoted(String::new())]);
+    }
+
+    #[test]
+    fn params_are_not_expanded() {
+        let word = words("$HOME \"$1\" ${x:-y}");
+        assert!(
+            matches!(&word[0].parts[0], WordPart::Parameter { name, quoted: false, .. } if name == "HOME")
+        );
+        assert!(
+            matches!(&word[1].parts[0], WordPart::Parameter { name, quoted: true, .. } if name == "1")
+        );
+        assert!(matches!(
+            &word[2].parts[0],
+            WordPart::Parameter {
+                operator: Some(_),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn command_substitution_is_kept_as_source() {
+        let word = words("$(echo $(date) ')')");
+        assert_eq!(
+            word[0].parts,
+            vec![WordPart::CommandSubstitution {
+                source: "echo $(date) ')'".into(),
+                quoted: false
+            }]
+        );
+    }
+
+    #[test]
+    fn io_numbers() {
+        let tokens = lex("cmd 2>&1 3<in").unwrap().tokens;
+        assert!(
+            tokens
+                .iter()
+                .any(|spanned| spanned.token == Token::Redirect(2, RedirectKind::DuplicateOut))
+        );
+        assert!(
+            tokens
+                .iter()
+                .any(|spanned| spanned.token == Token::Redirect(3, RedirectKind::In))
+        );
+    }
+
+    #[test]
+    fn heredoc_body() {
+        let lexed = lex("cat <<EOF\nhi $X\nEOF\n").unwrap();
+        assert_eq!(lexed.heredocs.len(), 1);
+        assert!(
+            matches!(&lexed.heredocs[0].parts[1], WordPart::Parameter { name, .. } if name == "X")
+        );
+    }
+
+    #[test]
+    fn quoted_heredoc_is_literal() {
+        let lexed = lex("cat <<'EOF'\nhi $X\nEOF\n").unwrap();
+        assert_eq!(
+            lexed.heredocs[0].parts,
+            vec![WordPart::Quoted("hi $X\n".into())]
+        );
+    }
+
+    #[test]
+    fn unterminated_things_are_incomplete() {
+        for source in ["echo 'a", "echo \"a", "echo $(a", "cat <<EOF\nx", "echo \\"] {
+            assert!(lex(source).unwrap_err().incomplete, "{source}");
+        }
+    }
+}

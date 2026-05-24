@@ -2,12 +2,12 @@ use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::os::unix::fs::PermissionsExt;
 
+use rustyline::Context;
 use rustyline::completion::{Completer, FilenameCompleter, Pair};
 use rustyline::highlight::Highlighter;
 use rustyline::hint::Hinter;
 use rustyline::history::SearchDirection;
 use rustyline::validate::Validator;
-use rustyline::Context;
 
 use crate::builtins;
 
@@ -51,10 +51,7 @@ impl Completer for ShellHelper {
     ) -> rustyline::Result<(usize, Vec<Pair>)> {
         let before = &line[..pos];
 
-        let cmd_start = before
-            .rfind(['|', ';', '&'])
-            .map(|i| i + 1)
-            .unwrap_or(0);
+        let cmd_start = before.rfind(['|', ';', '&']).map(|i| i + 1).unwrap_or(0);
 
         let fragment = before[cmd_start..].trim_start();
 
@@ -107,7 +104,11 @@ impl Highlighter for ShellHelper {
                 }
                 SpanKind::Word => {
                     if expecting_command && is_plain_command(span.text) {
-                        let c = if self.is_valid_command(span.text) { BOLD_GREEN } else { BOLD_RED };
+                        let c = if self.is_valid_command(span.text) {
+                            BOLD_GREEN
+                        } else {
+                            BOLD_RED
+                        };
                         color(&mut out, c, span.text);
                     } else {
                         out.push_str(span.text);
@@ -124,7 +125,12 @@ impl Highlighter for ShellHelper {
         format!("{DIM}{hint}{RESET}").into()
     }
 
-    fn highlight_char(&self, _line: &str, _pos: usize, _kind: rustyline::highlight::CmdKind) -> bool {
+    fn highlight_char(
+        &self,
+        _line: &str,
+        _pos: usize,
+        _kind: rustyline::highlight::CmdKind,
+    ) -> bool {
         true
     }
 }
@@ -168,57 +174,93 @@ fn extract_spans(line: &str) -> Vec<Span<'_>> {
                     chars.next();
                 }
                 let end = chars.peek().map_or(line.len(), |&(i, _)| i);
-                spans.push(Span { text: &line[start..end], kind: SpanKind::Whitespace });
+                spans.push(Span {
+                    text: &line[start..end],
+                    kind: SpanKind::Whitespace,
+                });
             }
             '#' => {
-                spans.push(Span { text: &line[pos..], kind: SpanKind::Comment });
+                spans.push(Span {
+                    text: &line[pos..],
+                    kind: SpanKind::Comment,
+                });
                 return spans;
             }
             '|' => {
                 chars.next();
                 if chars.peek().is_some_and(|&(_, c)| c == '|') {
                     chars.next();
-                    spans.push(Span { text: &line[pos..pos + 2], kind: SpanKind::Operator });
+                    spans.push(Span {
+                        text: &line[pos..pos + 2],
+                        kind: SpanKind::Operator,
+                    });
                 } else {
-                    spans.push(Span { text: &line[pos..pos + 1], kind: SpanKind::Operator });
+                    spans.push(Span {
+                        text: &line[pos..pos + 1],
+                        kind: SpanKind::Operator,
+                    });
                 }
             }
             '&' => {
                 chars.next();
                 if chars.peek().is_some_and(|&(_, c)| c == '&') {
                     chars.next();
-                    spans.push(Span { text: &line[pos..pos + 2], kind: SpanKind::Operator });
+                    spans.push(Span {
+                        text: &line[pos..pos + 2],
+                        kind: SpanKind::Operator,
+                    });
                 } else {
-                    spans.push(Span { text: &line[pos..pos + 1], kind: SpanKind::Operator });
+                    spans.push(Span {
+                        text: &line[pos..pos + 1],
+                        kind: SpanKind::Operator,
+                    });
                 }
             }
             ';' | '>' | '<' => {
                 chars.next();
                 if ch == '>' && chars.peek().is_some_and(|&(_, c)| c == '>') {
                     chars.next();
-                    spans.push(Span { text: &line[pos..pos + 2], kind: SpanKind::Operator });
+                    spans.push(Span {
+                        text: &line[pos..pos + 2],
+                        kind: SpanKind::Operator,
+                    });
                 } else {
-                    spans.push(Span { text: &line[pos..pos + 1], kind: SpanKind::Operator });
+                    spans.push(Span {
+                        text: &line[pos..pos + 1],
+                        kind: SpanKind::Operator,
+                    });
                 }
             }
             '\'' => {
                 chars.next();
                 while let Some(&(_, c)) = chars.peek() {
                     chars.next();
-                    if c == '\'' { break; }
+                    if c == '\'' {
+                        break;
+                    }
                 }
                 let end = chars.peek().map_or(line.len(), |&(i, _)| i);
-                spans.push(Span { text: &line[pos..end], kind: SpanKind::SingleQuoted });
+                spans.push(Span {
+                    text: &line[pos..end],
+                    kind: SpanKind::SingleQuoted,
+                });
             }
             '"' => {
                 chars.next();
                 while let Some(&(_, c)) = chars.peek() {
                     chars.next();
-                    if c == '"' { break; }
-                    if c == '\\' { chars.next(); }
+                    if c == '"' {
+                        break;
+                    }
+                    if c == '\\' {
+                        chars.next();
+                    }
                 }
                 let end = chars.peek().map_or(line.len(), |&(i, _)| i);
-                spans.push(Span { text: &line[pos..end], kind: SpanKind::DoubleQuoted });
+                spans.push(Span {
+                    text: &line[pos..end],
+                    kind: SpanKind::DoubleQuoted,
+                });
             }
             '$' => {
                 chars.next();
@@ -231,41 +273,67 @@ fn extract_spans(line: &str) -> Vec<Span<'_>> {
                             '(' => depth += 1,
                             ')' => {
                                 depth -= 1;
-                                if depth == 0 { break; }
+                                if depth == 0 {
+                                    break;
+                                }
                             }
                             _ => {}
                         }
                     }
                     let end = chars.peek().map_or(line.len(), |&(i, _)| i);
-                    spans.push(Span { text: &line[pos..end], kind: SpanKind::Substitution });
+                    spans.push(Span {
+                        text: &line[pos..end],
+                        kind: SpanKind::Substitution,
+                    });
                 } else {
-                    while chars.peek().is_some_and(|&(_, c)| c.is_alphanumeric() || c == '_') {
+                    while chars
+                        .peek()
+                        .is_some_and(|&(_, c)| c.is_alphanumeric() || c == '_')
+                    {
                         chars.next();
                     }
                     let end = chars.peek().map_or(line.len(), |&(i, _)| i);
-                    spans.push(Span { text: &line[pos..end], kind: SpanKind::Variable });
+                    spans.push(Span {
+                        text: &line[pos..end],
+                        kind: SpanKind::Variable,
+                    });
                 }
             }
             '`' => {
                 chars.next();
                 while let Some(&(_, c)) = chars.peek() {
                     chars.next();
-                    if c == '`' { break; }
+                    if c == '`' {
+                        break;
+                    }
                 }
                 let end = chars.peek().map_or(line.len(), |&(i, _)| i);
-                spans.push(Span { text: &line[pos..end], kind: SpanKind::Substitution });
+                spans.push(Span {
+                    text: &line[pos..end],
+                    kind: SpanKind::Substitution,
+                });
             }
             _ => {
                 let is_word_char = |c: char| {
-                    !matches!(c, ' ' | '\t' | '|' | '&' | ';' | '>' | '<' | '\'' | '"' | '$' | '`' | '#')
+                    !matches!(
+                        c,
+                        ' ' | '\t' | '|' | '&' | ';' | '>' | '<' | '\'' | '"' | '$' | '`' | '#'
+                    )
                 };
                 while let Some(&(_, c)) = chars.peek() {
-                    if !is_word_char(c) { break; }
+                    if !is_word_char(c) {
+                        break;
+                    }
                     chars.next();
-                    if c == '\\' { chars.next(); }
+                    if c == '\\' {
+                        chars.next();
+                    }
                 }
                 let end = chars.peek().map_or(line.len(), |&(i, _)| i);
-                spans.push(Span { text: &line[pos..end], kind: SpanKind::Word });
+                spans.push(Span {
+                    text: &line[pos..end],
+                    kind: SpanKind::Word,
+                });
             }
         }
     }
@@ -301,8 +369,8 @@ impl rustyline::Helper for ShellHelper {}
 fn collect_commands() -> Vec<String> {
     let mut commands = BTreeSet::new();
 
-    for b in ["cd", "exit", "export", "echo", "alias", "unalias"] {
-        commands.insert(b.into());
+    for b in builtins::names() {
+        commands.insert(b.to_string());
     }
 
     let Ok(path) = std::env::var("PATH") else {
