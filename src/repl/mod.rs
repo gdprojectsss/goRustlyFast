@@ -12,6 +12,7 @@ use rustyline::error::ReadlineError;
 use crate::builtins;
 use crate::shell::{self, Flow, Shell};
 use crate::sys;
+use crate::table;
 
 use completion::ShellNames;
 use helper::ShellHelper;
@@ -160,6 +161,7 @@ fn interactive(shell: &mut Shell) {
 fn completion_names(shell: &mut Shell) -> ShellNames {
     let mut commands = shell.path_command_names().to_vec();
     commands.extend(builtins::names().iter().map(|name| name.to_string()));
+    commands.extend(table::names().iter().map(|name| name.to_string()));
     commands.extend(shell.functions.keys().cloned());
     commands.extend(shell.aliases.keys().cloned());
 

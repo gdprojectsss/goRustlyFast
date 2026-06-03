@@ -8,5 +8,6 @@ mod repl;
 mod shell;
 mod syntax;
 mod sys;
+mod table;
 
 pub use repl::run;

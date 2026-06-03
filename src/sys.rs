@@ -168,8 +168,8 @@ pub fn setpgid(pid: Pid, pgid: Pid) {
     }
 }
 
-pub fn kill(pid: Pid, sig: libc::c_int) -> io::Result<()> {
-    check(unsafe { libc::kill(pid, sig) }).map(|_| ())
+pub fn kill(pid: Pid, signal: libc::c_int) -> io::Result<()> {
+    check(unsafe { libc::kill(pid, signal) }).map(|_| ())
 }
 
 pub fn init_job_control() -> Pid {
@@ -343,4 +343,13 @@ pub fn hostname() -> Option<String> {
         .position(|&byte| byte == 0)
         .unwrap_or(buffer.len());
     Some(String::from_utf8_lossy(&buffer[..end]).into_owned())
+}
+
+pub fn terminal_width(fd: i32) -> Option<usize> {
+    let mut size: libc::winsize = unsafe { std::mem::zeroed() };
+    let result = unsafe { libc::ioctl(fd, libc::TIOCGWINSZ, &mut size) };
+    if result == 0 && size.ws_col > 0 {
+        return Some(usize::from(size.ws_col));
+    }
+    std::env::var("COLUMNS").ok()?.parse().ok()
 }

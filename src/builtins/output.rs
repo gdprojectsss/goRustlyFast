@@ -1,6 +1,7 @@
 use std::io::Write;
 
 use crate::shell::{self, Shell};
+use crate::table;
 
 use super::is_builtin;
 
@@ -80,6 +81,12 @@ pub(super) fn describe(shell: &Shell, args: &[String], out: &mut dyn Write, shor
                 name.clone()
             } else {
                 format!("{name} is a shell builtin")
+            }
+        } else if table::is_command(name) {
+            if short {
+                name.clone()
+            } else {
+                format!("{name} is a grfsh table command")
             }
         } else if let Some(path) = shell.resolve(name) {
             if short {

@@ -3,6 +3,7 @@ use crate::shell::{self, Flow, Shell};
 use crate::syntax::ast::{AndOr, Command, Redirect};
 use crate::syntax::parser;
 use crate::sys::{self, WaitResult};
+use crate::table;
 
 impl Shell {
     pub(crate) fn run_background(&mut self, item: &AndOr) {
@@ -68,6 +69,8 @@ impl Shell {
                         let _ = sys::dup2(pipes[index].1, 1);
                     }
                     close_pipes(&pipes);
+                    self.pipe_to_table =
+                        commands.get(index + 1).is_some_and(table::consumes_tables);
                     let status = self.run_command(command, true);
                     sys::exit_now(status)
                 }
