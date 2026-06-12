@@ -23,7 +23,7 @@ pub struct PromptState {
 
 pub fn build(state: &PromptState) -> String {
     match env::var("GRFSH_PROMPT") {
-        Ok(fmt) => format_custom(&fmt, state),
+        Ok(template) => format_custom(&template, state),
         Err(_) => format_default(state),
     }
 }
@@ -56,17 +56,18 @@ fn jobs_text(state: &PromptState) -> String {
     }
 }
 
-fn format_custom(fmt: &str, state: &PromptState) -> String {
+fn format_custom(template: &str, state: &PromptState) -> String {
     let user = get_user();
     let host = get_host();
     let cwd = get_cwd();
     let branch = git_branch();
     let git = branch
         .as_ref()
-        .map(|b| format!("({b}) "))
+        .map(|branch| format!("({branch}) "))
         .unwrap_or_default();
 
-    fmt.replace("{status}", &status_text(state))
+    template
+        .replace("{status}", &status_text(state))
         .replace("{duration}", &duration_text(state))
         .replace("{jobs}", &jobs_text(state))
         .replace("{user}", &user)
@@ -148,8 +149,8 @@ fn git_branch() -> Option<String> {
         .stderr(Stdio::null())
         .output()
         .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 #[cfg(test)]

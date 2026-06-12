@@ -222,7 +222,7 @@ mod tests {
             .unwrap()
             .tokens
             .into_iter()
-            .filter_map(|t| match t.token {
+            .filter_map(|spanned| match spanned.token {
                 Token::Word(word) => Some(word),
                 _ => None,
             })

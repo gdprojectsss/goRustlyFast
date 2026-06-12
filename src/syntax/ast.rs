@@ -44,7 +44,7 @@ pub struct Word {
 impl Word {
     pub fn as_literal(&self) -> Option<&str> {
         match self.parts.as_slice() {
-            [WordPart::Literal(s)] => Some(s),
+            [WordPart::Literal(text)] => Some(text),
             _ => None,
         }
     }
