@@ -7,9 +7,10 @@ use rustyline::completion::{Completer, FilenameCompleter, Pair};
 use rustyline::highlight::Highlighter;
 use rustyline::hint::Hinter;
 use rustyline::history::SearchDirection;
-use rustyline::validate::Validator;
+use rustyline::validate::{ValidationContext, ValidationResult, Validator};
 
 use crate::builtins;
+use crate::syntax::parser;
 
 const CYAN: &str = "\x1b[36m";
 const BOLD_GREEN: &str = "\x1b[1;32m";
@@ -363,7 +364,14 @@ impl Hinter for ShellHelper {
     }
 }
 
-impl Validator for ShellHelper {}
+impl Validator for ShellHelper {
+    fn validate(&self, context: &mut ValidationContext) -> rustyline::Result<ValidationResult> {
+        match parser::parse(context.input()) {
+            Err(error) if error.incomplete => Ok(ValidationResult::Incomplete),
+            _ => Ok(ValidationResult::Valid(None)),
+        }
+    }
+}
 impl rustyline::Helper for ShellHelper {}
 
 fn collect_commands() -> Vec<String> {

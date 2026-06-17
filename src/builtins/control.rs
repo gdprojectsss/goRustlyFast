@@ -12,6 +12,10 @@ pub(super) fn exit(shell: &mut Shell, args: &[String]) -> i32 {
 }
 
 pub(super) fn return_from(shell: &mut Shell, args: &[String]) -> i32 {
+    if shell.locals.is_empty() && shell.source_depth == 0 {
+        shell::error("return: can only be used in a function or sourced script");
+        return 1;
+    }
     let code = parse_count("return", args, shell.last_status).unwrap_or(2);
     shell.flow = Flow::Return;
     code & 0xff

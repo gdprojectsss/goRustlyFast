@@ -10,7 +10,6 @@ type Result<T> = std::result::Result<T, ParseError>;
 
 const RESERVED: &[&str] = &["then", "else", "elif", "fi", "do", "done", "}", "in"];
 
-#[cfg(test)]
 pub fn parse(source: &str) -> Result<List> {
     parse_with_aliases(source, &HashMap::new())
 }
