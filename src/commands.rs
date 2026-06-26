@@ -8,7 +8,7 @@ pub(crate) fn on_path(path: &str) -> Vec<String> {
             continue;
         };
         for entry in entries.flatten() {
-            let Ok(metadata) = entry.metadata() else {
+            let Ok(metadata) = std::fs::metadata(entry.path()) else {
                 continue;
             };
             if metadata.is_file()
@@ -100,5 +100,16 @@ mod tests {
     #[test]
     fn path_scan_finds_shell() {
         assert!(on_path("/bin").iter().any(|name| name == "sh"));
+    }
+
+    #[test]
+    fn path_scan_follows_symlinks() {
+        let directory = std::env::temp_dir().join(format!("grfsh_path_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        std::os::unix::fs::symlink("/bin/sh", directory.join("linked-shell")).unwrap();
+        let found = on_path(&directory.to_string_lossy());
+        let _ = std::fs::remove_dir_all(&directory);
+        assert_eq!(found, ["linked-shell"]);
     }
 }
