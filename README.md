@@ -5,7 +5,7 @@
   <img alt="grfsh" src=".github/assets/logo-light.svg" width="340">
 </picture>
 
-### A Unix shell in Rust that speaks plain text and typed tables.<br>Scripts like bash, feels like fish, filters like nushell.
+### A small Unix shell written in Rust.<br>Bash style scripting, job control, and pipelines that can carry typed tables.
 
 <p>
   <a href="https://github.com/gdprojectsss/goRustlyFast/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/gdprojectsss/goRustlyFast/ci.yml?branch=main&style=flat-square&label=ci"></a>
@@ -36,13 +36,13 @@
 
 ## What is grfsh?
 
-grfsh is a single, small binary that tries to keep the parts of each shell people actually like:
+grfsh is a shell with bash compatible syntax for the common cases: pipes, redirections, `if`/`for`/`while`, functions, `$(...)`, `${x:-default}`, `$((math))`, heredocs and job control.
 
-- **The syntax you already know.** Pipes, redirections, `if`/`for`/`while`, functions, `$(...)`, `${x:-default}`, `$((math))`, heredocs and job control behave the way bash taught you.
-- **The comfort of a modern shell.** Autosuggestions from history, syntax highlighting, completion that knows git branches and ssh hosts, "did you mean" for typos, a `z` command that remembers where you go, and a prompt that tells you when something failed or took a while.
-- **Pipelines that understand data.** Commands like `files`, `procs` and `load` produce typed tables, so `where size -gt 10mb` compares sizes and `where modified gt 2d` compares dates. Pipe a table into `grep` or `wc` and it turns back into plain text.
+For interactive use it has autosuggestions from history, syntax highlighting, completion for git branches, ssh hosts and make targets, suggestions for mistyped commands, a `z` command for directories you visit often, and a prompt that shows the exit status and duration of the last command.
 
-All of it with two dependencies: `rustyline` for line editing and `libc` for processes and signals.
+It also has a set of table commands. `files`, `procs` and `load` produce typed tables, so `where size -gt 10mb` compares sizes and `where modified gt 2d` compares dates. When a table is piped into `grep` or `wc`, it is printed as plain text.
+
+It depends on two crates: `rustyline` for line editing and `libc` for processes and signals.
 
 ## Quick start
 
@@ -114,7 +114,7 @@ $ ps aux | where %CPU gt 5 | select PID %CPU COMMAND
 
 ## Why grfsh?
 
-Most people pick a shell for its scripting or for its comfort, and then bolt the other half on with plugins. grfsh tries to ship both, plus structured data, in one binary.
+How grfsh compares to other shells on the features it focuses on:
 
 |                                              | **grfsh** | bash | zsh | fish | nushell |
 | -------------------------------------------- | :-------: | :--: | :-: | :--: | :-----: |
@@ -144,10 +144,10 @@ flowchart LR
     tables -- "aligned text" --> processes
 ```
 
-- **Nothing runs while parsing.** Words keep their expansions as parts of the syntax tree, so `false && echo $(rm -rf x)` never runs `rm`, and command substitution runs inside grfsh with your functions and aliases.
-- **Every stage is a real process.** Pipeline stages, subshells and `$(...)` are forked children in their own process groups, which is what makes Ctrl-Z, `fg`, `bg` and Ctrl-C behave.
-- **Tables travel in a small typed wire format** between table commands and fall back to plain text at the first stage that is not one, so they never break an ordinary pipe.
-- **Redirections work on file descriptors**, for builtins and functions too: `2>&1`, `&>`, `>&-` and heredocs apply to anything.
+- The parser keeps `$VAR`, `$(...)` and globs unexpanded in the syntax tree. They are expanded right before a command runs, so `false && echo $(rm -rf x)` does not run `rm`.
+- Pipeline stages, subshells and `$(...)` run as forked children in their own process groups. The shell hands the terminal to the foreground group, so Ctrl-Z, `fg`, `bg` and Ctrl-C work.
+- Two table commands next to each other exchange rows in a small typed format. Any other command receives plain text.
+- Redirections are applied to file descriptors, so `2>&1`, `&>`, `>&-` and heredocs also work for builtins and functions.
 
 ## Features
 

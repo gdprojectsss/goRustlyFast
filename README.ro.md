@@ -5,7 +5,7 @@
   <img alt="grfsh" src=".github/assets/logo-light.svg" width="340">
 </picture>
 
-### Un shell Unix scris in Rust care vorbeste si text simplu, si tabele cu tipuri.<br>Scrii scripturi ca in bash, te simti ca in fish, filtrezi ca in nushell.
+### Un shell Unix mic, scris in Rust.<br>Scripting in stil bash, job control si pipeline-uri care pot transporta tabele cu tipuri.
 
 <p>
   <a href="https://github.com/gdprojectsss/goRustlyFast/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/gdprojectsss/goRustlyFast/ci.yml?branch=main&style=flat-square&label=ci"></a>
@@ -33,13 +33,13 @@
 
 ## Ce e grfsh?
 
-grfsh e un singur binar, mic, care incearca sa pastreze ce le place oamenilor la fiecare shell:
+grfsh foloseste sintaxa din bash pentru cazurile obisnuite: pipe-uri, redirectari, `if`/`for`/`while`, functii, `$(...)`, `${x:-implicit}`, `$((calcule))`, heredoc si job control.
 
-- **Sintaxa pe care o stii deja.** Pipe-uri, redirectari, `if`/`for`/`while`, functii, `$(...)`, `${x:-implicit}`, `$((calcule))`, heredoc si job control merg cum te-a invatat bash-ul.
-- **Confortul unui shell modern.** Autosugestii din istoric, syntax highlighting, completion care stie branch-uri git si host-uri ssh, "did you mean" cand gresesti o comanda, o comanda `z` care tine minte pe unde umbli si un prompt care iti spune cand ceva a picat sau a durat mult.
-- **Pipeline-uri care inteleg datele.** Comenzi ca `files`, `procs` si `load` scot tabele cu tipuri, asa ca `where size -gt 10mb` compara dimensiuni, iar `where modified gt 2d` compara date. Daca dai un tabel mai departe la `grep` sau `wc`, redevine text simplu.
+Pentru folosirea interactiva are autosugestii din istoric, syntax highlighting, completion pentru branch-uri git, host-uri ssh si target-uri make, sugestii cand gresesti o comanda, o comanda `z` pentru directoarele folosite des si un prompt care arata codul de iesire si durata ultimei comenzi.
 
-Totul cu doua dependinte: `rustyline` pentru line editing si `libc` pentru procese si semnale.
+Mai are si un set de comenzi de tabel. `files`, `procs` si `load` scot tabele cu tipuri, asa ca `where size -gt 10mb` compara dimensiuni, iar `where modified gt 2d` compara date. Cand un tabel ajunge la `grep` sau `wc`, e afisat ca text simplu.
+
+Depinde de doua crate-uri: `rustyline` pentru line editing si `libc` pentru procese si semnale.
 
 ## Pornire rapida
 
@@ -98,7 +98,7 @@ $ ps aux | where %CPU gt 5 | select PID %CPU COMMAND
 
 ## De ce grfsh?
 
-De obicei iti alegi shell-ul fie pentru scripting, fie pentru confort, si cealalta jumatate o adaugi cu plugin-uri. grfsh incearca sa le aiba pe amandoua, plus date structurate, intr-un singur binar.
+Cum se compara grfsh cu alte shell-uri la lucrurile pe care se concentreaza:
 
 |                                              | **grfsh** | bash | zsh | fish | nushell |
 | -------------------------------------------- | :-------: | :--: | :-: | :--: | :-----: |
