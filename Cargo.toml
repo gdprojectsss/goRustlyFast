@@ -7,3 +7,4 @@ license = "MIT"
 
 [dependencies]
 rustyline = "15"
+libc = "0.2"
