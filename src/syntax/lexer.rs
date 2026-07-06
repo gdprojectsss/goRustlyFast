@@ -1,7 +1,7 @@
 use std::fmt;
 
 use crate::syntax::ast::{
-    ParameterOperation, ParameterOperationKind, RedirectKind, Word, WordPart,
+    Anchor, FallbackKind, ParameterOperation, RedirectKind, Subscript, Word, WordPart,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -125,6 +125,15 @@ fn is_name_start(character: char) -> bool {
 
 fn is_name_char(character: char) -> bool {
     character == '_' || character.is_ascii_alphanumeric()
+}
+
+fn fallback_kind(character: Option<char>) -> FallbackKind {
+    match character {
+        Some('=') => FallbackKind::Assign,
+        Some('+') => FallbackKind::Alternative,
+        Some('?') => FallbackKind::Error,
+        _ => FallbackKind::Default,
+    }
 }
 
 fn is_word_break(character: char) -> bool {
@@ -498,6 +507,7 @@ impl Lexer {
                 let name = self.read_name();
                 Ok(WordPart::Parameter {
                     name,
+                    subscript: None,
                     operator: None,
                     quoted,
                 })
@@ -506,6 +516,7 @@ impl Lexer {
                 self.position += 1;
                 Ok(WordPart::Parameter {
                     name: character.to_string(),
+                    subscript: None,
                     operator: None,
                     quoted,
                 })
@@ -528,35 +539,133 @@ impl Lexer {
         if self.peek() == Some('#') && self.peek_at(1).is_some_and(|character| character != '}') {
             self.position += 1;
             let name = self.parameter_name()?;
+            let subscript = self.subscript()?;
             if !self.eat('}') {
                 return Err(ParseError::syntax("bad substitution"));
             }
-            return Ok(WordPart::Length(name));
+            return Ok(WordPart::Length { name, subscript });
+        }
+        if self.peek() == Some('!') && self.peek_at(1).is_some_and(is_name_start) {
+            self.position += 1;
+            let name = self.parameter_name()?;
+            if !matches!(self.subscript()?, Some(Subscript::All | Subscript::Joined))
+                || !self.eat('}')
+            {
+                return Err(ParseError::syntax("bad substitution"));
+            }
+            return Ok(WordPart::Indices { name, quoted });
         }
 
         let name = self.parameter_name()?;
-        if self.eat('}') {
-            return Ok(WordPart::Parameter {
-                name,
-                operator: None,
-                quoted,
-            });
-        }
-        let colon = self.eat(':');
-        let kind = match self.bump() {
-            Some('-') => ParameterOperationKind::Default,
-            Some('=') => ParameterOperationKind::Assign,
-            Some('+') => ParameterOperationKind::Alternative,
-            Some('?') => ParameterOperationKind::Error,
-            None => return Err(ParseError::incomplete("unclosed ${")),
-            _ => return Err(ParseError::syntax("bad substitution")),
+        let subscript = self.subscript()?;
+        let operator = if self.eat('}') {
+            None
+        } else {
+            Some(Box::new(self.parameter_operation()?))
         };
-        let word = self.brace_word()?;
         Ok(WordPart::Parameter {
             name,
-            operator: Some(Box::new(ParameterOperation { kind, colon, word })),
+            subscript,
+            operator,
             quoted,
         })
+    }
+
+    fn subscript(&mut self) -> Result<Option<Subscript>, ParseError> {
+        if !self.eat('[') {
+            return Ok(None);
+        }
+        let start = self.position;
+        let mut depth = 0;
+        loop {
+            match self.bump() {
+                None => return Err(ParseError::incomplete("unclosed ${")),
+                Some('[') => depth += 1,
+                Some(']') if depth == 0 => break,
+                Some(']') => depth -= 1,
+                _ => {}
+            }
+        }
+        let text: String = self.chars[start..self.position - 1].iter().collect();
+        Ok(Some(match text.trim() {
+            "@" => Subscript::All,
+            "*" => Subscript::Joined,
+            index => Subscript::Index(parse_double_quoted_text(index)?),
+        }))
+    }
+
+    fn parameter_operation(&mut self) -> Result<ParameterOperation, ParseError> {
+        let Some(first) = self.bump() else {
+            return Err(ParseError::incomplete("unclosed ${"));
+        };
+        let operation = match first {
+            ':' if matches!(self.peek(), Some('-' | '=' | '+' | '?')) => {
+                let kind = fallback_kind(self.bump());
+                ParameterOperation::Fallback {
+                    kind,
+                    colon: true,
+                    word: self.brace_word(&['}'])?.0,
+                }
+            }
+            ':' => {
+                let (offset, stop) = self.brace_word(&[':', '}'])?;
+                let length = if stop == ':' {
+                    Some(self.brace_word(&['}'])?.0)
+                } else {
+                    None
+                };
+                ParameterOperation::Substring { offset, length }
+            }
+            '-' | '=' | '+' | '?' => ParameterOperation::Fallback {
+                kind: fallback_kind(Some(first)),
+                colon: false,
+                word: self.brace_word(&['}'])?.0,
+            },
+            '#' => ParameterOperation::RemovePrefix {
+                longest: self.eat('#'),
+                pattern: self.brace_word(&['}'])?.0,
+            },
+            '%' => ParameterOperation::RemoveSuffix {
+                longest: self.eat('%'),
+                pattern: self.brace_word(&['}'])?.0,
+            },
+            '/' => {
+                let all = self.eat('/');
+                let anchor = if all {
+                    Anchor::Anywhere
+                } else if self.eat('#') {
+                    Anchor::Start
+                } else if self.eat('%') {
+                    Anchor::End
+                } else {
+                    Anchor::Anywhere
+                };
+                let (pattern, stop) = self.brace_word(&['/', '}'])?;
+                let replacement = if stop == '/' {
+                    self.brace_word(&['}'])?.0
+                } else {
+                    Word::default()
+                };
+                ParameterOperation::Replace {
+                    all,
+                    anchor,
+                    pattern,
+                    replacement,
+                }
+            }
+            '^' | ',' => {
+                let all = self.eat(first);
+                if !self.eat('}') {
+                    return Err(ParseError::syntax("bad substitution"));
+                }
+                ParameterOperation::ChangeCase {
+                    upper: first == '^',
+                    all,
+                }
+            }
+            _ => return Err(ParseError::syntax("bad substitution")),
+        };
+        Ok(operation)
     }
 
     fn parameter_name(&mut self) -> Result<String, ParseError> {
@@ -579,12 +688,12 @@ impl Lexer {
         }
     }
 
-    fn brace_word(&mut self) -> Result<Word, ParseError> {
+    fn brace_word(&mut self, stops: &[char]) -> Result<(Word, char), ParseError> {
         let mut word = WordBuf::default();
-        loop {
+        let stop = loop {
             match self.bump() {
                 None => return Err(ParseError::incomplete("unclosed ${")),
-                Some('}') => break,
+                Some(character) if stops.contains(&character) => break character,
                 Some('\\') => match self.bump() {
                     Some(character) => word.quoted(character),
                     None => return Err(ParseError::incomplete("unclosed ${")),
@@ -595,6 +704,9 @@ impl Lexer {
                 }
                 Some('"') => {
                     let parts = self.double_quoted_until(Some('"'))?;
+                    if parts.is_empty() {
+                        word.quoted_text("");
+                    }
                     parts.into_iter().for_each(|part| word.part(part));
                 }
                 Some('$') => {
@@ -610,8 +722,8 @@ impl Lexer {
                 }
                 Some(character) => word.literal(character),
             }
-        }
-        Ok(word.finish())
+        };
+        Ok((word.finish(), stop))
     }
 
     fn scan_substitution(&mut self) -> Result<String, ParseError> {

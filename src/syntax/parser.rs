@@ -8,7 +8,9 @@ pub use crate::syntax::lexer::ParseError;
 
 type Result<T> = std::result::Result<T, ParseError>;
 
-const RESERVED: &[&str] = &["then", "else", "elif", "fi", "do", "done", "}", "in"];
+const RESERVED: &[&str] = &[
+    "then", "else", "elif", "fi", "do", "done", "}", "in", "esac",
+];
 
 pub fn parse(source: &str) -> Result<List> {
     parse_with_aliases(source, &HashMap::new())
@@ -113,8 +115,8 @@ impl Parser<'_> {
 
     fn at_terminator(&self, terminators: &[&str]) -> bool {
         terminators.iter().any(|terminator| {
-            if *terminator == ")" {
-                self.is_operator(")")
+            if *terminator == ")" || *terminator == ";;" {
+                self.is_operator(terminator)
             } else {
                 self.is_keyword(terminator)
             }
@@ -215,6 +217,7 @@ impl Parser<'_> {
                     }
                 }
                 Some("for") => self.for_clause()?,
+                Some("case") => self.case_clause()?,
                 Some("{") => {
                     self.next();
                     let body = self.list(&["}"])?;
@@ -319,6 +322,57 @@ impl Parser<'_> {
         })
     }
 
+    fn case_clause(&mut self) -> Result<CommandKind> {
+        self.next();
+        let subject = match self.next() {
+            Token::Word(word) => word,
+            Token::Eof => return Err(ParseError::incomplete("expected word after 'case'")),
+            _ => return Err(ParseError::syntax("expected word after 'case'")),
+        };
+        self.skip_newlines();
+        self.expect_keyword("in")?;
+
+        let mut arms = Vec::new();
+        loop {
+            self.skip_newlines();
+            if self.is_keyword("esac") {
+                self.next();
+                break;
+            }
+            if self.at_eof() {
+                return Err(ParseError::incomplete("expected 'esac'"));
+            }
+            if self.is_operator("(") {
+                self.next();
+            }
+            let mut patterns = Vec::new();
+            loop {
+                match self.next() {
+                    Token::Word(word) => patterns.push(word),
+                    Token::Eof => return Err(ParseError::incomplete("expected case pattern")),
+                    _ => return Err(ParseError::syntax("expected case pattern")),
+                }
+                if self.is_operator("|") {
+                    self.next();
+                } else {
+                    break;
+                }
+            }
+            if !self.is_operator(")") {
+                return Err(self.unexpected());
+            }
+            self.next();
+            let body = self.list(&[";;", "esac"])?;
+            if self.is_operator(";;") {
+                self.next();
+            } else if !self.is_keyword("esac") {
+                return Err(self.unexpected());
+            }
+            arms.push(CaseArm { patterns, body });
+        }
+        Ok(CommandKind::Case { subject, arms })
+    }
+
     fn for_clause(&mut self) -> Result<CommandKind> {
         self.next();
         let variable = match self.next() {
@@ -358,6 +412,20 @@ impl Parser<'_> {
             items,
             body,
         })
+    }
+
+    fn array_elements(&mut self) -> Result<Vec<Word>> {
+        self.next();
+        let mut elements = Vec::new();
+        loop {
+            match self.next() {
+                Token::Word(word) => elements.push(word),
+                Token::Newline => {}
+                Token::Operator(")") => return Ok(elements),
+                Token::Eof => return Err(ParseError::incomplete("unclosed array")),
+                _ => return Err(ParseError::syntax("unexpected token in array")),
+            }
+        }
     }
 
     fn redirect(&mut self) -> Result<Option<Redirect>> {
@@ -404,9 +472,24 @@ impl Parser<'_> {
                 break;
             };
             if simple.words.is_empty() {
-                if let Some(assign) = split_assignment(&word) {
-                    simple.assignments.push(assign);
+                if let Some(target) = assignment_target(&word) {
                     self.next();
+                    let value = if target.value.is_empty()
+                        && target.index.is_none()
+                        && self.is_operator("(")
+                    {
+                        AssignedValue::Array(self.array_elements()?)
+                    } else {
+                        AssignedValue::Scalar(Word {
+                            parts: target.value,
+                        })
+                    };
+                    simple.assignments.push(Assignment {
+                        name: target.name,
+                        index: target.index,
+                        append: target.append,
+                        value,
+                    });
                     continue;
                 }
                 if let Some(name) = word.as_literal()
@@ -453,31 +536,78 @@ impl Parser<'_> {
     }
 }
 
-fn split_assignment(word: &Word) -> Option<(String, Word)> {
+struct AssignmentTarget {
+    name: String,
+    index: Option<Word>,
+    append: bool,
+    value: Vec<WordPart>,
+}
+
+fn assignment_target(word: &Word) -> Option<AssignmentTarget> {
     let Some(WordPart::Literal(first)) = word.parts.first() else {
         return None;
     };
-    let equals_index = first.find('=')?;
-    let name = &first[..equals_index];
+    let name_end =
+        first.find(|character: char| !(character == '_' || character.is_ascii_alphanumeric()))?;
+    let name = &first[..name_end];
     if !is_name(name) {
         return None;
     }
 
-    let rest = &first[equals_index + 1..];
-    let mut parts = Vec::new();
-    if let Some(after) = rest
+    let mut rest_parts: Vec<WordPart> = Vec::new();
+    let after_name = &first[name_end..];
+    let (index, operator_and_value): (Option<Word>, String) =
+        if let Some(inside) = after_name.strip_prefix('[') {
+            let mut index_parts = Vec::new();
+            let mut pending = inside.to_string();
+            let mut remaining = word.parts[1..].iter();
+            loop {
+                if let Some(close) = pending.find(']') {
+                    if close > 0 {
+                        index_parts.push(WordPart::Literal(pending[..close].to_string()));
+                    }
+                    let after = pending[close + 1..].to_string();
+                    rest_parts.extend(remaining.cloned());
+                    break (Some(Word { parts: index_parts }), after);
+                }
+                if !pending.is_empty() {
+                    index_parts.push(WordPart::Literal(std::mem::take(&mut pending)));
+                }
+                match remaining.next()? {
+                    WordPart::Literal(text) => pending = text.clone(),
+                    other => index_parts.push(other.clone()),
+                }
+            }
+        } else {
+            rest_parts.extend(word.parts[1..].iter().cloned());
+            (None, after_name.to_string())
+        };
+
+    let (append, value_text) = if let Some(value) = operator_and_value.strip_prefix("+=") {
+        (true, value)
+    } else {
+        (false, operator_and_value.strip_prefix('=')?)
+    };
+
+    let mut value = Vec::new();
+    if let Some(after) = value_text
         .strip_prefix('~')
         .filter(|after_tilde| after_tilde.is_empty() || after_tilde.starts_with('/'))
     {
-        parts.push(WordPart::Tilde(String::new()));
+        value.push(WordPart::Tilde(String::new()));
         if !after.is_empty() {
-            parts.push(WordPart::Literal(after.into()));
+            value.push(WordPart::Literal(after.into()));
         }
-    } else if !rest.is_empty() {
-        parts.push(WordPart::Literal(rest.into()));
+    } else if !value_text.is_empty() {
+        value.push(WordPart::Literal(value_text.into()));
     }
-    parts.extend(word.parts[1..].iter().cloned());
-    Some((name.to_string(), Word { parts }))
+    value.extend(rest_parts);
+    Some(AssignmentTarget {
+        name: name.to_string(),
+        index,
+        append,
+        value,
+    })
 }
 
 #[cfg(test)]
@@ -567,7 +697,7 @@ mod tests {
         let command = first_command("FOO=bar BAZ= env");
         let simple = simple(&command);
         assert_eq!(simple.assignments.len(), 2);
-        assert_eq!(simple.assignments[0].0, "FOO");
+        assert_eq!(simple.assignments[0].name, "FOO");
         assert_eq!(simple.words.len(), 1);
     }
 
@@ -614,6 +744,24 @@ mod tests {
         };
         assert_eq!(variable, "f");
         assert_eq!(items.unwrap().len(), 3);
+    }
+
+    #[test]
+    fn case_clause() {
+        let command = first_command(
+            "case $x in\n  a|b) echo ab ;;\n  (*.rs) echo rust ;;\n  *) echo other\nesac",
+        );
+        let CommandKind::Case { arms, .. } = command.kind else {
+            panic!()
+        };
+        assert_eq!(arms.len(), 3);
+        assert_eq!(arms[0].patterns.len(), 2);
+    }
+
+    #[test]
+    fn empty_case_and_incomplete_case() {
+        assert!(parse("case x in esac").is_ok());
+        assert!(parse("case x in a) echo").unwrap_err().incomplete);
     }
 
     #[test]

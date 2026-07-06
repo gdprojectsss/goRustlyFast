@@ -1,18 +1,28 @@
 mod arith;
+mod brace;
 pub mod glob;
 
 use crate::shell::Shell;
-use crate::syntax::ast::{ParameterOperation, ParameterOperationKind, Word, WordPart};
+use crate::syntax::ast::{FallbackKind, ParameterOperation, Subscript, Word, WordPart};
 use crate::sys;
 
 pub fn words(shell: &mut Shell, words: &[Word]) -> Result<Vec<String>, String> {
     let mut out = Vec::new();
     for word in words {
-        let mut fields = Fields::new(true);
-        expand_into(shell, word, &mut fields)?;
-        out.extend(fields.finish());
+        for expanded in brace::expand(word) {
+            let mut fields = Fields::new(true);
+            expand_into(shell, &expanded, &mut fields)?;
+            out.extend(fields.finish());
+        }
     }
     Ok(out)
+}
+
+pub fn pattern(shell: &mut Shell, word: &Word) -> Result<String, String> {
+    let mut fields = Fields::new(false);
+    fields.pattern_mode = true;
+    expand_into(shell, word, &mut fields)?;
+    Ok(fields.pattern)
 }
 
 pub fn single(shell: &mut Shell, word: &Word) -> Result<String, String> {
@@ -29,33 +39,39 @@ fn expand_into(shell: &mut Shell, word: &Word, fields: &mut Fields) -> Result<()
             WordPart::Tilde(user) => fields.quoted(&tilde(shell, user)),
             WordPart::Parameter {
                 name,
-                quoted: true,
-                operator: None,
-            } if name == "@" => {
-                for (index, argument) in shell.positional.clone().iter().enumerate() {
-                    if index > 0 {
-                        fields.break_field();
-                    }
-                    fields.quoted(argument);
-                }
-            }
-            WordPart::Parameter {
-                name,
+                subscript,
                 operator,
                 quoted,
             } => {
-                let value = parameter(shell, name, operator.as_deref())?;
-                if *quoted {
-                    fields.quoted(&value);
-                } else {
-                    fields.split(&value);
-                }
+                let joined = name == "*" || matches!(subscript, Some(Subscript::Joined));
+                let value = lookup(shell, name, subscript.as_ref())?;
+                let value = match operator {
+                    Some(operator) => apply(shell, name, subscript.as_ref(), value, operator)?,
+                    None if value == Expanded::Missing && shell.options.nounset => {
+                        return Err(format!("{name}: unbound variable"));
+                    }
+                    None => value,
+                };
+                push_value(fields, value, *quoted, joined);
             }
-            WordPart::Length(name) => {
-                let length = shell
-                    .get_variable(name)
-                    .map_or(0, |value| value.chars().count());
+            WordPart::Length { name, subscript } => {
+                let length = match lookup(shell, name, subscript.as_ref())? {
+                    Expanded::Missing => 0,
+                    Expanded::One(text) => text.chars().count(),
+                    Expanded::Many(values) if subscript.is_some() || name == "@" || name == "*" => {
+                        values.len()
+                    }
+                    Expanded::Many(values) => values.first().map_or(0, |text| text.chars().count()),
+                };
                 fields.quoted(&length.to_string());
+            }
+            WordPart::Indices { name, quoted } => {
+                let count = shell
+                    .arrays
+                    .get(name)
+                    .map_or_else(|| usize::from(shell.get_variable(name).is_some()), Vec::len);
+                let indices = (0..count).map(|index| index.to_string()).collect();
+                push_value(fields, Expanded::Many(indices), *quoted, false);
             }
             WordPart::CommandSubstitution { source, quoted } => {
                 let out = shell.capture(source);
@@ -66,8 +82,7 @@ fn expand_into(shell: &mut Shell, word: &Word, fields: &mut Fields) -> Result<()
                 }
             }
             WordPart::Arithmetic { expression, .. } => {
-                let text = single(shell, expression)?;
-                let value = arith::eval(shell, &text)?;
+                let value = arithmetic(shell, expression)?;
                 fields.quoted(&value.to_string());
             }
         }
@@ -75,39 +90,218 @@ fn expand_into(shell: &mut Shell, word: &Word, fields: &mut Fields) -> Result<()
     Ok(())
 }
 
-fn parameter(
+pub fn arithmetic(shell: &mut Shell, expression: &Word) -> Result<i64, String> {
+    let text = single(shell, expression)?;
+    arith::eval(shell, &text)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum Expanded {
+    Missing,
+    One(String),
+    Many(Vec<String>),
+}
+
+impl Expanded {
+    fn is_empty_or_missing(&self) -> bool {
+        match self {
+            Expanded::Missing => true,
+            Expanded::One(text) => text.is_empty(),
+            Expanded::Many(values) => values.is_empty(),
+        }
+    }
+
+    fn map(self, mut transform: impl FnMut(&str) -> String) -> Expanded {
+        match self {
+            Expanded::Missing => Expanded::One(transform("")),
+            Expanded::One(text) => Expanded::One(transform(&text)),
+            Expanded::Many(values) => {
+                Expanded::Many(values.iter().map(|text| transform(text)).collect())
+            }
+        }
+    }
+}
+
+fn push_value(fields: &mut Fields, value: Expanded, quoted: bool, joined: bool) {
+    match value {
+        Expanded::Missing if quoted && !joined => fields.quoted(""),
+        Expanded::Missing => {}
+        Expanded::One(text) if quoted => fields.quoted(&text),
+        Expanded::One(text) => fields.split(&text),
+        Expanded::Many(values) if quoted && joined => fields.quoted(&values.join(" ")),
+        Expanded::Many(values) if quoted => {
+            for (index, value) in values.iter().enumerate() {
+                if index > 0 {
+                    fields.break_field();
+                }
+                fields.quoted(value);
+            }
+        }
+        Expanded::Many(values) => fields.split(&values.join(" ")),
+    }
+}
+
+fn resolve_index(index: i64, length: usize) -> Option<usize> {
+    if index < 0 {
+        usize::try_from(length as i64 + index).ok()
+    } else {
+        Some(index as usize)
+    }
+}
+
+fn lookup(
     shell: &mut Shell,
     name: &str,
-    operator: Option<&ParameterOperation>,
-) -> Result<String, String> {
-    let value = shell.get_variable(name);
-    let Some(operator) = operator else {
-        return Ok(value.unwrap_or_default());
-    };
-    let unset = match &value {
-        None => true,
-        Some(value) => operator.colon && value.is_empty(),
-    };
-    match operator.kind {
-        ParameterOperationKind::Default if unset => single(shell, &operator.word),
-        ParameterOperationKind::Assign if unset => {
-            let value = single(shell, &operator.word)?;
-            shell.set_variable(name, &value);
-            Ok(value)
+    subscript: Option<&Subscript>,
+) -> Result<Expanded, String> {
+    let positional = name == "@" || name == "*";
+    match subscript {
+        None if positional => Ok(Expanded::Many(shell.positional.clone())),
+        None => Ok(shell
+            .get_variable(name)
+            .map_or(Expanded::Missing, Expanded::One)),
+        Some(Subscript::All | Subscript::Joined) => Ok(match shell.arrays.get(name) {
+            Some(array) => Expanded::Many(array.clone()),
+            None if positional => Expanded::Many(shell.positional.clone()),
+            None => shell
+                .get_variable(name)
+                .map_or(Expanded::Many(Vec::new()), |value| {
+                    Expanded::Many(vec![value])
+                }),
+        }),
+        Some(Subscript::Index(word)) => {
+            let index = arithmetic(shell, word)?;
+            Ok(match shell.arrays.get(name) {
+                Some(array) => resolve_index(index, array.len())
+                    .and_then(|position| array.get(position).cloned())
+                    .map_or(Expanded::Missing, Expanded::One),
+                None if index == 0 => shell
+                    .get_variable(name)
+                    .map_or(Expanded::Missing, Expanded::One),
+                None => Expanded::Missing,
+            })
         }
-        ParameterOperationKind::Alternative if unset => Ok(String::new()),
-        ParameterOperationKind::Alternative => single(shell, &operator.word),
-        ParameterOperationKind::Error if unset => {
-            let message = single(shell, &operator.word)?;
-            let message = if message.is_empty() {
-                "parameter null or not set".into()
-            } else {
-                message
-            };
-            Err(format!("{name}: {message}"))
-        }
-        _ => Ok(value.unwrap_or_default()),
     }
+}
+
+fn assign_fallback(
+    shell: &mut Shell,
+    name: &str,
+    subscript: Option<&Subscript>,
+    value: &str,
+) -> Result<(), String> {
+    match subscript {
+        Some(Subscript::Index(word)) => {
+            let index = arithmetic(shell, word)?;
+            shell.set_element(name, index, value)
+        }
+        Some(_) => Err(format!("{name}: cannot assign in this way")),
+        None => {
+            shell.set_variable(name, value);
+            Ok(())
+        }
+    }
+}
+
+fn apply(
+    shell: &mut Shell,
+    name: &str,
+    subscript: Option<&Subscript>,
+    value: Expanded,
+    operator: &ParameterOperation,
+) -> Result<Expanded, String> {
+    match operator {
+        ParameterOperation::Fallback { kind, colon, word } => {
+            let unset = match &value {
+                Expanded::Missing => true,
+                other => *colon && other.is_empty_or_missing(),
+            };
+            match kind {
+                FallbackKind::Default if unset => Ok(Expanded::One(single(shell, word)?)),
+                FallbackKind::Assign if unset => {
+                    let assigned = single(shell, word)?;
+                    assign_fallback(shell, name, subscript, &assigned)?;
+                    Ok(Expanded::One(assigned))
+                }
+                FallbackKind::Alternative if unset => Ok(Expanded::Missing),
+                FallbackKind::Alternative => Ok(Expanded::One(single(shell, word)?)),
+                FallbackKind::Error if unset => {
+                    let message = single(shell, word)?;
+                    let message = if message.is_empty() {
+                        "parameter null or not set".into()
+                    } else {
+                        message
+                    };
+                    Err(format!("{name}: {message}"))
+                }
+                _ => Ok(value),
+            }
+        }
+        ParameterOperation::RemovePrefix { longest, pattern } => {
+            let pattern = self::pattern(shell, pattern)?;
+            Ok(value.map(|text| glob::remove_prefix(text, &pattern, *longest)))
+        }
+        ParameterOperation::RemoveSuffix { longest, pattern } => {
+            let pattern = self::pattern(shell, pattern)?;
+            Ok(value.map(|text| glob::remove_suffix(text, &pattern, *longest)))
+        }
+        ParameterOperation::Replace {
+            all,
+            anchor,
+            pattern,
+            replacement,
+        } => {
+            let pattern = self::pattern(shell, pattern)?;
+            let replacement = single(shell, replacement)?;
+            Ok(value.map(|text| glob::replace(text, &pattern, &replacement, *all, *anchor)))
+        }
+        ParameterOperation::ChangeCase { upper, all } => Ok(value.map(|text| {
+            let convert = |text: &str| {
+                if *upper {
+                    text.to_uppercase()
+                } else {
+                    text.to_lowercase()
+                }
+            };
+            if *all {
+                return convert(text);
+            }
+            let mut chars = text.chars();
+            match chars.next() {
+                Some(first) => convert(&first.to_string()) + chars.as_str(),
+                None => String::new(),
+            }
+        })),
+        ParameterOperation::Substring { offset, length } => {
+            let offset = arithmetic(shell, offset)?;
+            let length = match length {
+                Some(word) => Some(arithmetic(shell, word)?),
+                None => None,
+            };
+            Ok(match value {
+                Expanded::Many(values) => Expanded::Many(slice(&values, offset, length)),
+                other => other.map(|text| {
+                    let chars: Vec<char> = text.chars().collect();
+                    slice(&chars, offset, length).into_iter().collect()
+                }),
+            })
+        }
+    }
+}
+
+fn slice<T: Clone>(items: &[T], offset: i64, length: Option<i64>) -> Vec<T> {
+    let total = items.len() as i64;
+    let start = if offset < 0 {
+        (total + offset).max(0)
+    } else {
+        offset.min(total)
+    };
+    let end = match length {
+        None => total,
+        Some(length) if length < 0 => (total + length).max(start),
+        Some(length) => (start + length).min(total),
+    };
+    items[start as usize..end.max(start) as usize].to_vec()
 }
 
 fn tilde(shell: &Shell, user: &str) -> String {
@@ -127,6 +321,7 @@ struct Fields {
     pattern: String,
     glob: bool,
     started: bool,
+    pattern_mode: bool,
 }
 
 fn is_field_separator(character: char) -> bool {
@@ -142,6 +337,7 @@ impl Fields {
             pattern: String::new(),
             glob: false,
             started: false,
+            pattern_mode: false,
         }
     }
 
@@ -166,6 +362,10 @@ impl Fields {
     }
 
     fn split(&mut self, text: &str) {
+        if self.pattern_mode {
+            self.literal(text);
+            return;
+        }
         if !self.split {
             self.quoted(text);
             return;

@@ -15,6 +15,20 @@ mod redirect;
 
 const MAX_FUNCTION_DEPTH: usize = 1000;
 
+pub(crate) enum Evaluated {
+    Scalar {
+        name: String,
+        index: Option<i64>,
+        append: bool,
+        value: String,
+    },
+    Array {
+        name: String,
+        append: bool,
+        values: Vec<String>,
+    },
+}
+
 impl Shell {
     pub(crate) fn run_source(&mut self, source: &str) -> i32 {
         match parser::parse_with_aliases(source, &self.aliases) {
@@ -175,6 +189,30 @@ impl Shell {
                 self.loop_depth -= 1;
                 status
             }
+            CommandKind::Case { subject, arms } => {
+                let subject = match expand::single(self, subject) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        shell::error(error);
+                        return 1;
+                    }
+                };
+                for arm in arms {
+                    for pattern in &arm.patterns {
+                        let pattern = match expand::pattern(self, pattern) {
+                            Ok(pattern) => pattern,
+                            Err(error) => {
+                                shell::error(error);
+                                return 1;
+                            }
+                        };
+                        if expand::glob::matches_pattern(&pattern, &subject) {
+                            return self.run_list(&arm.body);
+                        }
+                    }
+                }
+                0
+            }
             CommandKind::For {
                 variable,
                 items,
@@ -229,6 +267,89 @@ impl Shell {
         }
     }
 
+    fn evaluate_assignment(&mut self, assignment: &Assignment) -> Result<Evaluated, String> {
+        match &assignment.value {
+            AssignedValue::Scalar(word) => {
+                let index = match &assignment.index {
+                    Some(index) => Some(expand::arithmetic(self, index)?),
+                    None => None,
+                };
+                Ok(Evaluated::Scalar {
+                    name: assignment.name.clone(),
+                    index,
+                    append: assignment.append,
+                    value: expand::single(self, word)?,
+                })
+            }
+            AssignedValue::Array(words) => Ok(Evaluated::Array {
+                name: assignment.name.clone(),
+                append: assignment.append,
+                values: expand::words(self, words)?,
+            }),
+        }
+    }
+
+    pub(crate) fn assign(&mut self, evaluated: Evaluated) -> Result<(), String> {
+        match evaluated {
+            Evaluated::Scalar {
+                name,
+                index: Some(index),
+                append,
+                value,
+            } => {
+                let value = if append {
+                    let current = self
+                        .arrays
+                        .get(&name)
+                        .and_then(|array| {
+                            let position = if index < 0 {
+                                usize::try_from(array.len() as i64 + index).ok()?
+                            } else {
+                                index as usize
+                            };
+                            array.get(position).cloned()
+                        })
+                        .unwrap_or_default();
+                    current + &value
+                } else {
+                    value
+                };
+                self.set_element(&name, index, &value)
+            }
+            Evaluated::Scalar {
+                name,
+                index: None,
+                append,
+                value,
+            } => {
+                let value = if append {
+                    self.get_variable(&name).unwrap_or_default() + &value
+                } else {
+                    value
+                };
+                self.set_variable(&name, &value);
+                Ok(())
+            }
+            Evaluated::Array {
+                name,
+                append,
+                values,
+            } => {
+                if append {
+                    if !self.arrays.contains_key(&name) {
+                        let existing = self.variables.remove(&name).into_iter().collect();
+                        self.arrays.insert(name.clone(), existing);
+                    }
+                    self.arrays.entry(name).or_default().extend(values);
+                } else {
+                    self.variables.remove(&name);
+                    self.arrays.insert(name, values);
+                }
+                Ok(())
+            }
+        }
+    }
+
     pub(crate) fn run_simple(
         &mut self,
         simple: &SimpleCommand,
@@ -243,10 +364,10 @@ impl Shell {
                 return 1;
             }
         };
-        let mut assignments = Vec::with_capacity(simple.assignments.len());
-        for (name, value) in &simple.assignments {
-            match expand::single(self, value) {
-                Ok(value) => assignments.push((name.clone(), value)),
+        let mut pending = Vec::with_capacity(simple.assignments.len());
+        for assignment in &simple.assignments {
+            match self.evaluate_assignment(assignment) {
+                Ok(evaluated) => pending.push(evaluated),
                 Err(error) => {
                     shell::error(error);
                     return 1;
@@ -255,12 +376,27 @@ impl Shell {
         }
 
         if argv.is_empty() {
-            for (name, value) in &assignments {
-                self.set_variable(name, value);
+            for evaluated in pending {
+                if let Err(error) = self.assign(evaluated) {
+                    shell::error(error);
+                    return 1;
+                }
             }
             let status = self.substitution_status.unwrap_or(0);
             return self.with_redirects(redirects, |_| status);
         }
+        let assignments: Vec<(String, String)> = pending
+            .into_iter()
+            .filter_map(|evaluated| match evaluated {
+                Evaluated::Scalar {
+                    name,
+                    index: None,
+                    value,
+                    ..
+                } => Some((name, value)),
+                _ => None,
+            })
+            .collect();
 
         let mut bypass_functions = false;
         while argv.len() > 1 && argv[0] == "command" && argv[1] != "-v" {

@@ -7,10 +7,18 @@ pub enum WordPart {
     Tilde(String),
     Parameter {
         name: String,
+        subscript: Option<Subscript>,
         operator: Option<Box<ParameterOperation>>,
         quoted: bool,
     },
-    Length(String),
+    Length {
+        name: String,
+        subscript: Option<Subscript>,
+    },
+    Indices {
+        name: String,
+        quoted: bool,
+    },
     CommandSubstitution {
         source: String,
         quoted: bool,
@@ -21,19 +29,57 @@ pub enum WordPart {
     },
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum Subscript {
+    All,
+    Joined,
+    Index(Word),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ParameterOperationKind {
+pub enum FallbackKind {
     Default,
     Assign,
     Alternative,
     Error,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Anchor {
+    Anywhere,
+    Start,
+    End,
+}
+
 #[derive(Debug, Clone, PartialEq)]
-pub struct ParameterOperation {
-    pub kind: ParameterOperationKind,
-    pub colon: bool,
-    pub word: Word,
+pub enum ParameterOperation {
+    Fallback {
+        kind: FallbackKind,
+        colon: bool,
+        word: Word,
+    },
+    RemovePrefix {
+        longest: bool,
+        pattern: Word,
+    },
+    RemoveSuffix {
+        longest: bool,
+        pattern: Word,
+    },
+    Replace {
+        all: bool,
+        anchor: Anchor,
+        pattern: Word,
+        replacement: Word,
+    },
+    ChangeCase {
+        upper: bool,
+        all: bool,
+    },
+    Substring {
+        offset: Word,
+        length: Option<Word>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -71,9 +117,23 @@ pub struct Redirect {
     pub target: Word,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum AssignedValue {
+    Scalar(Word),
+    Array(Vec<Word>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Assignment {
+    pub name: String,
+    pub index: Option<Word>,
+    pub append: bool,
+    pub value: AssignedValue,
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SimpleCommand {
-    pub assignments: Vec<(String, Word)>,
+    pub assignments: Vec<Assignment>,
     pub words: Vec<Word>,
 }
 
@@ -96,10 +156,20 @@ pub enum CommandKind {
         items: Option<Vec<Word>>,
         body: List,
     },
+    Case {
+        subject: Word,
+        arms: Vec<CaseArm>,
+    },
     FunctionDefinition {
         name: String,
         body: Rc<Command>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CaseArm {
+    pub patterns: Vec<Word>,
+    pub body: List,
 }
 
 #[derive(Debug, Clone, PartialEq)]

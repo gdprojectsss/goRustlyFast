@@ -17,9 +17,29 @@ pub enum Flow {
     Interrupted,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ShellOptions {
+    pub errexit: bool,
+    pub nounset: bool,
+    pub xtrace: bool,
+    pub pipefail: bool,
+}
+
+impl ShellOptions {
+    pub fn flags(&self) -> String {
+        [(self.errexit, 'e'), (self.nounset, 'u'), (self.xtrace, 'x')]
+            .iter()
+            .filter(|(enabled, _)| *enabled)
+            .map(|(_, flag)| *flag)
+            .collect()
+    }
+}
+
 pub struct Shell {
     pub aliases: HashMap<String, String>,
     pub variables: HashMap<String, String>,
+    pub arrays: HashMap<String, Vec<String>>,
+    pub options: ShellOptions,
     pub functions: HashMap<String, Rc<Command>>,
     pub positional: Vec<String>,
     pub arg0: String,
@@ -47,6 +67,8 @@ impl Shell {
                 ("grep".into(), "grep --color=auto".into()),
             ]),
             variables: HashMap::new(),
+            arrays: HashMap::new(),
+            options: ShellOptions::default(),
             functions: HashMap::new(),
             positional: Vec::new(),
             arg0: "grfsh".into(),
@@ -95,11 +117,8 @@ impl Shell {
             "0" => return Some(self.arg0.clone()),
             "@" | "*" => return Some(self.positional.join(" ")),
             "-" => {
-                return Some(if self.interactive {
-                    "i".into()
-                } else {
-                    String::new()
-                });
+                let interactive = if self.interactive { "i" } else { "" };
+                return Some(format!("{}{interactive}", self.options.flags()));
             }
             "RANDOM" => return Some((random() % 32768).to_string()),
             _ => {}
@@ -107,14 +126,41 @@ impl Shell {
         if let Ok(index) = name.parse::<usize>() {
             return self.positional.get(index.wrapping_sub(1)).cloned();
         }
+        if let Some(array) = self.arrays.get(name) {
+            return array.first().cloned();
+        }
         self.variables
             .get(name)
             .cloned()
             .or_else(|| std::env::var(name).ok())
     }
 
+    pub fn set_element(&mut self, name: &str, index: i64, value: &str) -> Result<(), String> {
+        if !self.arrays.contains_key(name) {
+            let existing = self.variables.remove(name).into_iter().collect();
+            self.arrays.insert(name.to_string(), existing);
+        }
+        let array = self.arrays.entry(name.to_string()).or_default();
+        let position = if index < 0 {
+            usize::try_from(array.len() as i64 + index)
+                .map_err(|_| format!("{name}[{index}]: bad array subscript"))?
+        } else {
+            index as usize
+        };
+        if position >= array.len() {
+            array.resize(position + 1, String::new());
+        }
+        array[position] = value.to_string();
+        Ok(())
+    }
+
     pub fn set_variable(&mut self, name: &str, value: &str) {
-        if !self.variables.contains_key(name) && std::env::var_os(name).is_some() {
+        if let Some(array) = self.arrays.get_mut(name) {
+            match array.first_mut() {
+                Some(first) => *first = value.to_string(),
+                None => array.push(value.to_string()),
+            }
+        } else if !self.variables.contains_key(name) && std::env::var_os(name).is_some() {
             unsafe { std::env::set_var(name, value) };
         } else {
             self.variables.insert(name.into(), value.into());
@@ -130,6 +176,7 @@ impl Shell {
     }
 
     pub fn unset_variable(&mut self, name: &str) {
+        self.arrays.remove(name);
         self.variables.remove(name);
         unsafe { std::env::remove_var(name) };
     }

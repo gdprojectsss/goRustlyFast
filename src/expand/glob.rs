@@ -1,3 +1,5 @@
+use crate::syntax::ast::Anchor;
+
 pub fn expand(pattern: &str) -> Option<Vec<String>> {
     let mut paths = vec![if pattern.starts_with('/') {
         "/".to_string()
@@ -185,6 +187,81 @@ fn bracket(pattern_chars: &[char], start: usize, target: char) -> Option<(bool, 
     None
 }
 
+fn boundaries(text: &str) -> Vec<usize> {
+    text.char_indices()
+        .map(|(index, _)| index)
+        .chain(std::iter::once(text.len()))
+        .collect()
+}
+
+pub fn remove_prefix(text: &str, pattern: &str, longest: bool) -> String {
+    let cuts = boundaries(text);
+    let mut candidates: Box<dyn Iterator<Item = &usize>> = if longest {
+        Box::new(cuts.iter().rev())
+    } else {
+        Box::new(cuts.iter())
+    };
+    match candidates.find(|&&cut| matches_pattern(pattern, &text[..cut])) {
+        Some(&cut) => text[cut..].to_string(),
+        None => text.to_string(),
+    }
+}
+
+pub fn remove_suffix(text: &str, pattern: &str, longest: bool) -> String {
+    let cuts = boundaries(text);
+    let mut candidates: Box<dyn Iterator<Item = &usize>> = if longest {
+        Box::new(cuts.iter())
+    } else {
+        Box::new(cuts.iter().rev())
+    };
+    match candidates.find(|&&cut| matches_pattern(pattern, &text[cut..])) {
+        Some(&cut) => text[..cut].to_string(),
+        None => text.to_string(),
+    }
+}
+
+pub fn replace(text: &str, pattern: &str, replacement: &str, all: bool, anchor: Anchor) -> String {
+    if pattern.is_empty() {
+        return text.to_string();
+    }
+    let cuts = boundaries(text);
+    let mut out = String::new();
+    let mut position = 0;
+    while position < cuts.len() {
+        let start = cuts[position];
+        if anchor == Anchor::Start && start != 0 {
+            break;
+        }
+        let found = cuts[position..].iter().rev().find(|&&end| {
+            (anchor != Anchor::End || end == text.len())
+                && matches_pattern(pattern, &text[start..end])
+        });
+        match found {
+            Some(&end) if end > start => {
+                out.push_str(replacement);
+                position = cuts
+                    .iter()
+                    .position(|&cut| cut == end)
+                    .unwrap_or(cuts.len());
+                if !all {
+                    out.push_str(&text[end..]);
+                    return out;
+                }
+            }
+            _ => {
+                if let Some(&next) = cuts.get(position + 1) {
+                    out.push_str(&text[start..next]);
+                }
+                position += 1;
+            }
+        }
+    }
+    if position < cuts.len() {
+        out.push_str(&text[cuts[position]..]);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -291,5 +368,33 @@ mod tests {
     fn multi_component_patterns() {
         let results = expand("s*/lib.rs").expect("src/lib.rs should match");
         assert_eq!(results, ["src/lib.rs"]);
+    }
+
+    #[test]
+    fn prefix_and_suffix_removal() {
+        assert_eq!(
+            remove_prefix("src/expand/glob.rs", "*/", false),
+            "expand/glob.rs"
+        );
+        assert_eq!(remove_prefix("src/expand/glob.rs", "*/", true), "glob.rs");
+        assert_eq!(remove_suffix("archive.tar.gz", ".*", false), "archive.tar");
+        assert_eq!(remove_suffix("archive.tar.gz", ".*", true), "archive");
+        assert_eq!(remove_suffix("plain", "x*", true), "plain");
+    }
+
+    #[test]
+    fn replacement() {
+        assert_eq!(replace("a-b-c", "-", "+", false, Anchor::Anywhere), "a+b-c");
+        assert_eq!(replace("a-b-c", "-", "+", true, Anchor::Anywhere), "a+b+c");
+        assert_eq!(
+            replace("main.rs", "main", "lib", false, Anchor::Start),
+            "lib.rs"
+        );
+        assert_eq!(
+            replace("main.rs", "rs", "go", false, Anchor::End),
+            "main.go"
+        );
+        assert_eq!(replace("aaa", "a*", "x", false, Anchor::Anywhere), "x");
+        assert_eq!(replace("hello", "l", "", true, Anchor::Anywhere), "heo");
     }
 }

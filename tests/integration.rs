@@ -487,3 +487,48 @@ fn table_errors_name_the_command() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("where: no column 'nope'"));
     assert_eq!(output.status.code(), Some(1));
 }
+
+#[test]
+fn case_statement() {
+    let out = run(
+        "for f in a.rs b.txt c; do\n  case $f in\n    *.rs) echo rust ;;\n    *.txt|*.md) echo text ;;\n    *) echo other ;;\n  esac\ndone\n",
+    );
+    assert_eq!(out.trim(), "rust\ntext\nother");
+}
+
+#[test]
+fn parameter_pattern_operators() {
+    let out =
+        run("f=src/expand/glob.rs\necho ${f##*/} ${f%.rs} ${f%%/*} ${f/glob/brace} ${f//s/S}\n");
+    assert_eq!(
+        out.trim(),
+        "glob.rs src/expand/glob src src/expand/brace.rs Src/expand/glob.rS"
+    );
+}
+
+#[test]
+fn case_conversion_and_substrings() {
+    assert_eq!(
+        run("w=hello\necho ${w^} ${w^^} ${w:1:3} ${w: -2}\n").trim(),
+        "Hello HELLO ell lo"
+    );
+}
+
+#[test]
+fn indexed_arrays() {
+    let out = run(
+        "list=(one \"two words\" three)\nlist+=(four)\necho ${#list[@]} ${list[1]} ${list[-1]}\nfor item in \"${list[@]}\"; do echo \"<$item>\"; done\n",
+    );
+    assert_eq!(
+        out.trim(),
+        "4 two words four\n<one>\n<two words>\n<three>\n<four>"
+    );
+}
+
+#[test]
+fn brace_expansion() {
+    assert_eq!(
+        run("echo {a,b}{1,2} x{,.bak} {01..03} '{a,b}'\n").trim(),
+        "a1 a2 b1 b2 x x.bak 01 02 03 {a,b}"
+    );
+}
