@@ -375,3 +375,14 @@ fn background_job_and_wait() {
 fn kill_job_by_spec() {
     assert_eq!(run("sleep 5 &\nkill %1\nwait\necho $?\n").trim(), "143");
 }
+
+#[test]
+fn unknown_command_suggests_a_close_match() {
+    let output = Command::new(env!("CARGO_BIN_EXE_grfsh"))
+        .args(["-c", "ehco hi; echo status=$?"])
+        .output()
+        .expect("failed to run grfsh");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("did you mean 'echo'?"), "{stderr}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "status=127");
+}

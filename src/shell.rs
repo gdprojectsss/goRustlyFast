@@ -33,6 +33,7 @@ pub struct Shell {
     pub locals: Vec<HashMap<String, Option<String>>>,
     pub loop_depth: u32,
     pub source_depth: u32,
+    pub path_commands: Option<(String, Vec<String>)>,
 }
 
 impl Shell {
@@ -57,6 +58,7 @@ impl Shell {
             locals: Vec::new(),
             loop_depth: 0,
             source_depth: 0,
+            path_commands: None,
         };
         shell.init_working_directory();
         shell

@@ -2,6 +2,7 @@ mod completer;
 mod prompt;
 
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use rustyline::Editor;
 use rustyline::error::ReadlineError;
@@ -10,6 +11,7 @@ use crate::shell::{self, Flow, Shell};
 use crate::sys;
 
 use completer::ShellHelper;
+use prompt::PromptState;
 
 const USAGE: &str = "usage: grfsh [-c command [name [args...]]] [script [args...]]";
 
@@ -102,16 +104,25 @@ fn interactive(shell: &mut Shell) {
     let history = history_path();
     let _ = editor.load_history(&history);
     let mut warned_about_jobs = false;
+    let mut duration = Duration::ZERO;
 
     loop {
         shell.reap_jobs();
-        match editor.readline(&prompt::build()) {
+        let state = PromptState {
+            status: shell.last_status,
+            duration,
+            jobs: shell.jobs.len(),
+        };
+        match editor.readline(&prompt::build(&state)) {
             Ok(line) => {
                 if line.trim().is_empty() {
+                    duration = Duration::ZERO;
                     continue;
                 }
                 let _ = editor.add_history_entry(line.trim());
+                let started = Instant::now();
                 shell.run_source(&line);
+                duration = started.elapsed();
                 if shell.flow == Flow::Exit {
                     if shell.jobs.len() > 0 && !warned_about_jobs {
                         warned_about_jobs = true;
@@ -124,7 +135,10 @@ fn interactive(shell: &mut Shell) {
                 warned_about_jobs = false;
                 shell.flow = Flow::Normal;
             }
-            Err(ReadlineError::Interrupted) => continue,
+            Err(ReadlineError::Interrupted) => {
+                duration = Duration::ZERO;
+                continue;
+            }
             Err(ReadlineError::Eof) => break,
             Err(error) => {
                 shell::error(error);

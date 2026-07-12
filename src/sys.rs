@@ -331,3 +331,16 @@ pub fn user_home(user: &str) -> Option<String> {
         )
     }
 }
+
+pub fn hostname() -> Option<String> {
+    let mut buffer = [0u8; 256];
+    let result = unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) };
+    if result != 0 {
+        return None;
+    }
+    let end = buffer
+        .iter()
+        .position(|&byte| byte == 0)
+        .unwrap_or(buffer.len());
+    Some(String::from_utf8_lossy(&buffer[..end]).into_owned())
+}
