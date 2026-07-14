@@ -8,8 +8,16 @@ pub use crate::syntax::lexer::ParseError;
 
 type Result<T> = std::result::Result<T, ParseError>;
 
+const UNARY_CONDITIONS: &[&str] = &[
+    "-e", "-f", "-d", "-r", "-w", "-x", "-s", "-L", "-h", "-p", "-S", "-b", "-c", "-n", "-z", "-t",
+    "-v",
+];
+const BINARY_CONDITIONS: &[&str] = &[
+    "=", "==", "!=", "=~", "-eq", "-ne", "-lt", "-le", "-gt", "-ge", "-nt", "-ot", "-ef",
+];
+
 const RESERVED: &[&str] = &[
-    "then", "else", "elif", "fi", "do", "done", "}", "in", "esac",
+    "then", "else", "elif", "fi", "do", "done", "}", "in", "esac", "]]",
 ];
 
 pub fn parse(source: &str) -> Result<List> {
@@ -218,6 +226,12 @@ impl Parser<'_> {
                 }
                 Some("for") => self.for_clause()?,
                 Some("case") => self.case_clause()?,
+                Some("[[") => {
+                    self.next();
+                    let condition = self.condition_or()?;
+                    self.expect_keyword("]]")?;
+                    CommandKind::Conditional(condition)
+                }
                 Some("{") => {
                     self.next();
                     let body = self.list(&["}"])?;
@@ -320,6 +334,111 @@ impl Parser<'_> {
             branches,
             otherwise,
         })
+    }
+
+    fn condition_word(&mut self) -> Result<Word> {
+        match self.next() {
+            Token::Word(word) => Ok(word),
+            Token::Eof => Err(ParseError::incomplete("expected ']]'")),
+            _ => Err(ParseError::syntax("unexpected token in [[ ]]")),
+        }
+    }
+
+    fn regex_operand(&mut self) -> Result<Word> {
+        let start = self.tokens[self.position].start;
+        let mut end = start;
+        let mut depth = 0usize;
+        loop {
+            match self.peek() {
+                Token::Eof | Token::Newline => {
+                    return Err(ParseError::incomplete("expected ']]'"));
+                }
+                Token::Word(word) if depth == 0 && word.as_literal() == Some("]]") => break,
+                Token::Operator("&&" | "||") if depth == 0 => break,
+                Token::Operator("(") => depth += 1,
+                Token::Operator(")") if depth == 0 => break,
+                Token::Operator(")") => depth -= 1,
+                _ => {}
+            }
+            end = self.tokens[self.position].end;
+            self.next();
+        }
+        if end == start {
+            return Err(ParseError::syntax("expected regular expression after '=~'"));
+        }
+        lexer::parse_regex_word(&self.text(start, end))
+    }
+
+    fn condition_or(&mut self) -> Result<Condition> {
+        let mut condition = self.condition_and()?;
+        while self.is_operator("||") {
+            self.next();
+            self.skip_newlines();
+            let right = self.condition_and()?;
+            condition = Condition::Or(Box::new(condition), Box::new(right));
+        }
+        Ok(condition)
+    }
+
+    fn condition_and(&mut self) -> Result<Condition> {
+        let mut condition = self.condition_not()?;
+        while self.is_operator("&&") {
+            self.next();
+            self.skip_newlines();
+            let right = self.condition_not()?;
+            condition = Condition::And(Box::new(condition), Box::new(right));
+        }
+        Ok(condition)
+    }
+
+    fn condition_not(&mut self) -> Result<Condition> {
+        if self.is_keyword("!") {
+            self.next();
+            return Ok(Condition::Not(Box::new(self.condition_not()?)));
+        }
+        if self.is_operator("(") {
+            self.next();
+            let inner = self.condition_or()?;
+            self.expect_operator(")")?;
+            return Ok(inner);
+        }
+        if self.at_eof() {
+            return Err(ParseError::incomplete("expected ']]'"));
+        }
+
+        let first = self.condition_word()?;
+        let binary = match self.peek() {
+            Token::Word(word) => word
+                .as_literal()
+                .filter(|operator| BINARY_CONDITIONS.contains(operator))
+                .map(String::from),
+            Token::Redirect(_, RedirectKind::In) => Some("<".to_string()),
+            Token::Redirect(_, RedirectKind::Out) => Some(">".to_string()),
+            _ => None,
+        };
+        if let Some(operator) = binary {
+            self.next();
+            let right = if operator == "=~" {
+                self.regex_operand()?
+            } else {
+                self.condition_word()?
+            };
+            return Ok(Condition::Binary {
+                operator,
+                left: first,
+                right,
+            });
+        }
+        if let Some(operator) = first
+            .as_literal()
+            .filter(|operator| UNARY_CONDITIONS.contains(operator))
+            && !self.is_keyword("]]")
+        {
+            let operator = operator.to_string();
+            let operand = self.condition_word()?;
+            return Ok(Condition::Unary { operator, operand });
+        }
+        Ok(Condition::Single(first))
     }
 
     fn case_clause(&mut self) -> Result<CommandKind> {
@@ -762,6 +881,18 @@ mod tests {
     fn empty_case_and_incomplete_case() {
         assert!(parse("case x in esac").is_ok());
         assert!(parse("case x in a) echo").unwrap_err().incomplete);
+    }
+
+    #[test]
+    fn conditional_expression() {
+        let command = first_command("[[ -f $x && ( $y == *.rs || ! -d $z ) ]]");
+        let CommandKind::Conditional(Condition::And(left, right)) = command.kind else {
+            panic!()
+        };
+        assert!(matches!(*left, Condition::Unary { .. }));
+        assert!(matches!(*right, Condition::Or(..)));
+        assert!(parse("[[ a < b ]]").is_ok());
+        assert!(parse("[[ -f x").unwrap_err().incomplete);
     }
 
     #[test]

@@ -59,6 +59,15 @@ pub fn lex(source: &str) -> Result<Lexed, ParseError> {
     Lexer::new(source).run()
 }
 
+pub fn parse_regex_word(text: &str) -> Result<Word, ParseError> {
+    let mut lexer = Lexer::new(text.trim());
+    let word = lexer.word_until(|character| character == ' ' || character == '\t')?;
+    if lexer.position < lexer.chars.len() {
+        return Err(ParseError::syntax("unexpected space in regular expression"));
+    }
+    Ok(word)
+}
+
 pub fn parse_double_quoted_text(text: &str) -> Result<Word, ParseError> {
     let parts = Lexer::new(text).double_quoted_until(None)?;
     Ok(Word { parts })
@@ -387,9 +396,13 @@ impl Lexer {
     }
 
     fn word(&mut self) -> Result<Word, ParseError> {
+        self.word_until(is_word_break)
+    }
+
+    fn word_until(&mut self, stop: fn(char) -> bool) -> Result<Word, ParseError> {
         let mut word = WordBuf::default();
         while let Some(character) = self.peek() {
-            if is_word_break(character) {
+            if stop(character) {
                 break;
             }
             self.position += 1;

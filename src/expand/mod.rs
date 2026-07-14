@@ -25,6 +25,29 @@ pub fn pattern(shell: &mut Shell, word: &Word) -> Result<String, String> {
     Ok(fields.pattern)
 }
 
+pub fn regex(shell: &mut Shell, word: &Word) -> Result<String, String> {
+    let mut out = String::new();
+    for part in &word.parts {
+        match part {
+            WordPart::Quoted(text) => {
+                for character in text.chars() {
+                    if "\\^$.|?*+()[]{}".contains(character) {
+                        out.push('\\');
+                    }
+                    out.push(character);
+                }
+            }
+            other => {
+                let piece = Word {
+                    parts: vec![other.clone()],
+                };
+                out.push_str(&single(shell, &piece)?);
+            }
+        }
+    }
+    Ok(out)
+}
+
 pub fn single(shell: &mut Shell, word: &Word) -> Result<String, String> {
     let mut fields = Fields::new(false);
     expand_into(shell, word, &mut fields)?;

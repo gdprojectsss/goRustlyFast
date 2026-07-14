@@ -7,8 +7,8 @@ pub(super) const DIM: &str = "\x1b[90m";
 pub(super) const RESET: &str = "\x1b[0m";
 
 const KEYWORDS: &[&str] = &[
-    "if", "then", "else", "elif", "fi", "while", "until", "for", "in", "do", "done", "function",
-    "{", "}", "!",
+    "if", "then", "else", "elif", "fi", "while", "until", "for", "in", "do", "done", "case",
+    "esac", "function", "{", "}", "!", "[[", "]]",
 ];
 
 pub(super) fn highlight(line: &str, is_command: impl Fn(&str) -> bool) -> String {

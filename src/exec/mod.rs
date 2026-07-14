@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::builtins;
+use crate::builtins::{self, test};
 use crate::commands;
 use crate::expand;
 use crate::shell::{self, Flow, Shell};
@@ -189,6 +189,14 @@ impl Shell {
                 self.loop_depth -= 1;
                 status
             }
+            CommandKind::Conditional(condition) => match self.evaluate_condition(condition) {
+                Ok(true) => 0,
+                Ok(false) => 1,
+                Err(error) => {
+                    shell::error(format!("[[: {error}"));
+                    2
+                }
+            },
             CommandKind::Case { subject, arms } => {
                 let subject = match expand::single(self, subject) {
                     Ok(value) => value,
@@ -264,6 +272,54 @@ impl Shell {
                 false
             }
             Flow::Return | Flow::Exit | Flow::Interrupted => true,
+        }
+    }
+
+    fn evaluate_condition(&mut self, condition: &Condition) -> Result<bool, String> {
+        match condition {
+            Condition::And(left, right) => {
+                Ok(self.evaluate_condition(left)? && self.evaluate_condition(right)?)
+            }
+            Condition::Or(left, right) => {
+                Ok(self.evaluate_condition(left)? || self.evaluate_condition(right)?)
+            }
+            Condition::Not(inner) => Ok(!self.evaluate_condition(inner)?),
+            Condition::Single(word) => Ok(!expand::single(self, word)?.is_empty()),
+            Condition::Unary { operator, operand } => {
+                let operand = expand::single(self, operand)?;
+                Ok(test::unary(self, operator, &operand))
+            }
+            Condition::Binary {
+                operator,
+                left,
+                right,
+            } => {
+                let left = expand::single(self, left)?;
+                match operator.as_str() {
+                    "==" | "=" | "!=" => {
+                        let pattern = expand::pattern(self, right)?;
+                        let matched = expand::glob::matches_pattern(&pattern, &left);
+                        Ok(matched == (operator != "!="))
+                    }
+                    "=~" => {
+                        let pattern = expand::regex(self, right)?;
+                        match test::regex_match(&left, &pattern)? {
+                            Some(groups) => {
+                                self.arrays.insert("BASH_REMATCH".into(), groups);
+                                Ok(true)
+                            }
+                            None => {
+                                self.arrays.insert("BASH_REMATCH".into(), Vec::new());
+                                Ok(false)
+                            }
+                        }
+                    }
+                    _ => {
+                        let right = expand::single(self, right)?;
+                        test::binary(operator, &left, &right)
+                    }
+                }
+            }
         }
     }
 

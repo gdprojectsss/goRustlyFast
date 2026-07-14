@@ -160,10 +160,28 @@ pub enum CommandKind {
         subject: Word,
         arms: Vec<CaseArm>,
     },
+    Conditional(Condition),
     FunctionDefinition {
         name: String,
         body: Rc<Command>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Condition {
+    And(Box<Condition>, Box<Condition>),
+    Or(Box<Condition>, Box<Condition>),
+    Not(Box<Condition>),
+    Unary {
+        operator: String,
+        operand: Word,
+    },
+    Binary {
+        operator: String,
+        left: Word,
+        right: Word,
+    },
+    Single(Word),
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -532,3 +532,19 @@ fn brace_expansion() {
         "a1 a2 b1 b2 x x.bak 01 02 03 {a,b}"
     );
 }
+
+#[test]
+fn test_builtin_and_brackets() {
+    let out = run(
+        "[ -d src ] && echo dir\ntest 3 -gt 5 || echo small\n[ a = b ]; echo $?\n[ 1 -eq x ]; echo $?\n",
+    );
+    assert_eq!(out.trim(), "dir\nsmall\n1\n2");
+}
+
+#[test]
+fn double_bracket_conditions() {
+    let out = run(
+        "f='my file.rs'\n[[ $f == *.rs ]] && echo glob\n[[ $f == \"*.rs\" ]] || echo literal\nv=v2.15.3\n[[ $v =~ ^v([0-9]+)\\.([0-9]+) ]] && echo ${BASH_REMATCH[1]}.${BASH_REMATCH[2]}\n[[ -d src && ! -f src ]] && echo logic\n",
+    );
+    assert_eq!(out.trim(), "glob\nliteral\n2.15\nlogic");
+}
