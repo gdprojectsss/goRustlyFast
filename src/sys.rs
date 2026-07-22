@@ -1,6 +1,8 @@
 use std::ffi::CString;
 use std::io::{self, Write};
 
+use crate::signals;
+
 pub type Pid = libc::pid_t;
 
 fn check(result: libc::c_int) -> io::Result<libc::c_int> {
@@ -118,7 +120,7 @@ pub fn read(fd: i32, buffer: &mut [u8]) -> io::Result<usize> {
             return Ok(count as usize);
         }
         let error = io::Error::last_os_error();
-        if error.kind() != io::ErrorKind::Interrupted {
+        if error.kind() != io::ErrorKind::Interrupted || signals::any_pending() {
             return Err(error);
         }
     }
@@ -257,9 +259,12 @@ const JOB_SIGNALS: [libc::c_int; 5] = [
 
 pub fn ignore_job_signals() {
     for signal in JOB_SIGNALS {
-        unsafe {
-            libc::signal(signal, libc::SIG_IGN);
-        }
+        let disposition = if signal == libc::SIGINT {
+            signals::Disposition::Catch
+        } else {
+            signals::Disposition::Ignore
+        };
+        signals::set(signal, disposition);
     }
 }
 
@@ -287,15 +292,22 @@ pub fn execv(path: &str, argv: &[String]) -> io::Error {
 }
 
 pub fn signal_number(name: &str) -> Option<libc::c_int> {
-    if let Ok(count) = name.parse() {
-        return Some(count);
+    if let Ok(number) = name.parse() {
+        return Some(number);
     }
     let name = name.to_ascii_uppercase();
     let name = name.strip_prefix("SIG").unwrap_or(&name);
     SIGNALS
         .iter()
-        .find(|(count, _)| *count == name)
-        .map(|&(_, text)| text)
+        .find(|(signal_name, _)| *signal_name == name)
+        .map(|&(_, number)| number)
+}
+
+pub fn signal_name(number: libc::c_int) -> Option<&'static str> {
+    SIGNALS
+        .iter()
+        .find(|(_, signal)| *signal == number)
+        .map(|&(name, _)| name)
 }
 
 pub const SIGNALS: &[(&str, libc::c_int)] = &[

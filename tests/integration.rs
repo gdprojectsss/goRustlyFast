@@ -548,3 +548,55 @@ fn double_bracket_conditions() {
     );
     assert_eq!(out.trim(), "glob\nliteral\n2.15\nlogic");
 }
+
+fn run_command(script: &str) -> (String, String, i32) {
+    let output = Command::new(env!("CARGO_BIN_EXE_grfsh"))
+        .args(["-c", script])
+        .output()
+        .expect("failed to run grfsh");
+    (
+        String::from_utf8_lossy(&output.stdout).to_string(),
+        String::from_utf8_lossy(&output.stderr).to_string(),
+        output.status.code().unwrap_or(-1),
+    )
+}
+
+#[test]
+fn exit_trap_runs_on_exit() {
+    let (out, _, status) = run_command("trap 'echo cleanup' EXIT; echo work; exit 3");
+    assert_eq!(out.trim(), "work\ncleanup");
+    assert_eq!(status, 3);
+}
+
+#[test]
+fn errexit_skips_conditions_and_stops_on_failure() {
+    let (out, _, status) =
+        run_command("set -e; if false; then :; fi; false || true; echo alive; false; echo never");
+    assert_eq!(out.trim(), "alive");
+    assert_eq!(status, 1);
+}
+
+#[test]
+fn nounset_reports_and_exits() {
+    let (out, error, status) = run_command("set -u; echo ${fine:-ok}; echo $missing; echo never");
+    assert_eq!(out.trim(), "ok");
+    assert!(error.contains("missing: unbound variable"));
+    assert_eq!(status, 1);
+}
+
+#[test]
+fn xtrace_and_pipefail() {
+    let (out, error, _) = run_command(
+        "set -x; echo traced; set +x; false | true; echo $?; set -o pipefail; false | true; echo $?",
+    );
+    assert!(error.contains("+ echo traced"));
+    assert_eq!(out.trim(), "traced\n0\n1");
+}
+
+#[test]
+fn err_and_signal_traps() {
+    let (out, _, _) = run_command(
+        "trap 'echo err $?' ERR; false; trap 'echo usr1' USR1; kill -USR1 $$; echo done",
+    );
+    assert_eq!(out.trim(), "err 1\nusr1\ndone");
+}

@@ -24,7 +24,7 @@ pub fn run() -> i32 {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut shell = Shell::new();
 
-    match args.first().map(String::as_str) {
+    let status = match args.first().map(String::as_str) {
         Some("-h") | Some("--help") => {
             println!("{USAGE}");
             0
@@ -64,7 +64,10 @@ pub fn run() -> i32 {
             }
             shell.last_status
         }
-    }
+    };
+    shell.last_status = status;
+    shell.run_exit_trap();
+    shell.last_status
 }
 
 fn run_script(shell: &mut Shell, path: &str, args: &[String]) -> i32 {
@@ -131,6 +134,9 @@ fn interactive(shell: &mut Shell) {
                 let started = Instant::now();
                 shell.run_source(&line);
                 duration = started.elapsed();
+                if shell.flow == Flow::Interrupted {
+                    shell.last_status = 128 + libc::SIGINT;
+                }
                 if shell.flow == Flow::Exit {
                     if shell.jobs.len() > 0 && !warned_about_jobs {
                         warned_about_jobs = true;

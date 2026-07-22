@@ -1,6 +1,6 @@
 use std::io::Write;
 
-use crate::shell::{self, Flow, Shell};
+use crate::shell::{self, Flow, Shell, ShellOptions};
 use crate::syntax::parser::is_name;
 use crate::sys;
 
@@ -105,25 +105,75 @@ fn assign_fields(shell: &mut Shell, names: &[String], line: &str) {
     }
 }
 
+const OPTION_NAMES: &[&str] = &["errexit", "nounset", "xtrace", "pipefail"];
+
+fn option_flag<'a>(options: &'a mut ShellOptions, name: &str) -> Option<&'a mut bool> {
+    match name {
+        "errexit" | "e" => Some(&mut options.errexit),
+        "nounset" | "u" => Some(&mut options.nounset),
+        "xtrace" | "x" => Some(&mut options.xtrace),
+        "pipefail" => Some(&mut options.pipefail),
+        _ => None,
+    }
+}
+
 pub(super) fn set(shell: &mut Shell, args: &[String], out: &mut dyn Write) -> i32 {
-    match args.first().map(String::as_str) {
-        None => {
-            let mut variables: Vec<_> = shell.variables.iter().collect();
-            variables.sort();
-            for (name, value) in variables {
-                let _ = writeln!(out, "{name}='{value}'");
+    if args.is_empty() {
+        let mut variables: Vec<_> = shell.variables.iter().collect();
+        variables.sort();
+        for (name, value) in variables {
+            let _ = writeln!(out, "{name}='{value}'");
+        }
+        return 0;
+    }
+
+    let mut index = 0;
+    while index < args.len() {
+        let argument = &args[index];
+        index += 1;
+        if argument == "--" {
+            shell.positional = args[index..].to_vec();
+            return 0;
+        }
+        let enable = match argument.chars().next() {
+            Some('-') => true,
+            Some('+') => false,
+            _ => {
+                shell.positional = args[index - 1..].to_vec();
+                return 0;
             }
-            0
-        }
-        Some("--") => {
-            shell.positional = args[1..].to_vec();
-            0
-        }
-        Some(other) => {
-            shell::error(format!("set: {other}: unsupported option"));
-            2
+        };
+        for flag in argument[1..].chars() {
+            if flag == 'o' {
+                let Some(name) = args.get(index) else {
+                    for name in OPTION_NAMES {
+                        let enabled =
+                            option_flag(&mut shell.options, name).is_some_and(|flag| *flag);
+                        let state = if enabled { "on" } else { "off" };
+                        let _ = writeln!(out, "{name:<12}{state}");
+                    }
+                    return 0;
+                };
+                index += 1;
+                match option_flag(&mut shell.options, name) {
+                    Some(option) => *option = enable,
+                    None => {
+                        shell::error(format!("set: {name}: invalid option name"));
+                        return 2;
+                    }
+                }
+                continue;
+            }
+            match option_flag(&mut shell.options, &flag.to_string()) {
+                Some(option) => *option = enable,
+                None => {
+                    shell::error(format!("set: -{flag}: invalid option"));
+                    return 2;
+                }
+            }
         }
     }
+    0
 }
 
 #[cfg(test)]

@@ -5,6 +5,7 @@ use crate::builtins::{self, test};
 use crate::commands;
 use crate::expand;
 use crate::shell::{self, Flow, Shell};
+use crate::signals;
 use crate::syntax::ast::*;
 use crate::syntax::parser;
 use crate::sys;
@@ -73,6 +74,9 @@ impl Shell {
 
     pub(crate) fn run_list(&mut self, list: &List) -> i32 {
         for item in list {
+            if signals::any_pending() {
+                self.handle_signals();
+            }
             if self.flow != Flow::Normal {
                 break;
             }
@@ -98,8 +102,11 @@ impl Shell {
     }
 
     pub(crate) fn run_and_or(&mut self, item: &AndOr) -> i32 {
-        let mut status = self.run_pipeline(&item.first, &item.text);
-        for (connector, pipeline) in &item.rest {
+        let last = item.rest.len();
+        let mut status = self.run_guarded(&item.first, &item.text, last > 0);
+        let mut ran_last = last == 0;
+        let mut negated = item.first.negate;
+        for (index, (connector, pipeline)) in item.rest.iter().enumerate() {
             if self.flow != Flow::Normal {
                 break;
             }
@@ -108,10 +115,89 @@ impl Shell {
                 Connector::Or => status != 0,
             };
             if run {
-                status = self.run_pipeline(pipeline, &item.text);
+                status = self.run_guarded(pipeline, &item.text, index + 1 < last);
+                ran_last = index + 1 == last;
+                negated = pipeline.negate;
             }
         }
+        if status != 0
+            && ran_last
+            && !negated
+            && self.condition_depth == 0
+            && self.flow == Flow::Normal
+        {
+            self.command_failed(status);
+        }
         status
+    }
+
+    fn run_guarded(&mut self, pipeline: &Pipeline, text: &str, guarded: bool) -> i32 {
+        if guarded {
+            self.condition_depth += 1;
+        }
+        let status = self.run_pipeline(pipeline, text);
+        if guarded {
+            self.condition_depth -= 1;
+        }
+        status
+    }
+
+    pub(crate) fn run_condition(&mut self, list: &List) -> i32 {
+        self.condition_depth += 1;
+        let status = self.run_list(list);
+        self.condition_depth -= 1;
+        status
+    }
+
+    fn command_failed(&mut self, status: i32) {
+        if let Some(command) = self.traps.get("ERR").cloned()
+            && !command.is_empty()
+        {
+            self.run_trap(&command);
+        }
+        if self.options.errexit {
+            self.last_status = status;
+            self.flow = Flow::Exit;
+        }
+    }
+
+    fn run_trap(&mut self, command: &str) {
+        let status = self.last_status;
+        self.condition_depth += 1;
+        self.run_source(command);
+        self.condition_depth -= 1;
+        if self.flow != Flow::Exit {
+            self.last_status = status;
+        }
+    }
+
+    pub(crate) fn handle_signals(&mut self) {
+        for signal in signals::take_pending() {
+            let name = sys::signal_name(signal).unwrap_or_default();
+            match self.traps.get(name).cloned() {
+                Some(command) if !command.is_empty() => self.run_trap(&command),
+                Some(_) => {}
+                None if signal == libc::SIGINT && self.interactive => {
+                    eprintln!();
+                    self.last_status = 128 + libc::SIGINT;
+                    self.flow = Flow::Interrupted;
+                }
+                None => {}
+            }
+        }
+    }
+
+    pub(crate) fn run_exit_trap(&mut self) {
+        if let Some(command) = self.traps.remove("EXIT")
+            && !command.is_empty()
+        {
+            let status = self.last_status;
+            self.flow = Flow::Normal;
+            self.run_source(&command);
+            if self.flow != Flow::Exit {
+                self.last_status = status;
+            }
+        }
     }
 
     pub(crate) fn run_pipeline(&mut self, pipeline: &Pipeline, text: &str) -> i32 {
@@ -156,7 +242,7 @@ impl Shell {
                 otherwise,
             } => {
                 for (condition, body) in branches {
-                    self.run_list(condition);
+                    self.run_condition(condition);
                     if self.flow != Flow::Normal {
                         return self.last_status;
                     }
@@ -177,7 +263,7 @@ impl Shell {
                 let mut status = 0;
                 self.loop_depth += 1;
                 loop {
-                    self.run_list(condition);
+                    self.run_condition(condition);
                     if self.flow != Flow::Normal || (self.last_status == 0) == *until {
                         break;
                     }
@@ -273,6 +359,24 @@ impl Shell {
             }
             Flow::Return | Flow::Exit | Flow::Interrupted => true,
         }
+    }
+
+    fn trace(&self, assignments: &[(String, String)], argv: &[String]) {
+        let prefix = self.get_variable("PS4").unwrap_or_else(|| "+ ".into());
+        let words: Vec<String> = assignments
+            .iter()
+            .map(|(name, value)| format!("{name}={}", trace_quote(value)))
+            .chain(argv.iter().map(|argument| trace_quote(argument)))
+            .collect();
+        eprintln!("{prefix}{}", words.join(" "));
+    }
+
+    fn expansion_failed(&mut self, error: String) -> i32 {
+        shell::error(error);
+        if !self.interactive {
+            self.flow = Flow::Exit;
+        }
+        1
     }
 
     fn evaluate_condition(&mut self, condition: &Condition) -> Result<bool, String> {
@@ -415,19 +519,13 @@ impl Shell {
         self.substitution_status = None;
         let mut argv = match expand::words(self, &simple.words) {
             Ok(arguments) => arguments,
-            Err(error) => {
-                shell::error(error);
-                return 1;
-            }
+            Err(error) => return self.expansion_failed(error),
         };
         let mut pending = Vec::with_capacity(simple.assignments.len());
         for assignment in &simple.assignments {
             match self.evaluate_assignment(assignment) {
                 Ok(evaluated) => pending.push(evaluated),
-                Err(error) => {
-                    shell::error(error);
-                    return 1;
-                }
+                Err(error) => return self.expansion_failed(error),
             }
         }
 
@@ -453,6 +551,10 @@ impl Shell {
                 _ => None,
             })
             .collect();
+
+        if self.options.xtrace {
+            self.trace(&assignments, &argv);
+        }
 
         let mut bypass_functions = false;
         while argv.len() > 1 && argv[0] == "command" && argv[1] != "-v" {
@@ -622,6 +724,18 @@ impl Shell {
             }
         }
         status
+    }
+}
+
+fn trace_quote(text: &str) -> String {
+    let plain = !text.is_empty()
+        && text
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "-_./=:@%+,".contains(character));
+    if plain {
+        text.to_string()
+    } else {
+        format!("'{}'", text.replace('\'', "'\\''"))
     }
 }
 

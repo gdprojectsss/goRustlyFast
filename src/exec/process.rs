@@ -1,5 +1,6 @@
 use crate::jobs::JobState;
 use crate::shell::{self, Flow, Shell};
+use crate::signals;
 use crate::syntax::ast::{AndOr, Command, Redirect};
 use crate::syntax::parser;
 use crate::sys::{self, WaitResult};
@@ -38,6 +39,14 @@ impl Shell {
             }
         }
         sys::reset_child_signals();
+        self.traps.retain(|name, command| {
+            let ignored = command.is_empty();
+            if !ignored && let Some(signal) = sys::signal_number(name) {
+                signals::set(signal, signals::Disposition::Default);
+            }
+            ignored
+        });
+        signals::clear();
         self.interactive = false;
         self.forget_jobs();
     }
@@ -177,22 +186,29 @@ impl Shell {
         if self.interactive {
             sys::tcsetpgrp(pgid);
         }
-        let mut status = 0;
+        let mut statuses = Vec::with_capacity(pids.len());
         let mut stopped = Vec::new();
         let mut interrupted = false;
-        let last = pids.last().copied();
         for &pid in &pids {
             match sys::waitpid(pid, libc::WUNTRACED) {
                 Ok(Some(WaitResult::Stopped)) => stopped.push(pid),
                 Ok(Some(result)) => {
-                    if Some(pid) == last {
-                        status = result.status();
-                    }
+                    statuses.push(result.status());
                     interrupted |= result == WaitResult::Signaled(libc::SIGINT);
                 }
-                _ => {}
+                _ => statuses.push(0),
             }
         }
+        let status = if self.options.pipefail {
+            statuses
+                .iter()
+                .rev()
+                .copied()
+                .find(|status| *status != 0)
+                .unwrap_or(0)
+        } else {
+            statuses.last().copied().unwrap_or(0)
+        };
         if self.interactive {
             sys::tcsetpgrp(self.shell_pgid);
         }

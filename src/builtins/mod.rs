@@ -8,6 +8,7 @@ mod jobs;
 mod output;
 mod script;
 pub(crate) mod test;
+pub(crate) mod trap;
 mod variables;
 
 pub(crate) use directory::change_directory;
@@ -15,7 +16,7 @@ pub(crate) use directory::change_directory;
 const BUILTINS: &[&str] = &[
     "cd", "z", "pwd", "exit", "export", "unset", "echo", "alias", "unalias", "true", "false", ":",
     "return", "break", "continue", "local", "shift", "type", "command", "eval", "jobs", "fg", "bg",
-    "wait", "kill", "source", ".", "read", "set", "test", "[",
+    "wait", "kill", "source", ".", "read", "set", "test", "[", "trap",
 ];
 
 pub(crate) fn is_builtin(name: &str) -> bool {
@@ -59,6 +60,7 @@ pub(crate) fn run(shell: &mut Shell, argv: &[String]) -> i32 {
         "kill" => jobs::kill(shell, args, &mut out),
         "set" => script::set(shell, args, &mut out),
         "test" | "[" => test::run(shell, &argv[0], args),
+        "trap" => trap::run(shell, args, &mut out),
         "read" => script::read(shell, args),
         "source" | "." => {
             drop(out);

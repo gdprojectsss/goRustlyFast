@@ -6,6 +6,7 @@ mod expand;
 mod jobs;
 mod repl;
 mod shell;
+mod signals;
 mod syntax;
 mod sys;
 mod table;
