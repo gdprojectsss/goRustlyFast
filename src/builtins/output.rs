@@ -106,6 +106,29 @@ pub(super) fn describe(shell: &Shell, args: &[String], out: &mut dyn Write, shor
     status
 }
 
+pub(super) fn history(shell: &mut Shell, args: &[String], out: &mut dyn Write) -> i32 {
+    let count = match args.first().map(String::as_str) {
+        None => shell.history.len(),
+        Some("-c") => {
+            shell.history.clear();
+            shell.history_cleared = true;
+            return 0;
+        }
+        Some(number) => match number.parse::<usize>() {
+            Ok(count) => count,
+            Err(_) => {
+                shell::error(format!("history: {number}: numeric argument required"));
+                return 2;
+            }
+        },
+    };
+    let start = shell.history.len().saturating_sub(count);
+    for (index, line) in shell.history.iter().enumerate().skip(start) {
+        let _ = writeln!(out, "{:>5}  {line}", index + 1);
+    }
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

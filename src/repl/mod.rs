@@ -1,6 +1,7 @@
 mod completion;
 mod helper;
 mod highlight;
+mod history;
 mod prompt;
 
 use std::path::PathBuf;
@@ -111,6 +112,11 @@ fn interactive(shell: &mut Shell) {
     editor.set_helper(Some(ShellHelper::new()));
     let history = history_path();
     let _ = editor.load_history(&history);
+    shell.history = editor
+        .history()
+        .iter()
+        .map(|entry| entry.to_string())
+        .collect();
     let mut warned_about_jobs = false;
     let mut duration = Duration::ZERO;
 
@@ -130,7 +136,20 @@ fn interactive(shell: &mut Shell) {
                     duration = Duration::ZERO;
                     continue;
                 }
+                let line = match history::expand(&line, &shell.history) {
+                    Ok(Some(expanded)) => {
+                        eprintln!("{expanded}");
+                        expanded
+                    }
+                    Ok(None) => line,
+                    Err(error) => {
+                        shell::error(error);
+                        shell.last_status = 1;
+                        continue;
+                    }
+                };
                 let _ = editor.add_history_entry(line.trim());
+                shell.history.push(line.trim().to_string());
                 let started = Instant::now();
                 shell.run_source(&line);
                 duration = started.elapsed();
@@ -145,6 +164,10 @@ fn interactive(shell: &mut Shell) {
                         continue;
                     }
                     break;
+                }
+                if shell.history_cleared {
+                    let _ = editor.clear_history();
+                    shell.history_cleared = false;
                 }
                 warned_about_jobs = false;
                 shell.flow = Flow::Normal;

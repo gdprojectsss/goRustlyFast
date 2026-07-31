@@ -600,3 +600,23 @@ fn err_and_signal_traps() {
     );
     assert_eq!(out.trim(), "err 1\nusr1\ndone");
 }
+
+#[test]
+fn printf_builtin() {
+    let (out, _, _) = run_command(
+        "printf '%-6s|%5.1f|%03d\\n' name 3.14159 7 x 2 42; printf -v saved '%s-%s' a b; echo $saved",
+    );
+    assert_eq!(out, "name  |  3.1|007\nx     |  2.0|042\na-b\n");
+}
+
+#[test]
+fn directory_stack() {
+    let (out, _, _) = run_command(
+        "cd /tmp; pushd / >/dev/null; pushd /usr >/dev/null; dirs -v; popd >/dev/null; pwd",
+    );
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 4);
+    assert!(lines[0].ends_with("/usr"));
+    assert!(lines[2].ends_with("tmp"));
+    assert_eq!(lines[3], "/");
+}

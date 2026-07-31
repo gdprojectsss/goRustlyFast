@@ -114,6 +114,79 @@ pub(super) fn pwd(shell: &Shell, out: &mut dyn Write) -> i32 {
     0
 }
 
+fn display_path(shell: &Shell, path: &str) -> String {
+    match shell.get_variable("HOME") {
+        Some(home)
+            if !home.is_empty() && (path == home || path.starts_with(&format!("{home}/"))) =>
+        {
+            format!("~{}", &path[home.len()..])
+        }
+        _ => path.to_string(),
+    }
+}
+
+fn print_stack(shell: &Shell, out: &mut dyn Write) {
+    let entries: Vec<String> = std::iter::once(working_directory(shell))
+        .chain(shell.directory_stack.iter().rev().cloned())
+        .map(|path| display_path(shell, &path))
+        .collect();
+    let _ = writeln!(out, "{}", entries.join(" "));
+}
+
+pub(super) fn pushd(shell: &mut Shell, args: &[String], out: &mut dyn Write) -> i32 {
+    let current = working_directory(shell);
+    let target = match args.first() {
+        Some(target) => target.clone(),
+        None => match shell.directory_stack.pop() {
+            Some(top) => top,
+            None => {
+                shell::error("pushd: no other directory");
+                return 1;
+            }
+        },
+    };
+    if change_directory(shell, &target) != 0 {
+        if args.is_empty() {
+            shell.directory_stack.push(target);
+        }
+        return 1;
+    }
+    shell.directory_stack.push(current);
+    print_stack(shell, out);
+    0
+}
+
+pub(super) fn popd(shell: &mut Shell, out: &mut dyn Write) -> i32 {
+    let Some(target) = shell.directory_stack.pop() else {
+        shell::error("popd: directory stack empty");
+        return 1;
+    };
+    if change_directory(shell, &target) != 0 {
+        return 1;
+    }
+    print_stack(shell, out);
+    0
+}
+
+pub(super) fn dirs(shell: &mut Shell, args: &[String], out: &mut dyn Write) -> i32 {
+    match args.first().map(String::as_str) {
+        None => print_stack(shell, out),
+        Some("-c") => shell.directory_stack.clear(),
+        Some("-v") => {
+            let entries = std::iter::once(working_directory(shell))
+                .chain(shell.directory_stack.iter().rev().cloned());
+            for (index, path) in entries.enumerate() {
+                let _ = writeln!(out, "{index:>2}  {}", display_path(shell, &path));
+            }
+        }
+        Some(other) => {
+            shell::error(format!("dirs: {other}: invalid option"));
+            return 2;
+        }
+    }
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
