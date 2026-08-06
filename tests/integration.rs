@@ -386,3 +386,32 @@ fn unknown_command_suggests_a_close_match() {
     assert!(stderr.contains("did you mean 'echo'?"), "{stderr}");
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "status=127");
 }
+
+#[test]
+fn z_jumps_to_the_most_frecent_match() {
+    let home = "/tmp/grfsh_z_test_home";
+    let target = "/tmp/grfsh_z_test_dirs/workspace/frecent_target";
+    let other = "/tmp/grfsh_z_test_dirs/workspace/rare_target";
+    std::fs::create_dir_all(home).unwrap();
+    std::fs::create_dir_all(target).unwrap();
+    std::fs::create_dir_all(other).unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    std::fs::write(
+        format!("{home}/.grfsh_dirs"),
+        format!("9\t{now}\t{target}\n1\t{now}\t{other}\n"),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_grfsh"))
+        .args(["-c", "z frecent && pwd; z rare && pwd"])
+        .env("HOME", home)
+        .output()
+        .expect("failed to run grfsh");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        format!("{target}\n{other}")
+    );
+}

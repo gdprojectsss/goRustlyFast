@@ -1,6 +1,7 @@
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
+use crate::directories;
 use crate::shell::{self, Shell};
 use crate::sys;
 
@@ -47,7 +48,7 @@ pub(super) fn cd(shell: &mut Shell, args: &[String], out: &mut dyn Write) -> i32
     change_directory(shell, &target)
 }
 
-pub(super) fn change_directory(shell: &mut Shell, target: &str) -> i32 {
+pub(crate) fn change_directory(shell: &mut Shell, target: &str) -> i32 {
     let previous = working_directory(shell);
     let logical = logical_path(&previous, target);
     let destination = if std::env::set_current_dir(&logical).is_ok() {
@@ -58,9 +59,42 @@ pub(super) fn change_directory(shell: &mut Shell, target: &str) -> i32 {
     } else {
         std::env::current_dir().unwrap_or(logical)
     };
+    let destination = destination.to_string_lossy().into_owned();
     shell.export_variable("OLDPWD", Some(&previous));
-    shell.export_variable("PWD", Some(&destination.to_string_lossy()));
+    shell.export_variable("PWD", Some(&destination));
+    if shell.interactive && destination != previous {
+        shell.directories.visit(&destination, directories::now());
+    }
     0
+}
+
+pub(super) fn jump(shell: &mut Shell, args: &[String], out: &mut dyn Write) -> i32 {
+    match args.first().map(String::as_str) {
+        None => cd(shell, &[], out),
+        Some("-") => cd(shell, args, out),
+        Some("-l") => {
+            for (score, path) in shell.directories.ranked(&args[1..], directories::now()) {
+                let _ = writeln!(out, "{score:>10.1}  {path}");
+            }
+            0
+        }
+        Some(single) if args.len() == 1 && Path::new(single).is_dir() => {
+            change_directory(shell, single)
+        }
+        Some(_) => {
+            let here = working_directory(shell);
+            match shell
+                .directories
+                .best_match(args, directories::now(), &here)
+            {
+                Some(path) => change_directory(shell, &path),
+                None => {
+                    shell::error(format!("z: no match for '{}'", args.join(" ")));
+                    1
+                }
+            }
+        }
+    }
 }
 
 fn working_directory(shell: &Shell) -> String {
