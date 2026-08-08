@@ -1,8 +1,9 @@
 use std::env;
-use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use crate::sys;
+
+use super::git::GitInfo;
 
 const GREEN: &str = "\x1b[1;32m";
 const BLUE: &str = "\x1b[1;34m";
@@ -16,6 +17,7 @@ const RESET: &str = "\x1b[0m";
 const SLOW_COMMAND: Duration = Duration::from_secs(2);
 
 pub struct PromptState {
+    pub git: Option<GitInfo>,
     pub status: i32,
     pub duration: Duration,
     pub jobs: usize,
@@ -60,10 +62,15 @@ fn format_custom(template: &str, state: &PromptState) -> String {
     let user = get_user();
     let host = get_host();
     let cwd = get_cwd();
-    let branch = git_branch();
+    let branch = state.git.as_ref().map(|git| git.branch.clone());
+    let dirty = if state.git.as_ref().is_some_and(|git| git.dirty) {
+        "*"
+    } else {
+        ""
+    };
     let git = branch
         .as_ref()
-        .map(|branch| format!("({branch}) "))
+        .map(|branch| format!("({branch}{dirty}) "))
         .unwrap_or_default();
 
     template
@@ -74,6 +81,7 @@ fn format_custom(template: &str, state: &PromptState) -> String {
         .replace("{host}", &host)
         .replace("{cwd}", &cwd)
         .replace("{branch}", branch.as_deref().unwrap_or(""))
+        .replace("{dirty}", dirty)
         .replace("{git}", &git)
         .replace("{green}", GREEN)
         .replace("{blue}", BLUE)
@@ -91,8 +99,13 @@ fn format_default(state: &PromptState) -> String {
     let cwd = get_cwd();
 
     let mut prompt = format!("{GREEN}{user}@{host}{RESET}:{BLUE}{cwd}{RESET}");
-    if let Some(branch) = git_branch() {
-        prompt.push_str(&format!(" {MAGENTA}({branch}){RESET}"));
+    if let Some(git) = &state.git {
+        let dirty = if git.dirty {
+            format!("{YELLOW}*{MAGENTA}")
+        } else {
+            String::new()
+        };
+        prompt.push_str(&format!(" {MAGENTA}({}{dirty}){RESET}", git.branch));
     }
     let duration = duration_text(state);
     if !duration.is_empty() {
@@ -142,23 +155,13 @@ fn shorten_home(path: &str) -> String {
     }
 }
 
-fn git_branch() -> Option<String> {
-    Command::new("git")
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn state(status: i32, millis: u64, jobs: usize) -> PromptState {
         PromptState {
+            git: None,
             status,
             duration: Duration::from_millis(millis),
             jobs,

@@ -1,4 +1,5 @@
 mod completion;
+mod git;
 mod helper;
 mod highlight;
 mod history;
@@ -119,18 +120,25 @@ fn interactive(shell: &mut Shell) {
         .collect();
     let mut warned_about_jobs = false;
     let mut duration = Duration::ZERO;
+    let mut git_prompt = git::GitPrompt::default();
 
     loop {
         shell.reap_jobs();
         if let Some(helper) = editor.helper_mut() {
             helper.update(completion_names(shell));
         }
+        let directory = std::env::current_dir()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default();
         let state = PromptState {
+            git: git_prompt.info(&directory),
             status: shell.last_status,
             duration,
             jobs: shell.jobs.len(),
         };
-        match editor.readline(&prompt::build(&state)) {
+        let line = editor.readline(&prompt::build(&state));
+        git_prompt.settle();
+        match line {
             Ok(line) => {
                 if line.trim().is_empty() {
                     duration = Duration::ZERO;

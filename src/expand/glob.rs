@@ -59,15 +59,22 @@ fn join(base: &str, name: &str) -> String {
 }
 
 pub fn has_magic(pattern: &str) -> bool {
-    let mut chars = pattern.chars();
-    while let Some(character) = chars.next() {
-        match character {
-            '\\' => {
-                chars.next();
+    let chars: Vec<char> = pattern.chars().collect();
+    let mut index = 0;
+    while index < chars.len() {
+        match chars[index] {
+            '\\' => index += 1,
+            '*' | '?' => return true,
+            '[' if chars[index + 1..]
+                .iter()
+                .skip(1)
+                .any(|&character| character == ']') =>
+            {
+                return true;
             }
-            '*' | '?' | '[' => return true,
             _ => {}
         }
+        index += 1;
     }
     false
 }
@@ -347,6 +354,16 @@ mod tests {
             sorted.sort();
             assert_eq!(results, sorted);
         }
+    }
+
+    #[test]
+    fn lone_brackets_are_not_patterns() {
+        assert!(!has_magic("["));
+        assert!(!has_magic("]"));
+        assert!(!has_magic("[]"));
+        assert!(has_magic("[ab]"));
+        assert!(has_magic("x[]]"));
+        assert!(!has_magic("\\*"));
     }
 
     #[test]

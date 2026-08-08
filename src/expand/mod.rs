@@ -113,6 +113,16 @@ fn expand_into(shell: &mut Shell, word: &Word, fields: &mut Fields) -> Result<()
     Ok(())
 }
 
+#[cfg(test)]
+pub fn brace_expand(word: &Word) -> Vec<Word> {
+    brace::expand(word)
+}
+
+#[cfg(test)]
+pub fn evaluate_arithmetic(shell: &mut Shell, text: &str) -> Result<i64, String> {
+    arith::eval(shell, text)
+}
+
 pub fn arithmetic(shell: &mut Shell, expression: &Word) -> Result<i64, String> {
     let text = single(shell, expression)?;
     arith::eval(shell, &text)
@@ -367,7 +377,9 @@ impl Fields {
     fn literal(&mut self, text: &str) {
         self.started = true;
         self.current.push_str(text);
-        self.pattern.push_str(text);
+        if self.split || self.pattern_mode {
+            self.pattern.push_str(text);
+        }
         if self.split && glob::has_magic(text) {
             self.glob = true;
         }
@@ -376,12 +388,18 @@ impl Fields {
     fn quoted(&mut self, text: &str) {
         self.started = true;
         self.current.push_str(text);
-        for character in text.chars() {
-            if matches!(character, '*' | '?' | '[' | ']' | '\\') {
-                self.pattern.push('\\');
-            }
-            self.pattern.push(character);
+        if !self.split && !self.pattern_mode {
+            return;
         }
+        let mut copied = 0;
+        for (index, character) in text.char_indices() {
+            if matches!(character, '*' | '?' | '[' | ']' | '\\') {
+                self.pattern.push_str(&text[copied..index]);
+                self.pattern.push('\\');
+                copied = index;
+            }
+        }
+        self.pattern.push_str(&text[copied..]);
     }
 
     fn split(&mut self, text: &str) {
