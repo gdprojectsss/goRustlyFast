@@ -162,6 +162,29 @@ pub(crate) fn markdown(table: &Table) -> String {
     out
 }
 
+pub(crate) fn html(table: &Table) -> String {
+    let escape = |text: &str| {
+        text.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+    };
+    let mut out = String::from("<table>\n  <thead>\n    <tr>");
+    for column in &table.columns {
+        out.push_str(&format!("<th>{}</th>", escape(column)));
+    }
+    out.push_str("</tr>\n  </thead>\n  <tbody>\n");
+    for row in &table.rows {
+        out.push_str("    <tr>");
+        for value in row {
+            out.push_str(&format!("<td>{}</td>", escape(&value.plain())));
+        }
+        out.push_str("</tr>\n");
+    }
+    out.push_str("  </tbody>\n</table>\n");
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,6 +219,13 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("..."));
+    }
+
+    #[test]
+    fn html_output_is_escaped() {
+        let mut table = Table::new(vec!["tag".into()]);
+        table.push(vec![Value::Text("<b>&".into())]);
+        assert!(html(&table).contains("<td>&lt;b&gt;&amp;</td>"));
     }
 
     #[test]

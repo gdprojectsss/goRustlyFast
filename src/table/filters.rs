@@ -53,16 +53,19 @@ fn holds(comparison: Comparison, cell: &Value, expected: &Value, needle: &str) -
     }
 }
 
-pub(super) fn filter_rows(args: &[String], mut table: Table) -> Result<Table, String> {
-    let words: Vec<String> = match args {
-        [single] => single.split_whitespace().map(String::from).collect(),
-        many => many.to_vec(),
-    };
-    let [column, operator, rest @ ..] = words.as_slice() else {
-        return Err("usage: where <column> <operator> <value>".into());
+struct Clause {
+    index: usize,
+    comparison: Comparison,
+    expected: Value,
+    needle: String,
+}
+
+fn clause(table: &Table, words: &[String]) -> Result<Clause, String> {
+    let [column, operator, rest @ ..] = words else {
+        return Err("usage: where <column> <operator> <value> [and|or ...]".into());
     };
     if rest.is_empty() {
-        return Err("usage: where <column> <operator> <value>".into());
+        return Err("usage: where <column> <operator> <value> [and|or ...]".into());
     }
     let comparison = comparison(operator).ok_or_else(|| {
         format!("unknown operator '{operator}' (use == != < <= > >= =~ !~ or eq ne lt le gt ge)")
@@ -76,10 +79,46 @@ pub(super) fn filter_rows(args: &[String], mut table: Table) -> Result<Table, St
         .find(|value| **value != Value::Nothing)
         .cloned()
         .unwrap_or(Value::Text(String::new()));
-    let expected = hint.literal_like(&needle);
-    table
-        .rows
-        .retain(|row| holds(comparison, &row[index], &expected, &needle));
+    Ok(Clause {
+        index,
+        comparison,
+        expected: hint.literal_like(&needle),
+        needle,
+    })
+}
+
+pub(super) fn filter_rows(args: &[String], mut table: Table) -> Result<Table, String> {
+    let words: Vec<String> = match args {
+        [single] => single.split_whitespace().map(String::from).collect(),
+        many => many.to_vec(),
+    };
+    let mut alternatives: Vec<Vec<Clause>> = vec![Vec::new()];
+    let mut pending: Vec<String> = Vec::new();
+    for word in words.into_iter().chain(std::iter::once("and".to_string())) {
+        if word != "and" && word != "or" {
+            pending.push(word);
+            continue;
+        }
+        let parsed = clause(&table, &std::mem::take(&mut pending))?;
+        if let Some(current) = alternatives.last_mut() {
+            current.push(parsed);
+        }
+        if word == "or" {
+            alternatives.push(Vec::new());
+        }
+    }
+    table.rows.retain(|row| {
+        alternatives.iter().any(|clauses| {
+            clauses.iter().all(|clause| {
+                holds(
+                    clause.comparison,
+                    &row[clause.index],
+                    &clause.expected,
+                    &clause.needle,
+                )
+            })
+        })
+    });
     Ok(table)
 }
 
@@ -258,6 +297,15 @@ mod tests {
                 .unwrap_err()
                 .contains("columns: name, size, kind")
         );
+    }
+
+    #[test]
+    fn where_combines_conditions() {
+        let both = filter_rows(&arguments("kind == file and size -lt 1kb"), sample()).unwrap();
+        assert_eq!(names(&both), ["notes.md"]);
+        let either = filter_rows(&arguments("kind == dir or size -gt 1gb"), sample()).unwrap();
+        assert_eq!(names(&either), ["big.iso", "src"]);
+        assert!(filter_rows(&arguments("kind == dir and"), sample()).is_err());
     }
 
     #[test]

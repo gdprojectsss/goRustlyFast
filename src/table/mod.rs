@@ -1,3 +1,4 @@
+mod aggregate;
 mod data;
 mod datetime;
 mod delimited;
@@ -20,10 +21,11 @@ use render::Style;
 
 const COMMANDS: &[&str] = &[
     "files", "procs", "load", "from", "to", "where", "sort-by", "select", "reject", "first",
-    "skip", "reverse", "count", "get",
+    "skip", "reverse", "count", "get", "group-by", "uniq-by", "math", "update",
 ];
 const CONSUMERS: &[&str] = &[
     "to", "where", "sort-by", "select", "reject", "first", "skip", "reverse", "count", "get",
+    "group-by", "uniq-by", "math", "update",
 ];
 
 pub(crate) enum Output {
@@ -81,6 +83,18 @@ pub(crate) fn run(shell: &mut Shell, argv: &[String]) -> i32 {
         "skip" => read_table(name).and_then(|table| filters::skip(args, table).map(Output::Table)),
         "reverse" => {
             read_table(name).and_then(|table| filters::reverse(args, table).map(Output::Table))
+        }
+        "group-by" => {
+            read_table(name).and_then(|table| aggregate::group_by(args, &table).map(Output::Table))
+        }
+        "uniq-by" => {
+            read_table(name).and_then(|table| aggregate::uniq_by(args, table).map(Output::Table))
+        }
+        "math" => {
+            read_table(name).and_then(|table| aggregate::math(args, &table).map(Output::Text))
+        }
+        "update" => {
+            read_table(name).and_then(|table| aggregate::update(args, table).map(Output::Table))
         }
         _ => Err("unknown table command".into()),
     };

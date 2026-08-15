@@ -8,12 +8,48 @@ use super::render::{self, Style};
 use super::value::Value;
 use super::{datetime, delimited};
 
+fn walk(
+    directory: &Path,
+    prefix: &str,
+    recursive: bool,
+    show_hidden: bool,
+    rows: &mut Vec<(String, Vec<Value>)>,
+) -> Result<(), String> {
+    let entries = std::fs::read_dir(directory)
+        .map_err(|error| format!("{}: {error}", directory.display()))?;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') && !show_hidden {
+            continue;
+        }
+        let Ok(metadata) = std::fs::symlink_metadata(entry.path()) else {
+            continue;
+        };
+        let shown = if prefix.is_empty() {
+            name
+        } else {
+            format!("{prefix}/{name}")
+        };
+        if recursive && metadata.is_dir() {
+            let _ = walk(&entry.path(), &shown, recursive, show_hidden, rows);
+        }
+        rows.push((shown.clone(), file_row(shown, &metadata)));
+    }
+    Ok(())
+}
+
 pub(super) fn files(args: &[String]) -> Result<Table, String> {
     let mut show_hidden = false;
+    let mut recursive = false;
     let mut paths = Vec::new();
     for argument in args {
         match argument.as_str() {
             "-a" | "--all" => show_hidden = true,
+            "-r" | "--recursive" => recursive = true,
+            "-ar" | "-ra" => {
+                show_hidden = true;
+                recursive = true;
+            }
             flag if flag.starts_with('-') => return Err(format!("unknown flag '{flag}'")),
             path => paths.push(path.to_string()),
         }
@@ -35,23 +71,13 @@ pub(super) fn files(args: &[String]) -> Result<Table, String> {
             table.push(file_row(path.clone(), &metadata));
             continue;
         }
-        let entries = std::fs::read_dir(path).map_err(|error| format!("{path}: {error}"))?;
-        let mut rows: Vec<(String, Vec<Value>)> = entries
-            .flatten()
-            .filter_map(|entry| {
-                let name = entry.file_name().to_string_lossy().into_owned();
-                if name.starts_with('.') && !show_hidden {
-                    return None;
-                }
-                let metadata = entry.metadata().ok()?;
-                let shown = if paths.len() > 1 {
-                    Path::new(path).join(&name).to_string_lossy().into_owned()
-                } else {
-                    name
-                };
-                Some((shown.clone(), file_row(shown, &metadata)))
-            })
-            .collect();
+        let prefix = if paths.len() > 1 {
+            path.trim_end_matches('/').to_string()
+        } else {
+            String::new()
+        };
+        let mut rows = Vec::new();
+        walk(Path::new(path), &prefix, recursive, show_hidden, &mut rows)?;
         rows.sort_by(|left, right| left.0.cmp(&right.0));
         for (_, row) in rows {
             table.push(row);
@@ -174,13 +200,14 @@ fn parse_format(format: &str, text: &str) -> Result<Table, String> {
 
 pub(super) fn to(args: &[String], table: &Table) -> Result<String, String> {
     let [format] = args else {
-        return Err("usage: to csv|tsv|json|md|table".into());
+        return Err("usage: to csv|tsv|json|md|html|table".into());
     };
     match format.as_str() {
         "csv" => Ok(table.to_delimited(',')),
         "tsv" => Ok(table.to_delimited('\t')),
         "json" => Ok(table.to_json().to_text() + "\n"),
         "md" | "markdown" => Ok(render::markdown(table)),
+        "html" => Ok(render::html(table)),
         "table" | "text" => Ok(render::render(table, Style::Plain, None, datetime::now())),
         other => Err(format!("unknown format '{other}'")),
     }
@@ -208,6 +235,14 @@ mod tests {
         let names: Vec<String> = table.rows.iter().map(|row| row[0].raw()).collect();
         assert!(names.contains(&"lib.rs".to_string()));
         assert!(names.contains(&"table".to_string()));
+    }
+
+    #[test]
+    fn recursive_listing_uses_relative_paths() {
+        let table = files(&["src".into(), "-r".into()]).unwrap();
+        let names: Vec<String> = table.rows.iter().map(|row| row[0].raw()).collect();
+        assert!(names.contains(&"table/filters.rs".to_string()));
+        assert!(names.contains(&"lib.rs".to_string()));
     }
 
     #[test]

@@ -620,3 +620,30 @@ fn directory_stack() {
     assert!(lines[2].ends_with("tmp"));
     assert_eq!(lines[3], "/");
 }
+
+#[test]
+fn table_grouping_math_and_compound_where() {
+    let path = write_fixture(
+        "hosts.csv",
+        "host,region,cpu\nweb-1,eu,72\nweb-2,eu,18\ndb-1,us,91\ncache-1,us,9\n",
+    );
+    assert_eq!(
+        run(&format!("load {path} | group-by region | to csv\n")).trim(),
+        "region,count\neu,2\nus,2"
+    );
+    assert_eq!(run(&format!("load {path} | math avg cpu\n")).trim(), "47.5");
+    assert_eq!(
+        run(&format!(
+            "load {path} | where region == eu and cpu -gt 50 or host == cache-1 | get host\n"
+        ))
+        .trim(),
+        "web-1\ncache-1"
+    );
+    assert_eq!(
+        run(&format!(
+            "load {path} | update region all | uniq-by region | count\n"
+        ))
+        .trim(),
+        "1"
+    );
+}
