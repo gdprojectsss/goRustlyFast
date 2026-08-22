@@ -1,10 +1,22 @@
 [package]
 name = "grfsh"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
-description = "A lightweight Unix shell"
+rust-version = "1.88"
+description = "A small Unix shell with bash style scripting, job control and typed table pipelines"
 license = "MIT"
+repository = "https://github.com/gdprojectsss/goRustlyFast"
+homepage = "https://github.com/gdprojectsss/goRustlyFast"
+readme = "README.md"
+keywords = ["shell", "cli", "terminal", "bash", "posix"]
+categories = ["command-line-utilities"]
+exclude = [".github/", "scripts/", "packaging/"]
 
 [dependencies]
 rustyline = "15"
 libc = "0.2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

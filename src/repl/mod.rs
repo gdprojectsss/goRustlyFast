@@ -20,10 +20,25 @@ use completion::ShellNames;
 use helper::ShellHelper;
 use prompt::PromptState;
 
-const USAGE: &str = "usage: grfsh [-c command [name [args...]]] [script [args...]]";
+const USAGE: &str = "usage: grfsh [-l] [-i] [-c command [name [args...]]] [script [args...]]";
 
 pub fn run() -> i32 {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().collect();
+    let invoked_as = if args.is_empty() {
+        String::new()
+    } else {
+        args.remove(0)
+    };
+    let mut login = invoked_as.starts_with('-');
+    let mut force_interactive = false;
+    while let Some(option) = args.first() {
+        match option.as_str() {
+            "-l" | "--login" => login = true,
+            "-i" => force_interactive = true,
+            _ => break,
+        }
+        args.remove(0);
+    }
     let mut shell = Shell::new();
 
     let status = match args.first().map(String::as_str) {
@@ -53,11 +68,16 @@ pub fn run() -> i32 {
         }
         Some(script) => run_script(&mut shell, script, &args[1..]),
         None => {
-            load_rc(&mut shell);
+            if login {
+                load_file(&mut shell, &profile_path());
+            }
+            if shell.flow != Flow::Exit {
+                load_file(&mut shell, &rc_path());
+            }
             if shell.flow == Flow::Exit {
                 return shell.last_status;
             }
-            if sys::isatty(0) {
+            if force_interactive || sys::isatty(0) {
                 shell.shell_pgid = sys::init_job_control();
                 shell.interactive = true;
                 interactive(&mut shell);
@@ -96,12 +116,36 @@ fn history_path() -> PathBuf {
     home_dir().join(".grfsh_history")
 }
 
-fn rc_path() -> PathBuf {
-    home_dir().join(".grfshrc")
+fn config_dir() -> PathBuf {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home_dir().join(".config"))
+        .join("grfsh")
 }
 
-fn load_rc(shell: &mut Shell) {
-    let Ok(contents) = std::fs::read_to_string(rc_path()) else {
+fn first_existing(candidates: [PathBuf; 2]) -> PathBuf {
+    let [preferred, fallback] = candidates;
+    if preferred.exists() {
+        preferred
+    } else {
+        fallback
+    }
+}
+
+fn rc_path() -> PathBuf {
+    first_existing([config_dir().join("grfshrc"), home_dir().join(".grfshrc")])
+}
+
+fn profile_path() -> PathBuf {
+    first_existing([
+        config_dir().join("profile"),
+        home_dir().join(".grfsh_profile"),
+    ])
+}
+
+fn load_file(shell: &mut Shell, path: &std::path::Path) {
+    let Ok(contents) = std::fs::read_to_string(path) else {
         return;
     };
     let mut lines = contents.lines().map(String::from);

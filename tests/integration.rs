@@ -647,3 +647,21 @@ fn table_grouping_math_and_compound_where() {
         "1"
     );
 }
+
+#[test]
+fn login_shell_reads_profile_then_rc() {
+    let home = "/tmp/grfsh_login_test_home";
+    let _ = std::fs::remove_dir_all(home);
+    std::fs::create_dir_all(format!("{home}/.config/grfsh")).unwrap();
+    std::fs::write(format!("{home}/.grfsh_profile"), "echo profile\n").unwrap();
+    std::fs::write(format!("{home}/.config/grfsh/grfshrc"), "echo rc\n").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_grfsh"))
+        .arg("-l")
+        .env("HOME", home)
+        .env_remove("XDG_CONFIG_HOME")
+        .stdin(Stdio::null())
+        .output()
+        .expect("failed to run grfsh");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "profile\nrc\n");
+    let _ = std::fs::remove_dir_all(home);
+}
