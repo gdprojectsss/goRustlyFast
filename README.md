@@ -20,6 +20,7 @@
   <a href="#quick-start"><b>Quick start</b></a> |
   <a href="#table-pipelines"><b>Table pipelines</b></a> |
   <a href="#why-grfsh"><b>Why grfsh</b></a> |
+  <a href="#performance"><b>Performance</b></a> |
   <a href="#how-it-works"><b>How it works</b></a> |
   <a href="#roadmap"><b>Roadmap</b></a> |
   <a href="README.ro.md"><b>Romana</b></a>
@@ -32,7 +33,7 @@
 <br>
 
 > [!NOTE]
-> grfsh is a young shell. It runs real scripts and makes a pleasant interactive shell, but it is not a complete POSIX `sh` yet (`case` and `trap` are still missing), so keep bash around for system scripts.
+> grfsh is a young shell. It runs real scripts and makes a pleasant interactive shell, but it does not cover all of bash yet: `getopts`, associative arrays and process substitution are still missing. Keep bash around for system scripts.
 
 ## What is grfsh?
 
@@ -51,13 +52,16 @@ cargo install --git https://github.com/gdprojectsss/goRustlyFast
 grfsh
 ```
 
-Or build from a clone with `cargo build --release` and run `target/release/grfsh`.
+Or build from a clone with `cargo build --release` and run `target/release/grfsh`. A Homebrew formula lives in [`packaging/homebrew`](packaging/homebrew/grfsh.rb): `brew install --HEAD ./packaging/homebrew/grfsh.rb`.
 
 ```
 grfsh                          interactive shell
+grfsh -l                       login shell, reads ~/.grfsh_profile first
 grfsh script.sh [args...]      run a script
 grfsh -c 'command' [name args] run one command line
 ```
+
+To make it your login shell, add its path to `/etc/shells` and run `chsh -s "$(command -v grfsh)"`.
 
 A few things to try once it is running:
 
@@ -85,20 +89,26 @@ $ load servers.csv | where region == eu | to json
 [{"host":"web-1","region":"eu","cpu":72,"uptime_days":41},{"host":"web-2","region":"eu","cpu":18,"uptime_days":41}]
 
 $ ps aux | where %CPU gt 5 | select PID %CPU COMMAND
+$ files src -r | where name =~ .rs | math sum size
+$ load servers.csv | group-by region
 ```
 
 | Command | What it does |
 | --- | --- |
-| `files [path] [-a]` | directory listing with name, type, size, modified |
+| `files [path] [-a] [-r]` | directory listing with name, type, size, modified, `-r` for recursive |
 | `procs` | running processes with pid, ppid, cpu, mem, rss, name |
 | `load <file>` | reads `.csv`, `.tsv`, `.json`, `.jsonl`, anything else as lines |
 | `from csv\|tsv\|json\|jsonl\|ws\|lines` | parses text coming from a pipe |
-| `where <column> <op> <value>` | keeps matching rows, ops: `== != =~ !~ eq ne lt le gt ge` |
+| `where <column> <op> <value> [and\|or ...]` | keeps matching rows, ops: `== != =~ !~ eq ne lt le gt ge` |
 | `sort-by <column>... [-r]` | sorts by one or more columns |
 | `select` / `reject <column>...` | keeps or drops columns |
 | `first [n]`, `skip [n]`, `reverse` | slices rows |
 | `count`, `get <column>` | prints the row count or one column as plain lines |
-| `to csv\|tsv\|json\|md\|table` | converts the table to text |
+| `group-by <column>` | counts rows per value |
+| `uniq-by <column>` | keeps the first row for each value |
+| `math sum\|avg\|min\|max\|median <column>` | aggregates a column, keeping sizes as sizes |
+| `update <column> <value>` | sets or adds a column |
+| `to csv\|tsv\|json\|md\|html\|table` | converts the table to text |
 
 <details>
 <summary><b>Details: values, operators and text input</b></summary>
@@ -128,6 +138,20 @@ How grfsh compares to other shells on the features it focuses on:
 
 <sub>Compared with default installs, no plugins or extra configuration, as of October 2026. Corrections are welcome in an issue.</sub>
 
+## Performance
+
+grfsh is measured against dash, bash and zsh with [hyperfine](https://github.com/sharkdp/hyperfine). Run `scripts/bench.sh` to reproduce. Mean wall time on an Apple M2 with macOS 26.6, using the system bash 3.2.57, dash and zsh 5.9:
+
+| Benchmark | grfsh | dash | bash | zsh |
+| --- | ---: | ---: | ---: | ---: |
+| Startup, `-c true` | 1.9 ms | 1.2 ms | 1.6 ms | 2.5 ms |
+| 20,000 iteration `while [ ]` loop | 34.5 ms | 36.7 ms | 65.7 ms | 34.7 ms |
+| Building a string 5,000 times | 17.3 ms | 49.8 ms | 911.8 ms | 106.2 ms |
+| Five stage pipeline | 4.4 ms | 3.7 ms | 4.2 ms | 5.3 ms |
+| 200 command substitutions | 84.5 ms | 73.2 ms | 83.0 ms | 90.5 ms |
+
+`test` and `[` are builtins, so conditions inside loops do not fork. The bash shipped with macOS is old; a current bash will do better on the string benchmark.
+
 ## How it works
 
 ```mermaid
@@ -156,10 +180,10 @@ flowchart LR
 <td width="50%" valign="top">
 
 **Scripting**
-- `if`/`elif`/`else`, `while`, `until`, `for`, `{ }`, `( )`, `!`
-- Functions with `local`, `return`, positional parameters
-- `$?`, `$$`, `$!`, `$#`, `$@`, `${x:-y}`, `${x:=y}`, `${#x}`
-- `$((arithmetic))`, heredocs, here strings, `read`, `source`
+- `if`, `while`, `until`, `for`, `case`, `[[ ]]`, `test`, functions
+- `${x#pat}`, `${x%pat}`, `${x/a/b}`, `${x^^}`, `${x:1:3}`, `${x:-y}`
+- Indexed arrays, brace expansion `{a,b}` and `{1..10}`, `$((math))`
+- `trap`, `set -euo pipefail`, `set -x`, `printf`, `read`, `source`
 
 </td>
 <td width="50%" valign="top">
@@ -168,7 +192,7 @@ flowchart LR
 - Autosuggestions, syntax highlighting, multiline input
 - Completion for git, cargo, ssh, make, `$VARS`, `%jobs`
 - `z` for frecent directories, typing a directory enters it
-- "did you mean" for mistyped commands
+- "did you mean" for mistyped commands, `!!` and `!$` history expansion
 
 </td>
 </tr>
@@ -179,14 +203,14 @@ flowchart LR
 - `cmd &`, `jobs`, `fg`, `bg`, `wait`, `kill %1`
 - Ctrl-Z stops the foreground job, Ctrl-C stops loops too
 - Redirections on any fd: `2>`, `2>&1`, `&>`, `>&-`
-- Prompt shows exit status, slow command duration, job count
+- Prompt shows git branch with a dirty marker, exit status, duration
 
 </td>
 <td valign="top">
 
 **Data**
 - `files`, `procs`, `load`, `from` produce typed tables
-- `where`, `sort-by`, `select`, `reject`, `first`, `skip`
+- `where`, `sort-by`, `select`, `group-by`, `uniq-by`, `math`
 - Sizes and dates compare as sizes and dates
 - `to csv`, `to json`, `to md`, or plain text for other tools
 
@@ -196,7 +220,7 @@ flowchart LR
 
 ## Configuration
 
-`~/.grfshrc` runs on startup:
+`~/.grfshrc`, or `~/.config/grfsh/grfshrc`, runs on startup. Login shells read `~/.grfsh_profile` first.
 
 ```sh
 export EDITOR=nvim
@@ -206,7 +230,7 @@ alias gs='git status'
 mkcd() { mkdir -p "$1" && cd "$1"; }
 ```
 
-Set `GRFSH_PROMPT` to customize the prompt. Placeholders: `{user}`, `{host}`, `{cwd}`, `{branch}`, `{git}`, `{status}`, `{duration}`, `{jobs}` and the colors `{green}`, `{blue}`, `{magenta}`, `{cyan}`, `{red}`, `{yellow}`, `{bold}`, `{reset}`.
+Set `GRFSH_PROMPT` to customize the prompt. Placeholders: `{user}`, `{host}`, `{cwd}`, `{branch}`, `{dirty}`, `{git}`, `{status}`, `{duration}`, `{jobs}` and the colors `{green}`, `{blue}`, `{magenta}`, `{cyan}`, `{red}`, `{yellow}`, `{bold}`, `{reset}`.
 
 ```sh
 export GRFSH_PROMPT='{blue}{cwd}{reset} {git}{red}{status}{reset}> '
@@ -217,7 +241,7 @@ export GRFSH_PROMPT='{blue}{cwd}{reset} {git}{red}{status}{reset}> '
 
 <br>
 
-`cd`, `z`, `pwd`, `echo`, `exit`, `export`, `unset`, `local`, `set`, `shift`, `read`, `source`, `.`, `eval`, `alias`, `unalias`, `type`, `command`, `return`, `break`, `continue`, `jobs`, `fg`, `bg`, `wait`, `kill`, `true`, `false`, `:`
+`cd`, `z`, `pushd`, `popd`, `dirs`, `pwd`, `printf`, `test`, `[`, `trap`, `history`, `echo`, `exit`, `export`, `unset`, `local`, `set`, `shift`, `read`, `source`, `.`, `eval`, `alias`, `unalias`, `type`, `command`, `return`, `break`, `continue`, `jobs`, `fg`, `bg`, `wait`, `kill`, `true`, `false`, `:`
 
 </details>
 
@@ -247,9 +271,13 @@ src/
 | 3 | AST parser, run time expansion, scripting, job control | done |
 | 3 | `z`, context aware completion, "did you mean", richer prompt | done |
 | 3 | Typed table pipelines, JSON and CSV | done |
-| 4 | `case`, `trap`, `printf` builtin, arrays | planned |
-| 4 | Benchmarks against bash, zsh and dash, faster startup, async git prompt | planned |
-| 4 | `group-by`, `uniq`, `math` table commands, config file, crates.io release | planned |
+| 4 | `case`, `[[ ]]`, arrays, parameter operators, brace expansion | done |
+| 4 | `trap`, `set -euo pipefail`, `printf`, `pushd`, history expansion | done |
+| 4 | Async git prompt, benchmarks, loop and string speedups, fuzz style tests | done |
+| 4 | `group-by`, `uniq-by`, `math`, `update`, login shell, release packaging | done |
+| 5 | `getopts`, `declare`, associative arrays, `$PIPESTATUS`, `**` globs, vi mode | planned |
+| 5 | Prompt hooks, right prompt, starship support, oh-my-zsh theme compatibility | planned |
+| 5 | `grfsh --check` for scripts, queryable history table, plugins | planned |
 
 ## Star history
 

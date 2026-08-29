@@ -29,7 +29,7 @@
 <br>
 
 > [!NOTE]
-> grfsh e un shell tanar. Ruleaza scripturi reale si e placut de folosit interactiv, dar nu e inca un `sh` POSIX complet (lipsesc `case` si `trap`), deci tine bash-ul la indemana pentru scripturile de sistem.
+> grfsh e un shell tanar. Ruleaza scripturi reale si e placut de folosit interactiv, dar nu acopera inca tot ce face bash: lipsesc `getopts`, array-urile asociative si process substitution. Tine bash-ul la indemana pentru scripturile de sistem.
 
 ## Ce e grfsh?
 
@@ -48,13 +48,16 @@ cargo install --git https://github.com/gdprojectsss/goRustlyFast
 grfsh
 ```
 
-Sau dintr-o clona: `cargo build --release` si apoi `target/release/grfsh`.
+Sau dintr-o clona: `cargo build --release` si apoi `target/release/grfsh`. Exista si o formula Homebrew in [`packaging/homebrew`](packaging/homebrew/grfsh.rb): `brew install --HEAD ./packaging/homebrew/grfsh.rb`.
 
 ```
 grfsh                          shell interactiv
+grfsh -l                       login shell, citeste intai ~/.grfsh_profile
 grfsh script.sh [args...]      ruleaza un script
 grfsh -c 'comanda' [nume args] ruleaza o singura linie
 ```
+
+Ca sa-l folosesti ca login shell, adauga calea lui in `/etc/shells` si ruleaza `chsh -s "$(command -v grfsh)"`.
 
 Cateva lucruri de incercat:
 
@@ -83,18 +86,34 @@ $ ps aux | where %CPU gt 5 | select PID %CPU COMMAND
 
 | Comanda | Ce face |
 | --- | --- |
-| `files [cale] [-a]` | listare de director cu name, type, size, modified |
+| `files [cale] [-a] [-r]` | listare de director cu name, type, size, modified, `-r` recursiv |
 | `procs` | procesele active cu pid, ppid, cpu, mem, rss, name |
 | `load <fisier>` | citeste `.csv`, `.tsv`, `.json`, `.jsonl`, restul ca linii |
 | `from csv\|tsv\|json\|jsonl\|ws\|lines` | parseaza text venit printr-un pipe |
-| `where <coloana> <op> <valoare>` | pastreaza randurile potrivite, operatori: `== != =~ !~ eq ne lt le gt ge` |
+| `where <coloana> <op> <valoare> [and\|or ...]` | pastreaza randurile potrivite, operatori: `== != =~ !~ eq ne lt le gt ge` |
 | `sort-by <coloana>... [-r]` | sorteaza dupa una sau mai multe coloane |
 | `select` / `reject <coloana>...` | pastreaza sau scoate coloane |
 | `first [n]`, `skip [n]`, `reverse` | taie din randuri |
 | `count`, `get <coloana>` | afiseaza numarul de randuri sau o coloana ca linii simple |
-| `to csv\|tsv\|json\|md\|table` | transforma tabelul in text |
+| `group-by <coloana>` | numara randurile pentru fiecare valoare |
+| `uniq-by <coloana>` | pastreaza primul rand pentru fiecare valoare |
+| `math sum\|avg\|min\|max\|median <coloana>` | agrega o coloana, dimensiunile raman dimensiuni |
+| `update <coloana> <valoare>` | seteaza sau adauga o coloana |
+| `to csv\|tsv\|json\|md\|html\|table` | transforma tabelul in text |
 
 `<` si `>` sunt redirectari in orice shell, deci scrie `where size -gt 1mb` sau pune conditia intre ghilimele: `where 'size > 1mb'`. Valorile urmeaza tipul coloanei: `10mb` pentru dimensiuni, `2d` sau `2026-01-31` pentru date.
+
+## Performanta
+
+Masurat contra dash, bash si zsh cu [hyperfine](https://github.com/sharkdp/hyperfine), poti reproduce cu `scripts/bench.sh`. Timp mediu pe un Apple M2 cu macOS 26.6, bash 3.2.57 de sistem, dash si zsh 5.9:
+
+| Test | grfsh | dash | bash | zsh |
+| --- | ---: | ---: | ---: | ---: |
+| Pornire, `-c true` | 1.9 ms | 1.2 ms | 1.6 ms | 2.5 ms |
+| Bucla `while [ ]` cu 20.000 de iteratii | 34.5 ms | 36.7 ms | 65.7 ms | 34.7 ms |
+| Construirea unui string de 5.000 de ori | 17.3 ms | 49.8 ms | 911.8 ms | 106.2 ms |
+| Pipeline cu cinci comenzi | 4.4 ms | 3.7 ms | 4.2 ms | 5.3 ms |
+| 200 de command substitutions | 84.5 ms | 73.2 ms | 83.0 ms | 90.5 ms |
 
 ## De ce grfsh?
 
@@ -114,7 +133,7 @@ Cum se compara grfsh cu alte shell-uri la lucrurile pe care se concentreaza:
 
 ## Configurare
 
-`~/.grfshrc` ruleaza la pornire:
+`~/.grfshrc`, sau `~/.config/grfsh/grfshrc`, ruleaza la pornire. Login shell-urile citesc intai `~/.grfsh_profile`.
 
 ```sh
 export EDITOR=nvim
@@ -126,7 +145,7 @@ mkcd() { mkdir -p "$1" && cd "$1"; }
 
 Seteaza `GRFSH_PROMPT` ca sa-ti faci promptul cum vrei. Placeholder-e: `{user}`, `{host}`, `{cwd}`, `{branch}`, `{git}`, `{status}`, `{duration}`, `{jobs}` si culorile `{green}`, `{blue}`, `{magenta}`, `{cyan}`, `{red}`, `{yellow}`, `{bold}`, `{reset}`.
 
-Built-in-uri: `cd`, `z`, `pwd`, `echo`, `exit`, `export`, `unset`, `local`, `set`, `shift`, `read`, `source`, `.`, `eval`, `alias`, `unalias`, `type`, `command`, `return`, `break`, `continue`, `jobs`, `fg`, `bg`, `wait`, `kill`, `true`, `false`, `:`
+Built-in-uri: `cd`, `z`, `pushd`, `popd`, `dirs`, `pwd`, `printf`, `test`, `[`, `trap`, `history`, `echo`, `exit`, `export`, `unset`, `local`, `set`, `shift`, `read`, `source`, `.`, `eval`, `alias`, `unalias`, `type`, `command`, `return`, `break`, `continue`, `jobs`, `fg`, `bg`, `wait`, `kill`, `true`, `false`, `:`
 
 ## Roadmap
 
@@ -137,9 +156,13 @@ Built-in-uri: `cd`, `z`, `pwd`, `echo`, `exit`, `export`, `unset`, `local`, `set
 | 3 | Parser cu AST, expandare la rulare, scripting, job control | gata |
 | 3 | `z`, completion dupa context, "did you mean", prompt mai bogat | gata |
 | 3 | Pipeline-uri cu tabele, JSON si CSV | gata |
-| 4 | `case`, `trap`, `printf` built-in, array-uri | planificat |
-| 4 | Benchmark-uri contra bash, zsh si dash, pornire mai rapida, prompt git asincron | planificat |
-| 4 | Comenzi de tabel `group-by`, `uniq`, `math`, fisier de config, release pe crates.io | planificat |
+| 4 | `case`, `[[ ]]`, array-uri, operatori pe parametri, brace expansion | gata |
+| 4 | `trap`, `set -euo pipefail`, `printf`, `pushd`, history expansion | gata |
+| 4 | Prompt git asincron, benchmark-uri, bucle si string-uri mai rapide | gata |
+| 4 | `group-by`, `uniq-by`, `math`, `update`, login shell, release-uri | gata |
+| 5 | `getopts`, `declare`, array-uri asociative, `$PIPESTATUS`, glob `**`, mod vi | planificat |
+| 5 | Hook-uri de prompt, prompt in dreapta, starship, teme oh-my-zsh | planificat |
+| 5 | `grfsh --check` pentru scripturi, istoric interogabil ca tabel, plugin-uri | planificat |
 
 ## Contributii
 
