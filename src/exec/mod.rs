@@ -323,7 +323,7 @@ impl Shell {
         }
     }
 
-    fn suggest_command(&mut self, name: &str) -> Option<String> {
+    pub(crate) fn path_command_names(&mut self) -> &[String] {
         let path = self.get_variable("PATH").unwrap_or_default();
         if self
             .path_commands
@@ -333,6 +333,13 @@ impl Shell {
             let found = commands::on_path(&path);
             self.path_commands = Some((path, found));
         }
+        self.path_commands
+            .as_ref()
+            .map_or(&[], |(_, names)| names.as_slice())
+    }
+
+    fn suggest_command(&mut self, name: &str) -> Option<String> {
+        self.path_command_names();
         let on_path = self
             .path_commands
             .iter()
