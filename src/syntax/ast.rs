@@ -135,6 +135,7 @@ pub struct Assignment {
 pub struct SimpleCommand {
     pub assignments: Vec<Assignment>,
     pub words: Vec<Word>,
+    pub declarations: Vec<Assignment>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -10,25 +10,12 @@ use crate::syntax::ast::*;
 use crate::syntax::parser;
 use crate::sys;
 use crate::table;
+use crate::variables::{Array, Evaluated, Key};
 
 mod process;
 mod redirect;
 
 const MAX_FUNCTION_DEPTH: usize = 1000;
-
-pub(crate) enum Evaluated {
-    Scalar {
-        name: String,
-        index: Option<i64>,
-        append: bool,
-        value: String,
-    },
-    Array {
-        name: String,
-        append: bool,
-        values: Vec<String>,
-    },
-}
 
 impl Shell {
     pub(crate) fn run_source(&mut self, source: &str) -> i32 {
@@ -409,11 +396,11 @@ impl Shell {
                         let pattern = expand::regex(self, right)?;
                         match test::regex_match(&left, &pattern)? {
                             Some(groups) => {
-                                self.arrays.insert("BASH_REMATCH".into(), groups);
+                                self.set_array("BASH_REMATCH", Array::indexed(groups))?;
                                 Ok(true)
                             }
                             None => {
-                                self.arrays.insert("BASH_REMATCH".into(), Vec::new());
+                                self.set_array("BASH_REMATCH", Array::indexed(Vec::new()))?;
                                 Ok(false)
                             }
                         }
@@ -427,16 +414,24 @@ impl Shell {
         }
     }
 
+    pub(crate) fn array_key(&mut self, name: &str, index: &Word) -> Result<Key, String> {
+        if self.is_associative(name) {
+            Ok(Key::Name(expand::single(self, index)?))
+        } else {
+            Ok(Key::Index(expand::arithmetic(self, index)?))
+        }
+    }
+
     fn evaluate_assignment(&mut self, assignment: &Assignment) -> Result<Evaluated, String> {
         match &assignment.value {
             AssignedValue::Scalar(word) => {
-                let index = match &assignment.index {
-                    Some(index) => Some(expand::arithmetic(self, index)?),
+                let key = match &assignment.index {
+                    Some(index) => Some(self.array_key(&assignment.name, index)?),
                     None => None,
                 };
                 Ok(Evaluated::Scalar {
                     name: assignment.name.clone(),
-                    index,
+                    key,
                     append: assignment.append,
                     value: expand::single(self, word)?,
                 })
@@ -444,7 +439,7 @@ impl Shell {
             AssignedValue::Array(words) => Ok(Evaluated::Array {
                 name: assignment.name.clone(),
                 append: assignment.append,
-                values: expand::words(self, words)?,
+                elements: expand::words(self, words)?,
             }),
         }
     }
@@ -453,7 +448,7 @@ impl Shell {
         match evaluated {
             Evaluated::Scalar {
                 name,
-                index: Some(index),
+                key: Some(key),
                 append,
                 value,
             } => {
@@ -461,51 +456,65 @@ impl Shell {
                     let current = self
                         .arrays
                         .get(&name)
-                        .and_then(|array| {
-                            let position = if index < 0 {
-                                usize::try_from(array.len() as i64 + index).ok()?
-                            } else {
-                                index as usize
-                            };
-                            array.get(position).cloned()
-                        })
+                        .and_then(|array| array.get(&key))
+                        .cloned()
                         .unwrap_or_default();
                     current + &value
                 } else {
                     value
                 };
-                self.set_element(&name, index, &value)
+                self.set_element(&name, key, &value)
             }
             Evaluated::Scalar {
                 name,
-                index: None,
+                key: None,
                 append,
                 value,
             } => {
-                let value = if append {
-                    self.get_variable(&name).unwrap_or_default() + &value
-                } else {
-                    value
+                let integer = self
+                    .attributes
+                    .get(&name)
+                    .is_some_and(|attributes| attributes.integer);
+                let value = match (append, integer) {
+                    (true, true) => format!(
+                        "{}+({value})",
+                        self.get_variable(&name).unwrap_or_else(|| "0".into())
+                    ),
+                    (true, false) => self.get_variable(&name).unwrap_or_default() + &value,
+                    (false, _) => value,
                 };
-                self.set_variable(&name, &value);
-                Ok(())
+                self.try_set_variable(&name, &value)
             }
             Evaluated::Array {
                 name,
                 append,
-                values,
+                elements,
             } => {
-                if append {
-                    if !self.arrays.contains_key(&name) {
-                        let existing = self.variables.remove(&name).into_iter().collect();
-                        self.arrays.insert(name.clone(), existing);
+                let mut array = match self.arrays.get(&name) {
+                    Some(existing) if append => existing.clone(),
+                    Some(existing) if existing.is_associative() => Array::associative(),
+                    _ if append => {
+                        Array::indexed(self.variables.get(&name).cloned().into_iter().collect())
                     }
-                    self.arrays.entry(name).or_default().extend(values);
+                    _ => Array::indexed(Vec::new()),
+                };
+                let elements = if self.attributes.contains_key(&name) {
+                    elements
+                        .into_iter()
+                        .map(|element| match element.split_once("]=") {
+                            Some((key, value)) if key.starts_with('[') => self
+                                .transform_value(&name, value)
+                                .map(|value| format!("{key}]={value}")),
+                            _ => self.transform_value(&name, &element),
+                        })
+                        .collect::<Result<_, _>>()?
                 } else {
-                    self.variables.remove(&name);
-                    self.arrays.insert(name, values);
-                }
-                Ok(())
+                    elements
+                };
+                array
+                    .extend(elements)
+                    .map_err(|message| format!("{name}: {message}"))?;
+                self.set_array(&name, array)
             }
         }
     }
@@ -521,6 +530,14 @@ impl Shell {
             Ok(arguments) => arguments,
             Err(error) => return self.expansion_failed(error),
         };
+        let mut declarations = Vec::with_capacity(simple.declarations.len());
+        for declaration in &simple.declarations {
+            match self.evaluate_assignment(declaration) {
+                Ok(evaluated) => declarations.push(evaluated),
+                Err(error) => return self.expansion_failed(error),
+            }
+        }
+        self.pending_declarations = declarations;
         let mut pending = Vec::with_capacity(simple.assignments.len());
         for assignment in &simple.assignments {
             match self.evaluate_assignment(assignment) {
@@ -544,7 +561,7 @@ impl Shell {
             .filter_map(|evaluated| match evaluated {
                 Evaluated::Scalar {
                     name,
-                    index: None,
+                    key: None,
                     value,
                     ..
                 } => Some((name, value)),
@@ -683,10 +700,7 @@ impl Shell {
             self.flow = Flow::Normal;
         }
         for (name, previous) in self.locals.pop().unwrap_or_default() {
-            match previous {
-                Some(value) => self.variables.insert(name, value),
-                None => self.variables.remove(&name),
-            };
+            self.restore(name, previous);
         }
         self.positional = saved;
         self.last_status

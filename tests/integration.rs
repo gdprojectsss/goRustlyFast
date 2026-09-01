@@ -665,3 +665,35 @@ fn login_shell_reads_profile_then_rc() {
     assert_eq!(String::from_utf8_lossy(&output.stdout), "profile\nrc\n");
     let _ = std::fs::remove_dir_all(home);
 }
+
+#[test]
+fn associative_arrays_and_declare() {
+    let (out, _, _) = run_command(
+        "declare -A cfg=([host]=db-1 [port]=5432); cfg[user]=admin; for k in \"${!cfg[@]}\"; do echo \"$k=${cfg[$k]}\"; done; echo ${#cfg[@]}",
+    );
+    assert_eq!(out, "host=db-1\nport=5432\nuser=admin\n3\n");
+}
+
+#[test]
+fn sparse_arrays_and_unset_elements() {
+    let (out, _, _) =
+        run_command("a=(x y z); a[10]=k; unset 'a[1]'; echo ${#a[@]} ${!a[@]} ${a[-1]}");
+    assert_eq!(out.trim(), "3 0 2 10 k");
+}
+
+#[test]
+fn declaration_builtins_do_not_split_values() {
+    let (out, _, _) = run_command(
+        "f() { local v=$(echo one two); local -a items=(a 'b c'); echo \"[$v] ${#items[@]}\"; }; f; export E=$(echo a b); env | grep '^E='",
+    );
+    assert_eq!(out, "[one two] 2\nE=a b\n");
+}
+
+#[test]
+fn readonly_and_integer_attributes() {
+    let (out, error, _) = run_command(
+        "readonly PI=3.14; PI=3; echo $PI; declare -i n=2+3; n+=4; echo $n; declare -l low=MiXeD; echo $low",
+    );
+    assert!(error.contains("PI: readonly variable"));
+    assert_eq!(out, "3.14\n9\nmixed\n");
+}

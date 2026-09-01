@@ -10,5 +10,6 @@ mod signals;
 mod syntax;
 mod sys;
 mod table;
+mod variables;
 
 pub use repl::run;

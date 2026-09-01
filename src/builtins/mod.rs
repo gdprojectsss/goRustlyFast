@@ -18,7 +18,7 @@ const BUILTINS: &[&str] = &[
     "cd", "z", "pwd", "exit", "export", "unset", "echo", "alias", "unalias", "true", "false", ":",
     "return", "break", "continue", "local", "shift", "type", "command", "eval", "jobs", "fg", "bg",
     "wait", "kill", "source", ".", "read", "set", "test", "[", "trap", "printf", "pushd", "popd",
-    "dirs", "history",
+    "dirs", "history", "declare", "typeset", "readonly",
 ];
 
 pub(crate) fn is_builtin(name: &str) -> bool {
@@ -37,7 +37,9 @@ pub(crate) fn run(shell: &mut Shell, argv: &[String]) -> i32 {
         "z" => directory::jump(shell, args, &mut out),
         "pwd" => directory::pwd(shell, &mut out),
         "exit" => control::exit(shell, args),
-        "export" => variables::export(shell, args, &mut out),
+        "export" | "local" | "declare" | "typeset" | "readonly" => {
+            variables::declare(shell, &argv[0], args, &mut out)
+        }
         "unset" => variables::unset(shell, args),
         "echo" => output::echo(args, &mut out),
         "alias" => variables::alias(shell, args, &mut out),
@@ -46,7 +48,6 @@ pub(crate) fn run(shell: &mut Shell, argv: &[String]) -> i32 {
         "false" => 1,
         "return" => control::return_from(shell, args),
         "break" | "continue" => control::loop_control(shell, &argv[0], args),
-        "local" => variables::local(shell, args),
         "shift" => variables::shift(shell, args),
         "type" => output::describe(shell, args, &mut out, false),
         "command" => output::describe(shell, &args[args.len().min(1)..], &mut out, true),

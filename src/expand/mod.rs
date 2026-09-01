@@ -5,6 +5,7 @@ pub mod glob;
 use crate::shell::Shell;
 use crate::syntax::ast::{FallbackKind, ParameterOperation, Subscript, Word, WordPart};
 use crate::sys;
+use crate::variables::Key;
 
 pub fn words(shell: &mut Shell, words: &[Word]) -> Result<Vec<String>, String> {
     let mut out = Vec::new();
@@ -89,12 +90,12 @@ fn expand_into(shell: &mut Shell, word: &Word, fields: &mut Fields) -> Result<()
                 fields.quoted(&length.to_string());
             }
             WordPart::Indices { name, quoted } => {
-                let count = shell
-                    .arrays
-                    .get(name)
-                    .map_or_else(|| usize::from(shell.get_variable(name).is_some()), Vec::len);
-                let indices = (0..count).map(|index| index.to_string()).collect();
-                push_value(fields, Expanded::Many(indices), *quoted, false);
+                let keys = match shell.arrays.get(name) {
+                    Some(array) => array.keys(),
+                    None if shell.get_variable(name).is_some() => vec!["0".into()],
+                    None => Vec::new(),
+                };
+                push_value(fields, Expanded::Many(keys), *quoted, false);
             }
             WordPart::CommandSubstitution { source, quoted } => {
                 let out = shell.capture(source);
@@ -118,7 +119,6 @@ pub fn brace_expand(word: &Word) -> Vec<Word> {
     brace::expand(word)
 }
 
-#[cfg(test)]
 pub fn evaluate_arithmetic(shell: &mut Shell, text: &str) -> Result<i64, String> {
     arith::eval(shell, text)
 }
@@ -174,14 +174,6 @@ fn push_value(fields: &mut Fields, value: Expanded, quoted: bool, joined: bool) 
     }
 }
 
-fn resolve_index(index: i64, length: usize) -> Option<usize> {
-    if index < 0 {
-        usize::try_from(length as i64 + index).ok()
-    } else {
-        Some(index as usize)
-    }
-}
-
 fn lookup(
     shell: &mut Shell,
     name: &str,
@@ -194,7 +186,7 @@ fn lookup(
             .get_variable(name)
             .map_or(Expanded::Missing, Expanded::One)),
         Some(Subscript::All | Subscript::Joined) => Ok(match shell.arrays.get(name) {
-            Some(array) => Expanded::Many(array.clone()),
+            Some(array) => Expanded::Many(array.values()),
             None if positional => Expanded::Many(shell.positional.clone()),
             None => shell
                 .get_variable(name)
@@ -203,12 +195,13 @@ fn lookup(
                 }),
         }),
         Some(Subscript::Index(word)) => {
-            let index = arithmetic(shell, word)?;
+            let key = shell.array_key(name, word)?;
             Ok(match shell.arrays.get(name) {
-                Some(array) => resolve_index(index, array.len())
-                    .and_then(|position| array.get(position).cloned())
+                Some(array) => array
+                    .get(&key)
+                    .cloned()
                     .map_or(Expanded::Missing, Expanded::One),
-                None if index == 0 => shell
+                None if key == Key::Index(0) => shell
                     .get_variable(name)
                     .map_or(Expanded::Missing, Expanded::One),
                 None => Expanded::Missing,
@@ -225,8 +218,8 @@ fn assign_fallback(
 ) -> Result<(), String> {
     match subscript {
         Some(Subscript::Index(word)) => {
-            let index = arithmetic(shell, word)?;
-            shell.set_element(name, index, value)
+            let key = shell.array_key(name, word)?;
+            shell.set_element(name, key, value)
         }
         Some(_) => Err(format!("{name}: cannot assign in this way")),
         None => {

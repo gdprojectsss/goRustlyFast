@@ -6,6 +6,7 @@ use crate::directories::DirectoryHistory;
 use crate::jobs::JobTable;
 use crate::syntax::ast::Command;
 use crate::sys;
+use crate::variables::{Array, Attributes, Evaluated, Key, Saved};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Flow {
@@ -38,7 +39,9 @@ impl ShellOptions {
 pub struct Shell {
     pub aliases: HashMap<String, String>,
     pub variables: HashMap<String, String>,
-    pub arrays: HashMap<String, Vec<String>>,
+    pub arrays: HashMap<String, Array>,
+    pub attributes: HashMap<String, Attributes>,
+    pub pending_declarations: Vec<Evaluated>,
     pub traps: std::collections::BTreeMap<String, String>,
     pub condition_depth: u32,
     pub directory_stack: Vec<String>,
@@ -56,7 +59,7 @@ pub struct Shell {
     pub shell_pgid: i32,
     pub jobs: JobTable,
     pub flow: Flow,
-    pub locals: Vec<HashMap<String, Option<String>>>,
+    pub locals: Vec<HashMap<String, Saved>>,
     pub loop_depth: u32,
     pub source_depth: u32,
     pub path_commands: Option<(String, Vec<String>)>,
@@ -73,6 +76,8 @@ impl Shell {
             ]),
             variables: HashMap::new(),
             arrays: HashMap::new(),
+            attributes: HashMap::new(),
+            pending_declarations: Vec::new(),
             traps: std::collections::BTreeMap::new(),
             condition_depth: 0,
             directory_stack: Vec::new(),
@@ -145,35 +150,109 @@ impl Shell {
             .or_else(|| std::env::var(name).ok())
     }
 
-    pub fn set_element(&mut self, name: &str, index: i64, value: &str) -> Result<(), String> {
-        if !self.arrays.contains_key(name) {
-            let existing = self.variables.remove(name).into_iter().collect();
-            self.arrays.insert(name.to_string(), existing);
+    pub fn snapshot(&self, name: &str) -> Saved {
+        Saved {
+            scalar: self.variables.get(name).cloned(),
+            array: self.arrays.get(name).cloned(),
+            attributes: self.attributes.get(name).copied(),
         }
-        let array = self.arrays.entry(name.to_string()).or_default();
-        let position = if index < 0 {
-            usize::try_from(array.len() as i64 + index)
-                .map_err(|_| format!("{name}[{index}]: bad array subscript"))?
-        } else {
-            index as usize
+    }
+
+    pub fn restore(&mut self, name: String, saved: Saved) {
+        match saved.scalar {
+            Some(value) => self.variables.insert(name.clone(), value),
+            None => self.variables.remove(&name),
         };
-        if position >= array.len() {
-            array.resize(position + 1, String::new());
+        match saved.array {
+            Some(array) => self.arrays.insert(name.clone(), array),
+            None => self.arrays.remove(&name),
+        };
+        match saved.attributes {
+            Some(attributes) => self.attributes.insert(name, attributes),
+            None => self.attributes.remove(&name),
+        };
+    }
+
+    pub fn is_associative(&self, name: &str) -> bool {
+        self.arrays.get(name).is_some_and(Array::is_associative)
+    }
+
+    pub fn is_readonly(&self, name: &str) -> bool {
+        self.attributes
+            .get(name)
+            .is_some_and(|attributes| attributes.readonly)
+    }
+
+    fn check_writable(&self, name: &str) -> Result<(), String> {
+        if self.is_readonly(name) {
+            Err(format!("{name}: readonly variable"))
+        } else {
+            Ok(())
         }
-        array[position] = value.to_string();
+    }
+
+    pub fn transform_value(&mut self, name: &str, value: &str) -> Result<String, String> {
+        let Some(attributes) = self.attributes.get(name).copied() else {
+            return Ok(value.to_string());
+        };
+        let mut value = if attributes.integer {
+            crate::expand::evaluate_arithmetic(self, value)?.to_string()
+        } else {
+            value.to_string()
+        };
+        if attributes.lower {
+            value = value.to_lowercase();
+        }
+        if attributes.upper {
+            value = value.to_uppercase();
+        }
+        Ok(value)
+    }
+
+    pub fn set_array(&mut self, name: &str, array: Array) -> Result<(), String> {
+        self.check_writable(name)?;
+        self.variables.remove(name);
+        self.arrays.insert(name.to_string(), array);
+        Ok(())
+    }
+
+    pub fn set_element(&mut self, name: &str, key: Key, value: &str) -> Result<(), String> {
+        self.check_writable(name)?;
+        let value = self.transform_value(name, value)?;
+        if !self.arrays.contains_key(name) {
+            let existing = self
+                .variables
+                .remove(name)
+                .map_or_else(Vec::new, |value| vec![value]);
+            self.arrays
+                .insert(name.to_string(), Array::indexed(existing));
+        }
+        let array = self
+            .arrays
+            .get_mut(name)
+            .ok_or_else(|| format!("{name}: not an array"))?;
+        array
+            .set(key, value)
+            .map_err(|message| format!("{name}[{message}"))
+    }
+
+    pub fn try_set_variable(&mut self, name: &str, value: &str) -> Result<(), String> {
+        self.check_writable(name)?;
+        let value = self.transform_value(name, value)?;
+        if let Some(array) = self.arrays.get_mut(name) {
+            return array.set(Key::Index(0), value);
+        }
+        if !self.variables.contains_key(name) && std::env::var_os(name).is_some() {
+            unsafe { std::env::set_var(name, value) };
+        } else {
+            self.variables.insert(name.into(), value);
+        }
         Ok(())
     }
 
     pub fn set_variable(&mut self, name: &str, value: &str) {
-        if let Some(array) = self.arrays.get_mut(name) {
-            match array.first_mut() {
-                Some(first) => *first = value.to_string(),
-                None => array.push(value.to_string()),
-            }
-        } else if !self.variables.contains_key(name) && std::env::var_os(name).is_some() {
-            unsafe { std::env::set_var(name, value) };
-        } else {
-            self.variables.insert(name.into(), value.into());
+        if let Err(message) = self.try_set_variable(name, value) {
+            error(message);
         }
     }
 
@@ -186,6 +265,11 @@ impl Shell {
     }
 
     pub fn unset_variable(&mut self, name: &str) {
+        if self.is_readonly(name) {
+            error(format!("unset: {name}: readonly variable"));
+            return;
+        }
+        self.attributes.remove(name);
         self.arrays.remove(name);
         self.variables.remove(name);
         unsafe { std::env::remove_var(name) };

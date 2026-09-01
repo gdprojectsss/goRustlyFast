@@ -16,6 +16,8 @@ const BINARY_CONDITIONS: &[&str] = &[
     "=", "==", "!=", "=~", "-eq", "-ne", "-lt", "-le", "-gt", "-ge", "-nt", "-ot", "-ef",
 ];
 
+const DECLARATION_BUILTINS: &[&str] = &["declare", "typeset", "local", "export", "readonly"];
+
 const RESERVED: &[&str] = &[
     "then", "else", "elif", "fi", "do", "done", "}", "in", "esac", "]]",
 ];
@@ -533,6 +535,22 @@ impl Parser<'_> {
         })
     }
 
+    fn finish_assignment(&mut self, target: AssignmentTarget) -> Result<Assignment> {
+        let value = if target.value.is_empty() && target.index.is_none() && self.is_operator("(") {
+            AssignedValue::Array(self.array_elements()?)
+        } else {
+            AssignedValue::Scalar(Word {
+                parts: target.value,
+            })
+        };
+        Ok(Assignment {
+            name: target.name,
+            index: target.index,
+            append: target.append,
+            value,
+        })
+    }
+
     fn array_elements(&mut self) -> Result<Vec<Word>> {
         self.next();
         let mut elements = Vec::new();
@@ -590,25 +608,22 @@ impl Parser<'_> {
             let Token::Word(word) = self.peek().clone() else {
                 break;
             };
+            let declaring = simple
+                .words
+                .first()
+                .and_then(Word::as_literal)
+                .is_some_and(|command| DECLARATION_BUILTINS.contains(&command));
+            if declaring && let Some(target) = assignment_target(&word) {
+                self.next();
+                let assignment = self.finish_assignment(target)?;
+                simple.declarations.push(assignment);
+                continue;
+            }
             if simple.words.is_empty() {
                 if let Some(target) = assignment_target(&word) {
                     self.next();
-                    let value = if target.value.is_empty()
-                        && target.index.is_none()
-                        && self.is_operator("(")
-                    {
-                        AssignedValue::Array(self.array_elements()?)
-                    } else {
-                        AssignedValue::Scalar(Word {
-                            parts: target.value,
-                        })
-                    };
-                    simple.assignments.push(Assignment {
-                        name: target.name,
-                        index: target.index,
-                        append: target.append,
-                        value,
-                    });
+                    let assignment = self.finish_assignment(target)?;
+                    simple.assignments.push(assignment);
                     continue;
                 }
                 if let Some(name) = word.as_literal()
