@@ -19,11 +19,11 @@ const MAX_FUNCTION_DEPTH: usize = 1000;
 
 impl Shell {
     pub(crate) fn run_source(&mut self, source: &str) -> i32 {
-        match parser::parse_with_aliases(source, &self.aliases) {
+        let first_line = self.current_line.max(1);
+        match parser::parse_from_line(source, &self.aliases, first_line) {
             Ok(list) => self.run_list(&list),
             Err(error) => {
-                shell::error(error);
-                self.last_status = 2;
+                self.report_parse_error(error);
                 2
             }
         }
@@ -31,17 +31,20 @@ impl Shell {
 
     pub(crate) fn run_lines(&mut self, mut next_line: impl FnMut() -> Option<String>) -> i32 {
         let mut buffer = String::new();
+        let mut lines_read = 0;
+        let mut chunk_start = 1;
         while let Some(line) = next_line() {
+            if buffer.is_empty() {
+                chunk_start = lines_read + 1;
+            }
+            lines_read += 1;
             buffer.push_str(&line);
             if !buffer.ends_with('\n') {
                 buffer.push('\n');
             }
-            match parser::parse_with_aliases(&buffer, &self.aliases) {
+            match parser::parse_from_line(&buffer, &self.aliases, chunk_start) {
                 Err(error) if error.incomplete => continue,
-                Err(error) => {
-                    shell::error(error);
-                    self.last_status = 2;
-                }
+                Err(error) => self.report_parse_error(error),
                 Ok(list) => {
                     self.run_list(&list);
                     self.reap_jobs();
@@ -54,9 +57,27 @@ impl Shell {
             }
         }
         if !buffer.trim().is_empty() {
-            self.run_source(&buffer);
+            match parser::parse_from_line(&buffer, &self.aliases, chunk_start) {
+                Ok(list) => {
+                    self.run_list(&list);
+                }
+                Err(error) => {
+                    self.report_parse_error(error.at_line(chunk_start));
+                }
+            }
         }
         self.last_status
+    }
+
+    fn report_parse_error(&mut self, error: parser::ParseError) {
+        match error.line {
+            Some(line) if !self.interactive => {
+                shell::set_location(None, line);
+                shell::error(&error.message);
+            }
+            _ => shell::error(&error.message),
+        }
+        self.last_status = 2;
     }
 
     pub(crate) fn run_list(&mut self, list: &List) -> i32 {
@@ -89,6 +110,12 @@ impl Shell {
     }
 
     pub(crate) fn run_and_or(&mut self, item: &AndOr) -> i32 {
+        if item.line > 0 {
+            self.current_line = item.line;
+            if !self.interactive {
+                shell::set_location(None, item.line);
+            }
+        }
         let last = item.rest.len();
         let mut status = self.run_guarded(&item.first, &item.text, last > 0);
         let mut ran_last = last == 0;
@@ -192,6 +219,15 @@ impl Shell {
             [command] => self.run_command(command, false),
             commands => self.run_forked(commands, text),
         };
+        let statuses = if pipeline.commands.len() == 1 {
+            vec![status]
+        } else {
+            std::mem::take(&mut self.pipe_statuses)
+        };
+        self.arrays.insert(
+            "PIPESTATUS".into(),
+            Array::indexed(statuses.iter().map(|status| status.to_string()).collect()),
+        );
         let status = if pipeline.negate {
             (status == 0) as i32
         } else {

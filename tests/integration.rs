@@ -697,3 +697,38 @@ fn readonly_and_integer_attributes() {
     assert!(error.contains("PI: readonly variable"));
     assert_eq!(out, "3.14\n9\nmixed\n");
 }
+
+#[test]
+fn getopts_parses_flags_and_arguments() {
+    let path = write_fixture(
+        "getopts.sh",
+        "while getopts 'vo:n:' opt; do\n  case $opt in\n    v) echo verbose ;;\n    o) echo \"output=$OPTARG\" ;;\n    n) echo \"count=$OPTARG\" ;;\n    \\?) echo bad ;;\n  esac\ndone\nshift $((OPTIND - 1))\necho \"rest: $*\"\n",
+    );
+    let (out, _) = run_args(&[&path, "-v", "-o", "out.txt", "-n5", "-x", "a", "b"]);
+    assert_eq!(out, "verbose\noutput=out.txt\ncount=5\nbad\nrest: a b\n");
+}
+
+#[test]
+fn shopt_globstar_and_nullglob() {
+    let (out, _, _) = run_command(
+        "shopt -s globstar nullglob; for f in src/**/getopts.rs; do echo $f; done; echo \"(\" *.zzz \")\"",
+    );
+    assert_eq!(out, "src/builtins/getopts.rs\n( )\n");
+}
+
+#[test]
+fn pipestatus_and_line_numbers() {
+    let path = write_fixture(
+        "lines.sh",
+        "false | true | (exit 3)\necho \"${PIPESTATUS[@]}\"\necho $LINENO\nnope_command_x\n",
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_grfsh"))
+        .arg(&path)
+        .output()
+        .expect("failed to run grfsh");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "1 0 3\n3\n");
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("lines.sh: line 4: nope_command_x: command not found")
+    );
+}

@@ -25,6 +25,7 @@ pub struct Spanned {
 pub struct ParseError {
     pub message: String,
     pub incomplete: bool,
+    pub line: Option<usize>,
 }
 
 impl ParseError {
@@ -32,6 +33,7 @@ impl ParseError {
         ParseError {
             message: message.into(),
             incomplete: false,
+            line: None,
         }
     }
 
@@ -39,13 +41,26 @@ impl ParseError {
         ParseError {
             message: message.into(),
             incomplete: true,
+            line: None,
         }
+    }
+}
+
+impl ParseError {
+    pub fn at_line(mut self, line: usize) -> Self {
+        if self.line.is_none() {
+            self.line = Some(line);
+        }
+        self
     }
 }
 
 impl fmt::Display for ParseError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.message)
+        match self.line {
+            Some(line) => write!(formatter, "line {line}: {}", self.message),
+            None => formatter.write_str(&self.message),
+        }
     }
 }
 

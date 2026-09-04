@@ -24,6 +24,10 @@ pub struct ShellOptions {
     pub nounset: bool,
     pub xtrace: bool,
     pub pipefail: bool,
+    pub globstar: bool,
+    pub nullglob: bool,
+    pub dotglob: bool,
+    pub nocaseglob: bool,
 }
 
 impl ShellOptions {
@@ -42,6 +46,11 @@ pub struct Shell {
     pub arrays: HashMap<String, Array>,
     pub attributes: HashMap<String, Attributes>,
     pub pending_declarations: Vec<Evaluated>,
+    pub getopts_offset: usize,
+    pub current_line: usize,
+    pub pipe_statuses: Vec<i32>,
+    pub started: std::time::Instant,
+    pub getopts_index: usize,
     pub traps: std::collections::BTreeMap<String, String>,
     pub condition_depth: u32,
     pub directory_stack: Vec<String>,
@@ -78,6 +87,11 @@ impl Shell {
             arrays: HashMap::new(),
             attributes: HashMap::new(),
             pending_declarations: Vec::new(),
+            getopts_offset: 0,
+            current_line: 0,
+            pipe_statuses: Vec::new(),
+            started: std::time::Instant::now(),
+            getopts_index: 1,
             traps: std::collections::BTreeMap::new(),
             condition_depth: 0,
             directory_stack: Vec::new(),
@@ -136,6 +150,8 @@ impl Shell {
                 return Some(format!("{}{interactive}", self.options.flags()));
             }
             "RANDOM" => return Some((random() % 32768).to_string()),
+            "LINENO" => return Some(self.current_line.to_string()),
+            "SECONDS" => return Some(self.started.elapsed().as_secs().to_string()),
             _ => {}
         }
         if let Ok(index) = name.parse::<usize>() {
@@ -287,8 +303,28 @@ fn random() -> u64 {
     hasher.finish()
 }
 
+thread_local! {
+    static LOCATION: std::cell::RefCell<Option<(String, usize)>> = const { std::cell::RefCell::new(None) };
+}
+
+pub fn set_location(script: Option<&str>, line: usize) {
+    LOCATION.with(|location| {
+        let mut location = location.borrow_mut();
+        match (script, location.as_mut()) {
+            (Some(name), _) => *location = Some((name.to_string(), line)),
+            (None, Some(current)) => current.1 = line,
+            (None, None) => {}
+        }
+    });
+}
+
 pub fn error(message: impl Display) {
-    eprintln!("\x1b[1;31mgrfsh:\x1b[0m {}", message);
+    let prefix = LOCATION.with(|location| match location.borrow().as_ref() {
+        Some((script, line)) if *line > 0 => format!("{script}: line {line}: "),
+        Some((script, _)) => format!("{script}: "),
+        None => String::new(),
+    });
+    eprintln!("\x1b[1;31mgrfsh:\x1b[0m {prefix}{message}");
 }
 
 #[cfg(test)]

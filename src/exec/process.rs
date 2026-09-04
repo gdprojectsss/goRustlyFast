@@ -139,7 +139,8 @@ impl Shell {
                 sys::close(read_end);
                 let _ = sys::dup2(write_end, 1);
                 sys::close(write_end);
-                let status = match parser::parse_with_aliases(source, &self.aliases) {
+                let first_line = self.current_line.max(1);
+                let status = match parser::parse_from_line(source, &self.aliases, first_line) {
                     Ok(list) => self.run_list_exec(&list),
                     Err(error) => {
                         shell::error(error);
@@ -199,6 +200,7 @@ impl Shell {
                 _ => statuses.push(0),
             }
         }
+        self.pipe_statuses = statuses.clone();
         let status = if self.options.pipefail {
             statuses
                 .iter()

@@ -1,15 +1,60 @@
 use crate::syntax::ast::Anchor;
 
-pub fn expand(pattern: &str) -> Option<Vec<String>> {
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct GlobOptions {
+    pub dotglob: bool,
+    pub nocase: bool,
+    pub globstar: bool,
+}
+
+fn visible(name: &str, component: &str, options: GlobOptions) -> bool {
+    !name.starts_with('.')
+        || component.starts_with('.')
+        || (options.dotglob && name != "." && name != "..")
+}
+
+fn descendants(base: &str, include_files: bool, options: GlobOptions, out: &mut Vec<String>) {
+    let directory = if base.is_empty() { "." } else { base };
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        if !visible(&name, "", options) {
+            continue;
+        }
+        let path = join(base, &name);
+        let is_directory = entry.file_type().is_ok_and(|kind| kind.is_dir());
+        if is_directory || include_files {
+            out.push(path.clone());
+        }
+        if is_directory {
+            descendants(&path, include_files, options, out);
+        }
+    }
+}
+
+pub fn expand(pattern: &str, options: GlobOptions) -> Option<Vec<String>> {
     let mut paths = vec![if pattern.starts_with('/') {
         "/".to_string()
     } else {
         String::new()
     }];
+    let components: Vec<&str> = pattern.split('/').filter(|part| !part.is_empty()).collect();
 
-    for component in pattern.split('/').filter(|part| !part.is_empty()) {
+    for (position, component) in components.iter().enumerate() {
+        let last = position + 1 == components.len();
         let mut next = Vec::new();
-        if !has_magic(component) {
+        if options.globstar && *component == "**" {
+            for base in &paths {
+                if !last {
+                    next.push(base.clone());
+                }
+                descendants(base, last, options, &mut next);
+            }
+        } else if !has_magic(component) {
             let name = unescape(component);
             next.extend(paths.iter().map(|base| join(base, &name)));
         } else {
@@ -22,10 +67,10 @@ pub fn expand(pattern: &str) -> Option<Vec<String>> {
                     let Ok(name) = entry.file_name().into_string() else {
                         continue;
                     };
-                    if name.starts_with('.') && !component.starts_with('.') {
+                    if !visible(&name, component, options) {
                         continue;
                     }
-                    if matches_pattern(component, &name) {
+                    if matches_with(component, &name, options.nocase) {
                         next.push(join(base, &name));
                     }
                 }
@@ -39,13 +84,23 @@ pub fn expand(pattern: &str) -> Option<Vec<String>> {
         paths.iter_mut().for_each(|path| path.push('/'));
     }
     paths.retain(|path| {
-        std::fs::symlink_metadata(path.trim_end_matches('/')).is_ok() || path == "/"
+        !path.is_empty()
+            && (std::fs::symlink_metadata(path.trim_end_matches('/')).is_ok() || path == "/")
     });
     if paths.is_empty() {
         return None;
     }
     paths.sort();
+    paths.dedup();
     Some(paths)
+}
+
+pub fn matches_with(pattern: &str, text: &str, nocase: bool) -> bool {
+    if nocase {
+        matches_pattern(&pattern.to_lowercase(), &text.to_lowercase())
+    } else {
+        matches_pattern(pattern, text)
+    }
 }
 
 fn join(base: &str, name: &str) -> String {
@@ -325,12 +380,13 @@ mod tests {
 
     #[test]
     fn expand_returns_none_for_no_matches() {
-        assert!(expand("/nonexistent_dir_12345/*.xyz").is_none());
+        assert!(expand("/nonexistent_dir_12345/*.xyz", GlobOptions::default()).is_none());
     }
 
     #[test]
     fn expand_src_glob() {
-        let results = expand("src/*.rs").expect("should match .rs files in src/");
+        let results =
+            expand("src/*.rs", GlobOptions::default()).expect("should match .rs files in src/");
         assert!(results.iter().any(|file| file == "src/main.rs"));
         assert!(results.iter().any(|file| file == "src/shell.rs"));
         for file in &results {
@@ -341,7 +397,7 @@ mod tests {
 
     #[test]
     fn expand_skips_hidden_files() {
-        let results = expand("*");
+        let results = expand("*", GlobOptions::default());
         if let Some(files) = results {
             assert!(files.iter().all(|file| !file.starts_with('.')));
         }
@@ -349,11 +405,32 @@ mod tests {
 
     #[test]
     fn expand_results_are_sorted() {
-        if let Some(results) = expand("src/*.rs") {
+        if let Some(results) = expand("src/*.rs", GlobOptions::default()) {
             let mut sorted = results.clone();
             sorted.sort();
             assert_eq!(results, sorted);
         }
+    }
+
+    #[test]
+    fn globstar_and_case_options() {
+        let deep = GlobOptions {
+            globstar: true,
+            ..GlobOptions::default()
+        };
+        let results = expand("src/**/*.rs", deep).unwrap();
+        assert!(results.contains(&"src/lib.rs".to_string()));
+        assert!(results.contains(&"src/table/filters.rs".to_string()));
+        let flat = expand("src/**/*.rs", GlobOptions::default()).unwrap();
+        assert!(!flat.contains(&"src/lib.rs".to_string()));
+        let caseless = GlobOptions {
+            nocase: true,
+            ..GlobOptions::default()
+        };
+        assert_eq!(
+            expand("CARGO.*", caseless).unwrap(),
+            ["Cargo.lock", "Cargo.toml"]
+        );
     }
 
     #[test]
@@ -383,7 +460,7 @@ mod tests {
 
     #[test]
     fn multi_component_patterns() {
-        let results = expand("s*/lib.rs").expect("src/lib.rs should match");
+        let results = expand("s*/lib.rs", GlobOptions::default()).expect("src/lib.rs should match");
         assert_eq!(results, ["src/lib.rs"]);
     }
 

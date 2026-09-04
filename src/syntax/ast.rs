@@ -215,6 +215,7 @@ pub struct AndOr {
     pub rest: Vec<(Connector, Pipeline)>,
     pub background: bool,
     pub text: String,
+    pub line: usize,
 }
 
 pub type List = Vec<AndOr>;

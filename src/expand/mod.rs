@@ -12,6 +12,12 @@ pub fn words(shell: &mut Shell, words: &[Word]) -> Result<Vec<String>, String> {
     for word in words {
         for expanded in brace::expand(word) {
             let mut fields = Fields::new(true);
+            fields.glob_options = glob::GlobOptions {
+                dotglob: shell.options.dotglob,
+                nocase: shell.options.nocaseglob,
+                globstar: shell.options.globstar,
+            };
+            fields.nullglob = shell.options.nullglob;
             expand_into(shell, &expanded, &mut fields)?;
             out.extend(fields.finish());
         }
@@ -348,6 +354,8 @@ struct Fields {
     glob: bool,
     started: bool,
     pattern_mode: bool,
+    glob_options: glob::GlobOptions,
+    nullglob: bool,
 }
 
 fn is_field_separator(character: char) -> bool {
@@ -364,6 +372,8 @@ impl Fields {
             glob: false,
             started: false,
             pattern_mode: false,
+            glob_options: glob::GlobOptions::default(),
+            nullglob: false,
         }
     }
 
@@ -436,8 +446,12 @@ impl Fields {
         self.break_field();
         let mut out = Vec::new();
         for (text, pattern, glob) in self.done {
-            match glob.then(|| glob::expand(&pattern)).flatten() {
+            match glob
+                .then(|| glob::expand(&pattern, self.glob_options))
+                .flatten()
+            {
                 Some(matches) => out.extend(matches),
+                None if glob && self.nullglob => {}
                 None if glob => out.push(glob::unescape(&pattern)),
                 None => out.push(text),
             }

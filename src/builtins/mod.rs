@@ -4,6 +4,7 @@ use crate::shell::{self, Shell};
 
 mod control;
 mod directory;
+mod getopts;
 mod jobs;
 mod output;
 mod printf;
@@ -18,7 +19,7 @@ const BUILTINS: &[&str] = &[
     "cd", "z", "pwd", "exit", "export", "unset", "echo", "alias", "unalias", "true", "false", ":",
     "return", "break", "continue", "local", "shift", "type", "command", "eval", "jobs", "fg", "bg",
     "wait", "kill", "source", ".", "read", "set", "test", "[", "trap", "printf", "pushd", "popd",
-    "dirs", "history", "declare", "typeset", "readonly",
+    "dirs", "history", "declare", "typeset", "readonly", "getopts", "shopt",
 ];
 
 pub(crate) fn is_builtin(name: &str) -> bool {
@@ -62,6 +63,8 @@ pub(crate) fn run(shell: &mut Shell, argv: &[String]) -> i32 {
         }
         "kill" => jobs::kill(shell, args, &mut out),
         "set" => script::set(shell, args, &mut out),
+        "shopt" => script::shopt(shell, args, &mut out),
+        "getopts" => getopts::run(shell, args),
         "test" | "[" => test::run(shell, &argv[0], args),
         "trap" => trap::run(shell, args, &mut out),
         "printf" => printf::run(shell, args, &mut out),

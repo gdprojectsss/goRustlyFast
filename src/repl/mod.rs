@@ -59,6 +59,7 @@ pub fn run() -> i32 {
                 shell.arg0 = name.clone();
             }
             shell.positional = args.iter().skip(3).cloned().collect();
+            shell::set_location(Some(&shell.arg0.clone()), 0);
             shell.run_source(command);
             shell.last_status
         }
@@ -102,6 +103,7 @@ fn run_script(shell: &mut Shell, path: &str, args: &[String]) -> i32 {
     };
     shell.arg0 = path.to_string();
     shell.positional = args.to_vec();
+    shell::set_location(Some(path), 0);
     let mut lines = contents.lines().map(String::from);
     shell.run_lines(|| lines.next())
 }

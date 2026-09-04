@@ -176,6 +176,59 @@ pub(super) fn set(shell: &mut Shell, args: &[String], out: &mut dyn Write) -> i3
     0
 }
 
+const SHOPT_NAMES: &[&str] = &["dotglob", "globstar", "nocaseglob", "nullglob"];
+
+fn shopt_flag<'a>(options: &'a mut ShellOptions, name: &str) -> Option<&'a mut bool> {
+    match name {
+        "dotglob" => Some(&mut options.dotglob),
+        "globstar" => Some(&mut options.globstar),
+        "nocaseglob" => Some(&mut options.nocaseglob),
+        "nullglob" => Some(&mut options.nullglob),
+        _ => None,
+    }
+}
+
+pub(super) fn shopt(shell: &mut Shell, args: &[String], out: &mut dyn Write) -> i32 {
+    let mut setting = None;
+    let mut quiet = false;
+    let mut names = Vec::new();
+    for argument in args {
+        match argument.as_str() {
+            "-s" => setting = Some(true),
+            "-u" => setting = Some(false),
+            "-q" => quiet = true,
+            "-p" => {}
+            name => names.push(name.to_string()),
+        }
+    }
+    let listed: Vec<String> = if names.is_empty() {
+        SHOPT_NAMES.iter().map(|name| name.to_string()).collect()
+    } else {
+        names
+    };
+    let mut status = 0;
+    for name in &listed {
+        let Some(flag) = shopt_flag(&mut shell.options, name) else {
+            shell::error(format!("shopt: {name}: invalid shell option name"));
+            status = 1;
+            continue;
+        };
+        match setting {
+            Some(value) => *flag = value,
+            None => {
+                if !*flag {
+                    status = 1;
+                }
+                if !quiet {
+                    let state = if *flag { "on" } else { "off" };
+                    let _ = writeln!(out, "{name:<16}{state}");
+                }
+            }
+        }
+    }
+    status
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

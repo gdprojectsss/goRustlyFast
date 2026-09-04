@@ -27,22 +27,41 @@ pub fn parse(source: &str) -> Result<List> {
 }
 
 pub fn parse_with_aliases(source: &str, aliases: &HashMap<String, String>) -> Result<List> {
-    let lexed = lexer::lex(source)?;
+    parse_from_line(source, aliases, 1)
+}
+
+pub fn parse_from_line(
+    source: &str,
+    aliases: &HashMap<String, String>,
+    first_line: usize,
+) -> Result<List> {
+    let lexed = lexer::lex(source).map_err(|error| error.at_line(first_line))?;
+    let chars: Vec<char> = source.chars().collect();
+    let newlines = chars
+        .iter()
+        .enumerate()
+        .filter(|(_, character)| **character == '\n')
+        .map(|(index, _)| index)
+        .collect();
     let mut parser = Parser {
         tokens: lexed.tokens,
         heredocs: lexed.heredocs,
         position: 0,
-        chars: source.chars().collect(),
+        chars,
         aliases,
+        newlines,
+        first_line,
     };
-    let list = parser.list(&[])?;
+    let list = parser.list(&[]).map_err(|error| parser.located(error))?;
     if !parser.at_eof() {
-        return Err(parser.unexpected());
+        return Err(parser.located(parser.unexpected()));
     }
     Ok(list)
 }
 
 struct Parser<'a> {
+    newlines: Vec<usize>,
+    first_line: usize,
     tokens: Vec<Spanned>,
     heredocs: Vec<Word>,
     position: usize,
@@ -119,6 +138,18 @@ impl Parser<'_> {
         }
     }
 
+    fn line_at(&self, index: usize) -> usize {
+        self.first_line + self.newlines.partition_point(|&newline| newline < index)
+    }
+
+    fn located(&self, error: ParseError) -> ParseError {
+        if error.incomplete || error.line.is_some() {
+            return error;
+        }
+        let index = self.tokens[self.position.min(self.tokens.len() - 1)].start;
+        error.at_line(self.line_at(index))
+    }
+
     fn text(&self, start: usize, end: usize) -> String {
         self.chars[start..end].iter().collect()
     }
@@ -144,6 +175,7 @@ impl Parser<'_> {
             let mut item = self.and_or()?;
             let end = self.tokens[self.position.saturating_sub(1)].end.max(start);
             item.text = self.text(start, end).trim().to_string();
+            item.line = self.line_at(start);
 
             let more = match self.peek() {
                 Token::Operator(";") | Token::Newline => {
@@ -183,6 +215,7 @@ impl Parser<'_> {
             rest,
             background: false,
             text: String::new(),
+            line: 0,
         })
     }
 
