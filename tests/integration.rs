@@ -732,3 +732,35 @@ fn pipestatus_and_line_numbers() {
             .contains("lines.sh: line 4: nope_command_x: command not found")
     );
 }
+
+#[test]
+fn process_substitution_and_file_read() {
+    let (out, _, _) = run_command(
+        "diff <(printf 'a\\nb\\n') <(printf 'a\\nc\\n') >/dev/null; echo diff=$?; while read l; do echo got $l; done < <(printf 'x\\ny\\n'); printf 'from file' > /tmp/grfsh_subst_read.txt; echo \"[$(< /tmp/grfsh_subst_read.txt)]\"",
+    );
+    assert_eq!(out, "diff=1\ngot x\ngot y\n[from file]\n");
+}
+
+#[test]
+fn read_flags_and_mapfile() {
+    let out = run(
+        "printf 'a b c\\n' | { read -a parts; echo ${#parts[@]} ${parts[2]}; }\nprintf 'abcdef' | { read -n 3 first; echo $first; }\nprintf 'one;two' | { read -d ';' word; echo $word; }\nprintf 'l1\\nl2\\nl3\\n' | { mapfile -t lines; echo ${#lines[@]} ${lines[1]}; }\n",
+    );
+    assert_eq!(out, "3 c\nabc\none\n3 l2\n");
+}
+
+#[test]
+fn exec_redirections_and_replacement() {
+    let (out, _, _) = run_command(
+        "exec 3>/tmp/grfsh_exec_fd.txt; echo saved >&3; exec 3>&-; cat /tmp/grfsh_exec_fd.txt; exec echo replaced; echo never",
+    );
+    assert_eq!(out, "saved\nreplaced\n");
+}
+
+#[test]
+fn time_wait_next_and_umask() {
+    let (out, error, _) =
+        run_command("time true; umask 027; umask; sleep 0.3 & sleep 0.05 & wait -n; echo next=$?");
+    assert!(error.contains("real\t"));
+    assert_eq!(out, "0027\nnext=0\n");
+}

@@ -3,6 +3,7 @@ use std::io::Write;
 use crate::shell::{self, Flow, Shell, ShellOptions};
 use crate::syntax::parser::is_name;
 use crate::sys;
+use crate::variables::Array;
 
 pub(super) fn source(shell: &mut Shell, args: &[String]) -> i32 {
     let Some(path) = args.first() else {
@@ -32,49 +33,231 @@ pub(super) fn source(shell: &mut Shell, args: &[String]) -> i32 {
     status
 }
 
-pub(super) fn read(shell: &mut Shell, args: &[String]) -> i32 {
-    let mut raw = false;
-    let mut prompt = None;
+struct ReadOptions {
+    raw: bool,
+    silent: bool,
+    prompt: Option<String>,
+    array: Option<String>,
+    count: Option<usize>,
+    timeout: Option<f64>,
+    delimiter: u8,
+}
+
+fn parse_read_options(args: &[String]) -> Result<(ReadOptions, Vec<String>), String> {
+    let mut options = ReadOptions {
+        raw: false,
+        silent: false,
+        prompt: None,
+        array: None,
+        count: None,
+        timeout: None,
+        delimiter: b'\n',
+    };
     let mut names = Vec::new();
-    let mut iter = args.iter();
-    while let Some(argument) = iter.next() {
-        match argument.as_str() {
-            "-r" => raw = true,
-            "-p" => prompt = iter.next().cloned(),
-            name if is_name(name) => names.push(name.to_string()),
-            other => {
-                shell::error(format!("read: '{other}': not a valid identifier"));
-                return 2;
+    let mut index = 0;
+    while index < args.len() {
+        let argument = &args[index];
+        index += 1;
+        if !argument.starts_with('-') || argument.len() < 2 {
+            if !is_name(argument) {
+                return Err(format!("'{argument}': not a valid identifier"));
             }
+            names.push(argument.clone());
+            continue;
+        }
+        let flags: Vec<char> = argument[1..].chars().collect();
+        for (position, flag) in flags.iter().enumerate() {
+            let takes_value = matches!(flag, 'p' | 'a' | 'n' | 't' | 'd');
+            if !takes_value {
+                match flag {
+                    'r' => options.raw = true,
+                    's' => options.silent = true,
+                    other => return Err(format!("-{other}: invalid option")),
+                }
+                continue;
+            }
+            let attached: String = flags[position + 1..].iter().collect();
+            let value = if attached.is_empty() {
+                let value = args
+                    .get(index)
+                    .cloned()
+                    .ok_or_else(|| format!("-{flag}: option requires an argument"))?;
+                index += 1;
+                value
+            } else {
+                attached
+            };
+            match flag {
+                'p' => options.prompt = Some(value),
+                'a' => options.array = Some(value),
+                'n' => {
+                    options.count = Some(
+                        value
+                            .parse()
+                            .map_err(|_| format!("{value}: invalid number"))?,
+                    )
+                }
+                't' => {
+                    options.timeout = Some(
+                        value
+                            .parse()
+                            .map_err(|_| format!("{value}: invalid timeout"))?,
+                    )
+                }
+                _ => options.delimiter = value.bytes().next().unwrap_or(0),
+            }
+            break;
         }
     }
-    if names.is_empty() {
+    Ok((options, names))
+}
+
+enum Ending {
+    Delimiter,
+    EndOfInput,
+    TimedOut,
+    Count,
+}
+
+fn read_input(options: &ReadOptions) -> (Vec<u8>, Ending) {
+    let deadline = options
+        .timeout
+        .map(|seconds| std::time::Instant::now() + std::time::Duration::from_secs_f64(seconds));
+    let mut bytes = Vec::new();
+    loop {
+        if options.count.is_some_and(|count| bytes.len() >= count) {
+            return (bytes, Ending::Count);
+        }
+        if let Some(deadline) = deadline {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if !sys::wait_readable(0, remaining) {
+                return (bytes, Ending::TimedOut);
+            }
+        }
+        let mut byte = [0u8; 1];
+        match sys::read(0, &mut byte) {
+            Ok(1) => {}
+            _ => return (bytes, Ending::EndOfInput),
+        }
+        if byte[0] == options.delimiter {
+            return (bytes, Ending::Delimiter);
+        }
+        if !options.raw && byte[0] == b'\\' {
+            let mut next = [0u8; 1];
+            match sys::read(0, &mut next) {
+                Ok(1) if next[0] == b'\n' => continue,
+                Ok(1) => {
+                    bytes.push(b'\\');
+                    bytes.push(next[0]);
+                }
+                _ => return (bytes, Ending::EndOfInput),
+            }
+            continue;
+        }
+        bytes.push(byte[0]);
+    }
+}
+
+pub(super) fn read(shell: &mut Shell, args: &[String]) -> i32 {
+    let (options, mut names) = match parse_read_options(args) {
+        Ok(parsed) => parsed,
+        Err(message) => {
+            shell::error(format!("read: {message}"));
+            return 2;
+        }
+    };
+    if names.is_empty() && options.array.is_none() {
         names.push("REPLY".into());
     }
-    if let Some(prompt) = prompt {
+    if let Some(prompt) = &options.prompt {
         eprint!("{prompt}");
         let _ = std::io::stderr().flush();
     }
 
-    let mut line = String::new();
-    let mut reached_end = true;
-    while let Some(chunk) = sys::read_line(0) {
-        let complete = chunk.ends_with('\n');
-        let chunk = chunk.strip_suffix('\n').unwrap_or(&chunk);
-        if !raw && let Some(continued) = chunk.strip_suffix('\\') {
-            line.push_str(continued);
-            continue;
-        }
-        line.push_str(chunk);
-        reached_end = !complete;
-        break;
+    let echo_guard = (options.silent && sys::isatty(0)).then(|| sys::disable_echo(0));
+    let (bytes, ending) = read_input(&options);
+    if let Some(Some(saved)) = echo_guard {
+        sys::restore_terminal(0, &saved);
+        eprintln!();
     }
-    if !raw {
+
+    let mut line = String::from_utf8_lossy(&bytes).into_owned();
+    if !options.raw {
         line = remove_backslashes(&line);
     }
 
-    assign_fields(shell, &names, &line);
-    if reached_end && line.is_empty() { 1 } else { 0 }
+    if let Some(array) = &options.array {
+        let fields = line.split_whitespace().map(String::from).collect();
+        if let Err(message) = shell.set_array(array, Array::indexed(fields)) {
+            shell::error(format!("read: {message}"));
+            return 1;
+        }
+    } else {
+        assign_fields(shell, &names, &line);
+    }
+    match ending {
+        Ending::TimedOut => 142,
+        Ending::EndOfInput if bytes.is_empty() => 1,
+        Ending::EndOfInput => 1,
+        Ending::Delimiter | Ending::Count => 0,
+    }
+}
+
+pub(super) fn mapfile(shell: &mut Shell, args: &[String]) -> i32 {
+    let mut trim = false;
+    let mut limit = None;
+    let mut skip = 0usize;
+    let mut name = "MAPFILE".to_string();
+    let mut index = 0;
+    while index < args.len() {
+        let argument = &args[index];
+        index += 1;
+        match argument.as_str() {
+            "-t" => trim = true,
+            "-n" | "-s" => {
+                let Some(value) = args
+                    .get(index)
+                    .and_then(|value| value.parse::<usize>().ok())
+                else {
+                    shell::error(format!("mapfile: {argument}: invalid number"));
+                    return 2;
+                };
+                index += 1;
+                if argument == "-n" {
+                    limit = Some(value).filter(|value| *value > 0);
+                } else {
+                    skip = value;
+                }
+            }
+            other if is_name(other) => name = other.to_string(),
+            other => {
+                shell::error(format!("mapfile: {other}: invalid option"));
+                return 2;
+            }
+        }
+    }
+    let mut lines = Vec::new();
+    let mut seen = 0;
+    while limit.is_none_or(|limit| lines.len() < limit) {
+        let Some(mut line) = sys::read_line(0) else {
+            break;
+        };
+        seen += 1;
+        if seen <= skip {
+            continue;
+        }
+        if trim && line.ends_with('\n') {
+            line.pop();
+        }
+        lines.push(line);
+    }
+    match shell.set_array(&name, Array::indexed(lines)) {
+        Ok(()) => 0,
+        Err(message) => {
+            shell::error(format!("mapfile: {message}"));
+            1
+        }
+    }
 }
 
 fn remove_backslashes(text: &str) -> String {

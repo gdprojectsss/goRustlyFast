@@ -125,7 +125,79 @@ impl Shell {
         sys::exit_now(126)
     }
 
+    pub(crate) fn process_substitution(
+        &mut self,
+        source: &str,
+        output: bool,
+    ) -> Result<String, String> {
+        let (read_end, write_end) =
+            sys::pipe().map_err(|error| format!("pipe: {}", sys::error_message(&error)))?;
+        let (kept, given) = if output {
+            (write_end, read_end)
+        } else {
+            (read_end, write_end)
+        };
+        match sys::fork() {
+            Ok(0) => {
+                self.enter_child(None, false);
+                sys::close(kept);
+                let _ = sys::dup2(given, if output { 0 } else { 1 });
+                sys::close(given);
+                let status = match parser::parse_from_line(
+                    source,
+                    &self.aliases,
+                    self.current_line.max(1),
+                ) {
+                    Ok(list) => self.run_list_exec(&list),
+                    Err(error) => {
+                        shell::error(error);
+                        2
+                    }
+                };
+                sys::exit_now(status)
+            }
+            Ok(pid) => {
+                sys::close(given);
+                sys::clear_cloexec(kept);
+                self.substitution_fds.push(kept);
+                self.substitution_pids.push(pid);
+                Ok(format!("/dev/fd/{kept}"))
+            }
+            Err(error) => {
+                sys::close(read_end);
+                sys::close(write_end);
+                Err(format!("fork: {}", sys::error_message(&error)))
+            }
+        }
+    }
+
     pub(crate) fn capture(&mut self, source: &str) -> String {
+        if let Some(path) = file_read_shortcut(source) {
+            let path = match crate::syntax::lexer::parse_double_quoted_text(&path)
+                .map_err(|error| error.to_string())
+                .and_then(|word| crate::expand::single(self, &word))
+            {
+                Ok(path) => path,
+                Err(error) => {
+                    shell::error(error);
+                    return String::new();
+                }
+            };
+            return match std::fs::read_to_string(&path) {
+                Ok(mut text) => {
+                    while text.ends_with('\n') {
+                        text.pop();
+                    }
+                    self.substitution_status = Some(0);
+                    text
+                }
+                Err(error) => {
+                    shell::error(format!("{path}: {}", sys::error_message(&error)));
+                    self.substitution_status = Some(1);
+                    String::new()
+                }
+            };
+        }
         let (read_end, write_end) = match sys::pipe() {
             Ok(pipe) => pipe,
             Err(error) => {
@@ -239,6 +311,8 @@ impl Shell {
     }
 
     pub(crate) fn reap_jobs(&mut self) {
+        self.substitution_pids
+            .retain(|&pid| matches!(sys::waitpid(pid, libc::WNOHANG), Ok(None)));
         for notice in self.jobs.reap() {
             if self.interactive {
                 eprintln!("{notice}");
@@ -252,4 +326,14 @@ fn close_pipes(pipes: &[(i32, i32)]) {
         sys::close(read_end);
         sys::close(write_end);
     }
+}
+
+fn file_read_shortcut(source: &str) -> Option<String> {
+    let trimmed = source.trim();
+    let rest = trimmed.strip_prefix('<')?.trim_start();
+    if rest.is_empty() || rest.starts_with(['<', '(', '>']) || rest.contains(char::is_whitespace) {
+        return None;
+    }
+    let path = rest.trim_matches('"').trim_matches('\'');
+    Some(path.to_string())
 }

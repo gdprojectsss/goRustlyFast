@@ -111,6 +111,10 @@ fn expand_into(shell: &mut Shell, word: &Word, fields: &mut Fields) -> Result<()
                     fields.split(&out);
                 }
             }
+            WordPart::ProcessSubstitution { source, output } => {
+                let path = shell.process_substitution(source, *output)?;
+                fields.quoted(&path);
+            }
             WordPart::Arithmetic { expression, .. } => {
                 let value = arithmetic(shell, expression)?;
                 fields.quoted(&value.to_string());

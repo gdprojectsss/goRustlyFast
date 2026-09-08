@@ -45,6 +45,20 @@ pub(super) fn cd(shell: &mut Shell, args: &[String], out: &mut dyn Write) -> i32
         },
         Some(directory) => directory.to_string(),
     };
+    let searchable = !target.starts_with('/') && !target.starts_with('.');
+    if searchable && let Some(cdpath) = shell.get_variable("CDPATH") {
+        for base in cdpath.split(':').filter(|base| !base.is_empty()) {
+            let candidate = Path::new(base).join(&target);
+            if candidate.is_dir() {
+                let candidate = candidate.to_string_lossy().into_owned();
+                let status = change_directory(shell, &candidate);
+                if status == 0 {
+                    let _ = writeln!(out, "{}", working_directory(shell));
+                }
+                return status;
+            }
+        }
+    }
     change_directory(shell, &target)
 }
 

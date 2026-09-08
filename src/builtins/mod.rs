@@ -9,6 +9,7 @@ mod jobs;
 mod output;
 mod printf;
 mod script;
+mod system;
 pub(crate) mod test;
 pub(crate) mod trap;
 mod variables;
@@ -16,10 +17,53 @@ mod variables;
 pub(crate) use directory::change_directory;
 
 const BUILTINS: &[&str] = &[
-    "cd", "z", "pwd", "exit", "export", "unset", "echo", "alias", "unalias", "true", "false", ":",
-    "return", "break", "continue", "local", "shift", "type", "command", "eval", "jobs", "fg", "bg",
-    "wait", "kill", "source", ".", "read", "set", "test", "[", "trap", "printf", "pushd", "popd",
-    "dirs", "history", "declare", "typeset", "readonly", "getopts", "shopt",
+    "cd",
+    "z",
+    "pwd",
+    "exit",
+    "export",
+    "unset",
+    "echo",
+    "alias",
+    "unalias",
+    "true",
+    "false",
+    ":",
+    "return",
+    "break",
+    "continue",
+    "local",
+    "shift",
+    "type",
+    "command",
+    "eval",
+    "jobs",
+    "fg",
+    "bg",
+    "wait",
+    "kill",
+    "source",
+    ".",
+    "read",
+    "set",
+    "test",
+    "[",
+    "trap",
+    "printf",
+    "pushd",
+    "popd",
+    "dirs",
+    "history",
+    "declare",
+    "typeset",
+    "readonly",
+    "getopts",
+    "shopt",
+    "mapfile",
+    "readarray",
+    "exec",
+    "umask",
+    "ulimit",
 ];
 
 pub(crate) fn is_builtin(name: &str) -> bool {
@@ -65,6 +109,9 @@ pub(crate) fn run(shell: &mut Shell, argv: &[String]) -> i32 {
         "set" => script::set(shell, args, &mut out),
         "shopt" => script::shopt(shell, args, &mut out),
         "getopts" => getopts::run(shell, args),
+        "mapfile" | "readarray" => script::mapfile(shell, args),
+        "umask" => system::umask(args, &mut out),
+        "ulimit" => system::ulimit(args, &mut out),
         "test" | "[" => test::run(shell, &argv[0], args),
         "trap" => trap::run(shell, args, &mut out),
         "printf" => printf::run(shell, args, &mut out),

@@ -35,6 +35,12 @@ pub fn pipe() -> io::Result<(i32, i32)> {
     Ok((descriptors[0], descriptors[1]))
 }
 
+pub fn clear_cloexec(fd: i32) {
+    unsafe {
+        libc::fcntl(fd, libc::F_SETFD, 0);
+    }
+}
+
 pub fn set_cloexec(fd: i32) {
     unsafe {
         libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
@@ -243,6 +249,28 @@ pub fn waitpid(pid: Pid, flags: libc::c_int) -> io::Result<Option<WaitResult>> {
     }
 }
 
+pub fn waitpid_any() -> io::Result<Option<(Pid, WaitResult)>> {
+    let mut raw_status = 0;
+    loop {
+        let result = unsafe { libc::waitpid(-1, &mut raw_status, 0) };
+        if result < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted && !signals::any_pending() {
+                continue;
+            }
+            return Err(error);
+        }
+        let outcome = if libc::WIFEXITED(raw_status) {
+            WaitResult::Exited(libc::WEXITSTATUS(raw_status))
+        } else if libc::WIFSIGNALED(raw_status) {
+            WaitResult::Signaled(libc::WTERMSIG(raw_status))
+        } else {
+            WaitResult::Stopped
+        };
+        return Ok(Some((result, outcome)));
+    }
+}
+
 pub fn exit_now(code: i32) -> ! {
     let _ = io::stdout().flush();
     let _ = io::stderr().flush();
@@ -364,4 +392,56 @@ pub fn terminal_width(fd: i32) -> Option<usize> {
         return Some(usize::from(size.ws_col));
     }
     std::env::var("COLUMNS").ok()?.parse().ok()
+}
+
+pub fn cpu_times() -> (f64, f64) {
+    let seconds = |time: libc::timeval| time.tv_sec as f64 + time.tv_usec as f64 / 1_000_000.0;
+    let mut user = 0.0;
+    let mut system = 0.0;
+    for who in [libc::RUSAGE_SELF, libc::RUSAGE_CHILDREN] {
+        let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+        if unsafe { libc::getrusage(who, &mut usage) } == 0 {
+            user += seconds(usage.ru_utime);
+            system += seconds(usage.ru_stime);
+        }
+    }
+    (user, system)
+}
+
+pub fn wait_readable(fd: i32, timeout: std::time::Duration) -> bool {
+    let mut poll = libc::pollfd {
+        fd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    let milliseconds = timeout.as_millis().min(i32::MAX as u128) as libc::c_int;
+    loop {
+        let result = unsafe { libc::poll(&mut poll, 1, milliseconds) };
+        if result < 0 && io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+            if signals::any_pending() {
+                return false;
+            }
+            continue;
+        }
+        return result > 0;
+    }
+}
+
+pub fn disable_echo(fd: i32) -> Option<libc::termios> {
+    unsafe {
+        let mut saved: libc::termios = std::mem::zeroed();
+        if libc::tcgetattr(fd, &mut saved) != 0 {
+            return None;
+        }
+        let mut quiet = saved;
+        quiet.c_lflag &= !libc::ECHO;
+        libc::tcsetattr(fd, libc::TCSANOW, &quiet);
+        Some(saved)
+    }
+}
+
+pub fn restore_terminal(fd: i32, saved: &libc::termios) {
+    unsafe {
+        libc::tcsetattr(fd, libc::TCSANOW, saved);
+    }
 }

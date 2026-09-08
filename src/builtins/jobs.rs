@@ -52,7 +52,30 @@ pub(super) fn bg(shell: &mut Shell, args: &[String]) -> i32 {
     0
 }
 
+fn wait_next(shell: &mut Shell) -> i32 {
+    loop {
+        if shell.jobs.len() == 0 {
+            return 127;
+        }
+        let Ok(Some((pid, result))) = sys::waitpid_any() else {
+            return 127;
+        };
+        let Some(index) = shell.jobs.iter().position(|job| job.pids.contains(&pid)) else {
+            continue;
+        };
+        let job = shell.jobs.get_mut(index);
+        job.pids.retain(|&running| running != pid);
+        if job.pids.is_empty() {
+            shell.jobs.remove(index);
+            return result.status();
+        }
+    }
+}
+
 pub(super) fn wait(shell: &mut Shell, args: &[String]) -> i32 {
+    if args.first().is_some_and(|argument| argument == "-n") {
+        return wait_next(shell);
+    }
     let mut status = 0;
     let targets: Vec<usize> = if args.is_empty() {
         shell.jobs.iter().map(|job| job.id).collect()

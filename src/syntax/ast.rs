@@ -23,6 +23,10 @@ pub enum WordPart {
         source: String,
         quoted: bool,
     },
+    ProcessSubstitution {
+        source: String,
+        output: bool,
+    },
     Arithmetic {
         expression: Word,
         quoted: bool,
@@ -200,6 +204,7 @@ pub struct Command {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Pipeline {
     pub negate: bool,
+    pub timed: bool,
     pub commands: Vec<Command>,
 }
 

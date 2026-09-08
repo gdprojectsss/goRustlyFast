@@ -258,6 +258,10 @@ impl Lexer {
                     self.position += 1;
                     self.push(Token::Operator(")"), start);
                 }
+                '<' | '>' if self.peek_at(1) == Some('(') => {
+                    let word = self.word()?;
+                    self.push(Token::Word(word), start);
+                }
                 '<' | '>' => self.redirect(None, start)?,
                 character if character.is_ascii_digit() && self.io_number().is_some() => {
                     let fd = self.io_number().unwrap_or(0);
@@ -417,6 +421,15 @@ impl Lexer {
     fn word_until(&mut self, stop: fn(char) -> bool) -> Result<Word, ParseError> {
         let mut word = WordBuf::default();
         while let Some(character) = self.peek() {
+            if matches!(character, '<' | '>') && self.peek_at(1) == Some('(') {
+                self.position += 2;
+                let source = self.scan_substitution()?;
+                word.part(WordPart::ProcessSubstitution {
+                    source,
+                    output: character == '>',
+                });
+                continue;
+            }
             if stop(character) {
                 break;
             }

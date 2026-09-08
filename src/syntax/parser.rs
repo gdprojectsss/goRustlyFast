@@ -220,6 +220,10 @@ impl Parser<'_> {
     }
 
     fn pipeline(&mut self) -> Result<Pipeline> {
+        let timed = self.is_keyword("time");
+        if timed {
+            self.next();
+        }
         let negate = self.is_keyword("!");
         if negate {
             self.next();
@@ -230,7 +234,11 @@ impl Parser<'_> {
             self.skip_newlines();
             commands.push(self.command()?);
         }
-        Ok(Pipeline { negate, commands })
+        Ok(Pipeline {
+            negate,
+            timed,
+            commands,
+        })
     }
 
     fn command(&mut self) -> Result<Command> {

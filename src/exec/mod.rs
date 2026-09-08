@@ -215,6 +215,25 @@ impl Shell {
     }
 
     pub(crate) fn run_pipeline(&mut self, pipeline: &Pipeline, text: &str) -> i32 {
+        if pipeline.timed {
+            let started = std::time::Instant::now();
+            let (user_before, system_before) = sys::cpu_times();
+            let untimed = Pipeline {
+                timed: false,
+                ..pipeline.clone()
+            };
+            let status = self.run_pipeline(&untimed, text);
+            let (user_after, system_after) = sys::cpu_times();
+            let format =
+                |seconds: f64| format!("{}m{:.3}s", (seconds / 60.0) as u64, seconds % 60.0);
+            eprintln!(
+                "\nreal\t{}\nuser\t{}\nsys\t{}",
+                format(started.elapsed().as_secs_f64()),
+                format(user_after - user_before),
+                format(system_after - system_before)
+            );
+            return status;
+        }
         let status = match pipeline.commands.as_slice() {
             [command] => self.run_command(command, false),
             commands => self.run_forked(commands, text),
@@ -238,6 +257,15 @@ impl Shell {
     }
 
     pub(crate) fn run_command(&mut self, command: &Command, exec_in_place: bool) -> i32 {
+        let mark = self.substitution_fds.len();
+        let status = self.run_command_kind(command, exec_in_place);
+        for fd in self.substitution_fds.drain(mark..) {
+            sys::close(fd);
+        }
+        status
+    }
+
+    fn run_command_kind(&mut self, command: &Command, exec_in_place: bool) -> i32 {
         match &command.kind {
             CommandKind::Simple(simple) => {
                 self.run_simple(simple, &command.redirects, exec_in_place)
@@ -400,6 +428,32 @@ impl Shell {
             self.flow = Flow::Exit;
         }
         1
+    }
+
+    fn exec_builtin(
+        &mut self,
+        argv: &[String],
+        assignments: &[(String, String)],
+        redirects: &[Redirect],
+    ) -> i32 {
+        let Some(name) = argv.first() else {
+            return match self.apply_redirects(redirects) {
+                Ok(()) => 0,
+                Err(error) => {
+                    shell::error(format!("exec: {error}"));
+                    1
+                }
+            };
+        };
+        let Some(path) = self.resolve(name) else {
+            self.command_not_found(name);
+            if !self.interactive {
+                self.flow = Flow::Exit;
+            }
+            return 127;
+        };
+        sys::reset_child_signals();
+        self.exec_external(&path, argv, assignments, redirects)
     }
 
     fn evaluate_condition(&mut self, condition: &Condition) -> Result<bool, String> {
@@ -583,6 +637,18 @@ impl Shell {
         }
 
         if argv.is_empty() {
+            if self.options.xtrace {
+                let traced: Vec<(String, String)> = pending
+                    .iter()
+                    .filter_map(|evaluated| match evaluated {
+                        Evaluated::Scalar { name, value, .. } => {
+                            Some((name.clone(), value.clone()))
+                        }
+                        Evaluated::Array { .. } => None,
+                    })
+                    .collect();
+                self.trace(&traced, &[]);
+            }
             for evaluated in pending {
                 if let Err(error) = self.assign(evaluated) {
                     shell::error(error);
@@ -613,6 +679,10 @@ impl Shell {
         while argv.len() > 1 && argv[0] == "command" && argv[1] != "-v" {
             argv.remove(0);
             bypass_functions = true;
+        }
+
+        if argv[0] == "exec" {
+            return self.exec_builtin(&argv[1..], &assignments, redirects);
         }
 
         let name = argv[0].as_str();
