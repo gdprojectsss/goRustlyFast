@@ -79,6 +79,9 @@ pub(crate) fn change_directory(shell: &mut Shell, target: &str) -> i32 {
     if shell.interactive && destination != previous {
         shell.directories.visit(&destination, directories::now());
     }
+    if destination != previous {
+        shell.run_hook("chpwd", &[]);
+    }
     0
 }
 

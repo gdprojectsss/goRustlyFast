@@ -288,7 +288,7 @@ fn assign_fields(shell: &mut Shell, names: &[String], line: &str) {
     }
 }
 
-const OPTION_NAMES: &[&str] = &["errexit", "nounset", "xtrace", "pipefail"];
+const OPTION_NAMES: &[&str] = &["errexit", "nounset", "xtrace", "pipefail", "vi"];
 
 fn option_flag<'a>(options: &'a mut ShellOptions, name: &str) -> Option<&'a mut bool> {
     match name {
@@ -296,6 +296,7 @@ fn option_flag<'a>(options: &'a mut ShellOptions, name: &str) -> Option<&'a mut 
         "nounset" | "u" => Some(&mut options.nounset),
         "xtrace" | "x" => Some(&mut options.xtrace),
         "pipefail" => Some(&mut options.pipefail),
+        "vi" => Some(&mut options.vi),
         _ => None,
     }
 }
@@ -338,6 +339,10 @@ pub(super) fn set(shell: &mut Shell, args: &[String], out: &mut dyn Write) -> i3
                     return 0;
                 };
                 index += 1;
+                if name == "emacs" {
+                    shell.options.vi = !enable;
+                    continue;
+                }
                 match option_flag(&mut shell.options, name) {
                     Some(option) => *option = enable,
                     None => {

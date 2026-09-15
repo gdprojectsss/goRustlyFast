@@ -5,6 +5,7 @@ use crate::shell::{self, Shell};
 mod control;
 mod directory;
 mod getopts;
+mod interactive;
 mod jobs;
 mod output;
 mod printf;
@@ -64,6 +65,10 @@ const BUILTINS: &[&str] = &[
     "exec",
     "umask",
     "ulimit",
+    "configure-prompt",
+    "abbr",
+    "bindkey",
+    "complete",
 ];
 
 pub(crate) fn is_builtin(name: &str) -> bool {
@@ -111,6 +116,14 @@ pub(crate) fn run(shell: &mut Shell, argv: &[String]) -> i32 {
         "getopts" => getopts::run(shell, args),
         "mapfile" | "readarray" => script::mapfile(shell, args),
         "umask" => system::umask(args, &mut out),
+        "abbr" => interactive::abbr(shell, args, &mut out),
+        "bindkey" => interactive::bindkey(shell, args, &mut out),
+        "complete" => interactive::complete(shell, args, &mut out),
+        "configure-prompt" => {
+            drop(out);
+            let directory = crate::repl::config_dir();
+            return crate::repl::theme::wizard::run(shell, &directory, args);
+        }
         "ulimit" => system::ulimit(args, &mut out),
         "test" | "[" => test::run(shell, &argv[0], args),
         "trap" => trap::run(shell, args, &mut out),

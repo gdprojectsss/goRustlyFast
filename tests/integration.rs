@@ -764,3 +764,43 @@ fn time_wait_next_and_umask() {
     assert!(error.contains("real\t"));
     assert_eq!(out, "0027\nnext=0\n");
 }
+
+#[test]
+fn configure_prompt_presets_write_a_theme_file() {
+    let home = "/tmp/grfsh_theme_test_home";
+    let _ = std::fs::remove_dir_all(home);
+    std::fs::create_dir_all(home).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_grfsh"))
+        .args([
+            "-c",
+            "configure-prompt --preset pure; configure-prompt --preset nope",
+        ])
+        .env("HOME", home)
+        .env_remove("XDG_CONFIG_HOME")
+        .output()
+        .expect("failed to run grfsh");
+    let theme = std::fs::read_to_string(format!("{home}/.config/grfsh/theme")).unwrap();
+    assert!(theme.contains("lines = 2"));
+    assert!(theme.contains("transient = true"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unknown preset 'nope'"));
+    let _ = std::fs::remove_dir_all(home);
+}
+
+#[test]
+fn abbr_bindkey_and_complete_definitions() {
+    let (out, error, _) = run_command(
+        "abbr gco git checkout; abbr; bindkey ^G clear-screen; bindkey ^G fly; bindkey -s ^T 'echo hi'; bindkey; complete -W 'start stop' svc; complete -p",
+    );
+    assert!(out.contains("abbr gco 'git checkout'"));
+    assert!(out.contains("bindkey '^G' clear-screen"));
+    assert!(out.contains("bindkey -s '^T' 'echo hi'"));
+    assert!(out.contains("complete -W 'start stop' svc"));
+    assert!(error.contains("fly: unknown action"));
+}
+
+#[test]
+fn hooks_run_on_directory_change() {
+    let (out, _, _) = run_command("chpwd() { echo now in $PWD; }; cd /tmp; cd /tmp");
+    assert!(out.trim_end().ends_with("tmp"));
+    assert_eq!(out.lines().count(), 1);
+}

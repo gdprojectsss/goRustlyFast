@@ -8,6 +8,7 @@ pub(crate) struct ShellNames {
     pub variables: Vec<String>,
     pub aliases: Vec<String>,
     pub jobs: Vec<String>,
+    pub specs: std::collections::BTreeMap<String, crate::shell::CompletionSpec>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -28,6 +29,7 @@ pub(super) enum Target {
     Files,
     Words(Vec<String>),
     WordsAndFiles(Vec<String>),
+    WordsAndDirectories(Vec<String>),
 }
 
 const COMMAND_PREFIXES: &[&str] = &["sudo", "time", "command", "exec", "nohup", "nice", "env"];
@@ -97,6 +99,47 @@ fn command_words(words: &[String]) -> &[String] {
     }
 }
 
+fn run_generator(source: &str, request: &Request) -> Vec<String> {
+    let line: Vec<&str> = request.words.iter().map(String::as_str).collect();
+    std::process::Command::new("sh")
+        .args(["-c", source])
+        .env(
+            "COMP_LINE",
+            format!("{} {}", line.join(" "), request.current),
+        )
+        .env("COMP_WORD", &request.current)
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .map(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .split_whitespace()
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+pub(super) fn target_with(request: &Request, names: &ShellNames) -> Target {
+    let words = command_words(&request.words);
+    if let Some(command) = words.first()
+        && let Some(spec) = names.specs.get(command)
+        && !request.current.starts_with('$')
+    {
+        let mut candidates = spec.words.clone();
+        if let Some(source) = &spec.command {
+            candidates.extend(run_generator(source, request));
+        }
+        return match (spec.directories, spec.files) {
+            (_, true) => Target::WordsAndFiles(candidates),
+            (true, false) if candidates.is_empty() => Target::Directories,
+            (true, false) => Target::WordsAndDirectories(candidates),
+            (false, false) => Target::Words(candidates),
+        };
+    }
+    target(request)
+}
+
 pub(super) fn target(request: &Request) -> Target {
     if let Some(prefix) = request.current.strip_prefix('$') {
         return Target::Variables {
@@ -150,7 +193,9 @@ pub(super) fn candidates(target: &Target, current: &str, names: &ShellNames) -> 
         Target::VariableNames => names.variables.clone(),
         Target::Aliases => names.aliases.clone(),
         Target::Jobs => names.jobs.clone(),
-        Target::Words(words) | Target::WordsAndFiles(words) => words.clone(),
+        Target::Words(words)
+        | Target::WordsAndFiles(words)
+        | Target::WordsAndDirectories(words) => words.clone(),
         Target::Directories | Target::Files => Vec::new(),
     };
     let mut matches: Vec<String> = pool

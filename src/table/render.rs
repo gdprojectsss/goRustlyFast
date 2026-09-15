@@ -1,3 +1,5 @@
+use crate::text::{display_width, truncate_to_width};
+
 use super::data::Table;
 use super::value::Value;
 
@@ -15,7 +17,7 @@ pub(crate) enum Style {
 }
 
 fn width_of(text: &str) -> usize {
-    text.chars().count()
+    display_width(text)
 }
 
 fn fit(text: &str, width: usize) -> String {
@@ -23,9 +25,9 @@ fn fit(text: &str, width: usize) -> String {
         return text.to_string();
     }
     if width <= ELLIPSIS.len() {
-        return text.chars().take(width).collect();
+        return truncate_to_width(text, width);
     }
-    let kept: String = text.chars().take(width - ELLIPSIS.len()).collect();
+    let kept = truncate_to_width(text, width - ELLIPSIS.len());
     format!("{kept}{ELLIPSIS}")
 }
 
@@ -226,6 +228,16 @@ mod tests {
         let mut table = Table::new(vec!["tag".into()]);
         table.push(vec![Value::Text("<b>&".into())]);
         assert!(html(&table).contains("<td>&lt;b&gt;&amp;</td>"));
+    }
+
+    #[test]
+    fn wide_characters_align() {
+        let mut table = Table::new(vec!["name".into(), "n".into()]);
+        table.push(vec![Value::Text("\u{65e5}\u{672c}".into()), Value::Int(1)]);
+        table.push(vec![Value::Text("ab".into()), Value::Int(2)]);
+        let text = render(&table, Style::Plain, None, 0);
+        let widths: Vec<usize> = text.lines().map(display_width).collect();
+        assert_eq!(widths, [7, 7, 7]);
     }
 
     #[test]

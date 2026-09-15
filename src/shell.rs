@@ -24,6 +24,7 @@ pub struct ShellOptions {
     pub nounset: bool,
     pub xtrace: bool,
     pub pipefail: bool,
+    pub vi: bool,
     pub globstar: bool,
     pub nullglob: bool,
     pub dotglob: bool,
@@ -40,6 +41,20 @@ impl ShellOptions {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum KeyBinding {
+    Action(String),
+    Insert(String),
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CompletionSpec {
+    pub words: Vec<String>,
+    pub command: Option<String>,
+    pub directories: bool,
+    pub files: bool,
+}
+
 pub struct Shell {
     pub aliases: HashMap<String, String>,
     pub variables: HashMap<String, String>,
@@ -48,6 +63,11 @@ pub struct Shell {
     pub pending_declarations: Vec<Evaluated>,
     pub getopts_offset: usize,
     pub current_line: usize,
+    pub running_hook: bool,
+    pub abbreviations: std::collections::BTreeMap<String, String>,
+    pub key_bindings: Vec<(String, KeyBinding)>,
+    pub bindings_version: u64,
+    pub completion_specs: std::collections::BTreeMap<String, CompletionSpec>,
     pub pipe_statuses: Vec<i32>,
     pub substitution_fds: Vec<i32>,
     pub substitution_pids: Vec<i32>,
@@ -91,6 +111,11 @@ impl Shell {
             pending_declarations: Vec::new(),
             getopts_offset: 0,
             current_line: 0,
+            running_hook: false,
+            abbreviations: std::collections::BTreeMap::new(),
+            key_bindings: Vec::new(),
+            bindings_version: 0,
+            completion_specs: std::collections::BTreeMap::new(),
             pipe_statuses: Vec::new(),
             substitution_fds: Vec::new(),
             substitution_pids: Vec::new(),

@@ -201,6 +201,37 @@ impl Shell {
         }
     }
 
+    pub(crate) fn run_hook(&mut self, name: &str, args: &[String]) {
+        if self.running_hook {
+            return;
+        }
+        let mut functions: Vec<String> = Vec::new();
+        if self.functions.contains_key(name) {
+            functions.push(name.to_string());
+        }
+        if let Some(array) = self.arrays.get(&format!("{name}_functions")) {
+            functions.extend(array.values());
+        }
+        if functions.is_empty() {
+            return;
+        }
+        self.running_hook = true;
+        let status = self.last_status;
+        for function in functions {
+            if let Some(body) = self.functions.get(&function).cloned() {
+                let argv: Vec<String> = std::iter::once(function)
+                    .chain(args.iter().cloned())
+                    .collect();
+                self.call_function(&body, &argv);
+            }
+        }
+        if self.flow == Flow::Return {
+            self.flow = Flow::Normal;
+        }
+        self.last_status = status;
+        self.running_hook = false;
+    }
+
     pub(crate) fn run_exit_trap(&mut self) {
         if let Some(command) = self.traps.remove("EXIT")
             && !command.is_empty()
