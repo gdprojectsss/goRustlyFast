@@ -36,6 +36,7 @@ pub struct Shell {
     pub source_depth: u32,
     pub path_commands: Option<(String, Vec<String>)>,
     pub directories: DirectoryHistory,
+    pub pipe_to_table: bool,
 }
 
 impl Shell {
@@ -61,6 +62,7 @@ impl Shell {
             loop_depth: 0,
             source_depth: 0,
             path_commands: None,
+            pipe_to_table: false,
             directories: DirectoryHistory::new(
                 std::env::var_os("HOME")
                     .map(|home| std::path::Path::new(&home).join(".grfsh_dirs")),

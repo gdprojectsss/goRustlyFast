@@ -8,6 +8,7 @@ use crate::shell::{self, Flow, Shell};
 use crate::syntax::ast::*;
 use crate::syntax::parser;
 use crate::sys;
+use crate::table;
 
 mod process;
 mod redirect;
@@ -278,6 +279,11 @@ impl Shell {
                 shell.with_temp_env(&assignments, |shell| builtins::run(shell, &argv))
             });
         }
+        if !bypass_functions && table::is_command(name) {
+            return self.with_redirects(redirects, |shell| {
+                shell.with_temp_env(&assignments, |shell| table::run(shell, &argv))
+            });
+        }
 
         let resolved = self.resolve(name);
         if self.interactive
@@ -348,7 +354,8 @@ impl Shell {
             .chain(self.functions.keys())
             .chain(self.aliases.keys())
             .map(String::as_str)
-            .chain(builtins::names().iter().copied());
+            .chain(builtins::names().iter().copied())
+            .chain(table::names().iter().copied());
         commands::closest(name, candidates).map(String::from)
     }
 

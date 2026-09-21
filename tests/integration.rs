@@ -429,3 +429,61 @@ fn pipeline_writers_die_quietly_on_closed_pipe() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+fn write_fixture(name: &str, contents: &str) -> String {
+    let path = format!("/tmp/grfsh_fixture_{name}");
+    std::fs::write(&path, contents).unwrap();
+    path
+}
+
+#[test]
+fn csv_filter_sort_and_convert() {
+    let path = write_fixture(
+        "langs.csv",
+        "name,lang,stars\ngrfsh,rust,12\nnu,rust,30000\nbash,c,999\n",
+    );
+    let out = run(&format!(
+        "load {path} | where lang == rust | sort-by stars -r | get name\n"
+    ));
+    assert_eq!(out.trim(), "nu\ngrfsh");
+    let json = run(&format!("load {path} | where stars -lt 1000 | to json\n"));
+    assert_eq!(
+        json.trim(),
+        r#"[{"name":"grfsh","lang":"rust","stars":12},{"name":"bash","lang":"c","stars":999}]"#
+    );
+}
+
+#[test]
+fn files_where_size_uses_units() {
+    let directory = "/tmp/grfsh_fixture_sizes";
+    let _ = std::fs::remove_dir_all(directory);
+    std::fs::create_dir_all(directory).unwrap();
+    std::fs::write(format!("{directory}/small.txt"), vec![b'x'; 100]).unwrap();
+    std::fs::write(format!("{directory}/large.bin"), vec![b'x'; 5000]).unwrap();
+    let out = run(&format!(
+        "files {directory} | where 'size > 1kb' | get name\n"
+    ));
+    assert_eq!(out.trim(), "large.bin");
+}
+
+#[test]
+fn external_text_is_parsed_into_columns() {
+    let out = run("printf 'NAME AGE\\nann 31\\nbob 27\\n' | where AGE -gt 30 | get NAME\n");
+    assert_eq!(out.trim(), "ann");
+}
+
+#[test]
+fn tables_print_as_aligned_text_when_piped() {
+    let out = run("printf '[{\"a\":1,\"b\":\"x\"}]' | from json | first 1 | cat\n");
+    assert_eq!(out.trim_end(), "a  b\n1  x");
+}
+
+#[test]
+fn table_errors_name_the_command() {
+    let output = Command::new(env!("CARGO_BIN_EXE_grfsh"))
+        .args(["-c", "echo 'x y' | where nope == 1"])
+        .output()
+        .expect("failed to run grfsh");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("where: no column 'nope'"));
+    assert_eq!(output.status.code(), Some(1));
+}
