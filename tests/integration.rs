@@ -804,3 +804,17 @@ fn hooks_run_on_directory_change() {
     assert!(out.trim_end().ends_with("tmp"));
     assert_eq!(out.lines().count(), 1);
 }
+
+#[test]
+fn check_reports_problems_without_running() {
+    let path = write_fixture(
+        "check.sh",
+        "touch /tmp/grfsh_check_should_not_exist\nlet total=1\nmystery-tool --go\n",
+    );
+    let _ = std::fs::remove_file("/tmp/grfsh_check_should_not_exist");
+    let (out, status) = run_args(&["--check", &path]);
+    assert!(out.contains(":2: error: 'let' is not supported"));
+    assert!(out.contains(":3: warning: 'mystery-tool'"));
+    assert_eq!(status, 1);
+    assert!(!std::path::Path::new("/tmp/grfsh_check_should_not_exist").exists());
+}

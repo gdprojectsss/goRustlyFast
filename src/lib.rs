@@ -1,4 +1,5 @@
 mod builtins;
+mod check;
 mod commands;
 mod directories;
 mod exec;

@@ -109,6 +109,12 @@ pub(super) fn describe(shell: &Shell, args: &[String], out: &mut dyn Write, shor
 pub(super) fn history(shell: &mut Shell, args: &[String], out: &mut dyn Write) -> i32 {
     let count = match args.first().map(String::as_str) {
         None => shell.history.len(),
+        Some("-t") | Some("--table") => {
+            let contents =
+                std::fs::read_to_string(crate::repl::command_log_path()).unwrap_or_default();
+            let _ = out.flush();
+            return crate::table::command_log(shell, &contents);
+        }
         Some("-c") => {
             shell.history.clear();
             shell.history_cleared = true;

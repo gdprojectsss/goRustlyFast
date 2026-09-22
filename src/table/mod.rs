@@ -18,6 +18,7 @@ use crate::sys;
 use data::Table;
 use json::Json;
 use render::Style;
+use value::Value;
 
 const COMMANDS: &[&str] = &[
     "files", "procs", "load", "from", "to", "where", "sort-by", "select", "reject", "first",
@@ -108,6 +109,53 @@ pub(crate) fn run(shell: &mut Shell, argv: &[String]) -> i32 {
             1
         }
     }
+}
+
+fn unescape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(character) = chars.next() {
+        if character != '\\' {
+            out.push(character);
+            continue;
+        }
+        match chars.next() {
+            Some('t') => out.push('\t'),
+            Some('n') => out.push('\n'),
+            Some(other) => out.push(other),
+            None => out.push('\\'),
+        }
+    }
+    out
+}
+
+pub(crate) fn command_log(shell: &Shell, contents: &str) -> i32 {
+    let mut table = Table::new(vec![
+        "when".into(),
+        "duration".into(),
+        "status".into(),
+        "directory".into(),
+        "command".into(),
+    ]);
+    for line in contents.lines() {
+        let fields: Vec<&str> = line.splitn(5, '\t').collect();
+        let [started, milliseconds, status, directory, command] = fields.as_slice() else {
+            continue;
+        };
+        table.push(vec![
+            started.parse().map_or(Value::Nothing, Value::Date),
+            milliseconds
+                .parse::<f64>()
+                .map_or(Value::Nothing, |milliseconds| {
+                    Value::Float(milliseconds / 1000.0)
+                }),
+            status.parse().map_or(Value::Nothing, Value::Int),
+            Value::Text(unescape(directory)),
+            Value::Text(unescape(command)),
+        ]);
+    }
+    emit(shell, Output::Table(table));
+    0
 }
 
 fn emit(shell: &Shell, output: Output) {

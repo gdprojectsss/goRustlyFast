@@ -23,7 +23,7 @@ use completion::ShellNames;
 use helper::ShellHelper;
 use prompt::PromptState;
 
-const USAGE: &str = "usage: grfsh [-l] [-i] [-c command [name [args...]]] [script [args...]]";
+const USAGE: &str = "usage: grfsh [-l] [-i] [-c command [name [args...]]] [script [args...]]\n       grfsh --check script...";
 
 pub fn run() -> i32 {
     let mut args: Vec<String> = std::env::args().collect();
@@ -49,6 +49,7 @@ pub fn run() -> i32 {
             println!("{USAGE}");
             0
         }
+        Some("--check") => crate::check::run(&args[1..]),
         Some("-V") | Some("--version") => {
             println!("grfsh {}", env!("CARGO_PKG_VERSION"));
             0
@@ -263,8 +264,10 @@ fn interactive(shell: &mut Shell) {
                 shell.history.push(line.trim().to_string());
                 shell.run_hook("preexec", std::slice::from_ref(&line));
                 let started = Instant::now();
+                let directory = std::env::var("PWD").unwrap_or_default();
                 shell.run_source(&line);
                 duration = started.elapsed();
+                record_command(&line, &directory, duration, shell.last_status);
                 if shell.flow == Flow::Interrupted {
                     shell.last_status = 128 + libc::SIGINT;
                 }
@@ -315,6 +318,47 @@ fn apply_bindings(
             editor.bind_sequence(key, EventHandler::Simple(command));
         }
     }
+}
+
+pub(crate) fn command_log_path() -> PathBuf {
+    std::env::var_os("XDG_DATA_HOME")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home_dir().join(".local/share"))
+        .join("grfsh/commands.tsv")
+}
+
+fn record_command(line: &str, directory: &str, duration: Duration, status: i32) {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let path = command_log_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .open(&path)
+    else {
+        return;
+    };
+    let escape = |text: &str| {
+        text.replace('\\', "\\\\")
+            .replace('\t', "\\t")
+            .replace('\n', "\\n")
+    };
+    let started = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs())
+        .saturating_sub(duration.as_secs());
+    let _ = writeln!(
+        file,
+        "{started}\t{}\t{status}\t{}\t{}",
+        duration.as_millis(),
+        escape(directory),
+        escape(line.trim())
+    );
 }
 
 fn load_plugins(shell: &mut Shell) {
