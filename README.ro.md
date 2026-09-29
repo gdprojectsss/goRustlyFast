@@ -29,7 +29,7 @@
 <br>
 
 > [!NOTE]
-> grfsh e un shell tanar. Ruleaza scripturi reale si e placut de folosit interactiv, dar nu acopera inca tot ce face bash: lipsesc `getopts`, array-urile asociative si process substitution. Tine bash-ul la indemana pentru scripturile de sistem.
+> grfsh e un shell tanar. Ruleaza scripturi reale si e placut de folosit interactiv, dar nu acopera inca tot ce face bash (lipsesc extglob, coprocesele si `select`). Ruleaza `grfsh --check script.sh` ca sa vezi daca un script foloseste ceva ce grfsh nu stie.
 
 ## Ce e grfsh?
 
@@ -143,7 +143,9 @@ alias gs='git status'
 mkcd() { mkdir -p "$1" && cd "$1"; }
 ```
 
-Seteaza `GRFSH_PROMPT` ca sa-ti faci promptul cum vrei. Placeholder-e: `{user}`, `{host}`, `{cwd}`, `{branch}`, `{git}`, `{status}`, `{duration}`, `{jobs}` si culorile `{green}`, `{blue}`, `{magenta}`, `{cyan}`, `{red}`, `{yellow}`, `{bold}`, `{reset}`.
+Pentru teme ruleaza `configure-prompt`, un wizard scurt cu previzualizari, sau alege direct un preset: `configure-prompt --preset rainbow`. Preset-uri: `lean`, `classic`, `rainbow`, `pure`, `minimal`. Rezultatul e un fisier simplu in `~/.config/grfsh/theme` pe care il poti edita. Ai si hook-uri (`precmd`, `preexec`, `chpwd`), `abbr`, `bindkey`, `complete`, `set -o vi` si plugin-uri in `~/.config/grfsh/plugins/`.
+
+Fara fisier de tema, seteaza `GRFSH_PROMPT` ca sa-ti faci promptul cum vrei. Placeholder-e: `{user}`, `{host}`, `{cwd}`, `{branch}`, `{git}`, `{status}`, `{duration}`, `{jobs}` si culorile `{green}`, `{blue}`, `{magenta}`, `{cyan}`, `{red}`, `{yellow}`, `{bold}`, `{reset}`.
 
 Built-in-uri: `cd`, `z`, `pushd`, `popd`, `dirs`, `pwd`, `printf`, `test`, `[`, `trap`, `history`, `echo`, `exit`, `export`, `unset`, `local`, `set`, `shift`, `read`, `source`, `.`, `eval`, `alias`, `unalias`, `type`, `command`, `return`, `break`, `continue`, `jobs`, `fg`, `bg`, `wait`, `kill`, `true`, `false`, `:`
 
@@ -160,9 +162,11 @@ Built-in-uri: `cd`, `z`, `pushd`, `popd`, `dirs`, `pwd`, `printf`, `test`, `[`, 
 | 4 | `trap`, `set -euo pipefail`, `printf`, `pushd`, history expansion | gata |
 | 4 | Prompt git asincron, benchmark-uri, bucle si string-uri mai rapide | gata |
 | 4 | `group-by`, `uniq-by`, `math`, `update`, login shell, release-uri | gata |
-| 5 | `getopts`, `declare`, array-uri asociative, `$PIPESTATUS`, glob `**`, mod vi | planificat |
-| 5 | Hook-uri de prompt, prompt in dreapta, starship, teme oh-my-zsh | planificat |
-| 5 | `grfsh --check` pentru scripturi, istoric interogabil ca tabel, plugin-uri | planificat |
+| 5 | `getopts`, `declare`, array-uri asociative, `$PIPESTATUS`, glob `**`, process substitution | gata |
+| 5 | Teme native, prompt in dreapta si tranzitoriu, `configure-prompt`, hook-uri, mod vi | gata |
+| 5 | `grfsh --check`, istoric interogabil ca tabel, plugin-uri, `abbr`, `bindkey` | gata |
+| 6 | Teste de conformitate si diferentiale, fuzzing, intarire | planificat |
+| 6 | Release-uri, pachete, pagina man, site de documentatie, ghiduri de migrare | planificat |
 
 ## Contributii
 

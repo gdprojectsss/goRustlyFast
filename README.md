@@ -33,7 +33,7 @@
 <br>
 
 > [!NOTE]
-> grfsh is a young shell. It runs real scripts and makes a pleasant interactive shell, but it does not cover all of bash yet: `getopts`, associative arrays and process substitution are still missing. Keep bash around for system scripts.
+> grfsh is a young shell. It runs real scripts and makes a pleasant interactive shell, but it does not cover all of bash yet (extglob, coprocesses and `select` are missing). Run `grfsh --check script.sh` to see whether a script uses anything grfsh cannot run.
 
 ## What is grfsh?
 
@@ -180,19 +180,19 @@ flowchart LR
 <td width="50%" valign="top">
 
 **Scripting**
-- `if`, `while`, `until`, `for`, `case`, `[[ ]]`, `test`, functions
-- `${x#pat}`, `${x%pat}`, `${x/a/b}`, `${x^^}`, `${x:1:3}`, `${x:-y}`
-- Indexed arrays, brace expansion `{a,b}` and `{1..10}`, `$((math))`
-- `trap`, `set -euo pipefail`, `set -x`, `printf`, `read`, `source`
+- `if`, `while`, `for`, `case`, `[[ ]]`, functions, `getopts`, `trap`
+- `${x#pat}`, `${x/a/b}`, `${x^^}`, `${x:1:3}`, `$((math))`, `{1..10}`
+- Indexed and associative arrays, `declare`, `readonly`, `mapfile`
+- `<(cmd)`, `exec 3>file`, `set -euo pipefail`, `$PIPESTATUS`, `time`
 
 </td>
 <td width="50%" valign="top">
 
 **Interactive**
-- Autosuggestions, syntax highlighting, multiline input
-- Completion for git, cargo, ssh, make, `$VARS`, `%jobs`
-- `z` for frecent directories, typing a directory enters it
-- "did you mean" for mistyped commands, `!!` and `!$` history expansion
+- Themes with segments, right and transient prompts, `configure-prompt`
+- Autosuggestions, highlighting, vi mode, `abbr`, `bindkey`
+- Completion for git, cargo, ssh, make and your own `complete` rules
+- `z`, "did you mean", `!!` expansion, `history --table`
 
 </td>
 </tr>
@@ -230,7 +230,38 @@ alias gs='git status'
 mkcd() { mkdir -p "$1" && cd "$1"; }
 ```
 
-Set `GRFSH_PROMPT` to customize the prompt. Placeholders: `{user}`, `{host}`, `{cwd}`, `{branch}`, `{dirty}`, `{git}`, `{status}`, `{duration}`, `{jobs}` and the colors `{green}`, `{blue}`, `{magenta}`, `{cyan}`, `{red}`, `{yellow}`, `{bold}`, `{reset}`.
+### Prompt themes
+
+Run `configure-prompt` for a short wizard with live previews, or pick a preset with `configure-prompt --preset rainbow`. Presets: `lean`, `classic`, `rainbow`, `pure` and `minimal`. The result is a plain file in `~/.config/grfsh/theme` that you can edit; changes show at the next prompt.
+
+```ini
+style = lean            # lean, classic or rainbow
+icons = nerd            # nerd, unicode or ascii
+lines = 1
+transient = true
+left = context dir git
+right = status duration jobs venv rust node python go time
+color.dir = #61afef
+```
+
+Segments only appear when they have something to say: `status` after a failure, `duration` for slow commands, `rust` inside a cargo project. Set `engine = starship` to draw the prompt with [starship](https://starship.rs) instead.
+
+### Hooks, keys and completion
+
+```sh
+precmd() { printf '\033]0;%s\007' "${PWD##*/}"; }   # runs before each prompt
+chpwd() { ls; }                                      # runs after the directory changes
+abbr gco 'git checkout'                              # expands when the line is submitted
+bindkey '^G' clear-screen                            # bindkey -l lists actions
+complete -W 'start stop restart status' svc          # also -C 'command', -d, -f
+set -o vi
+```
+
+Plugins are directories in `~/.config/grfsh/plugins/` with an `init.grfsh` file, loaded in order at startup.
+
+### Classic prompt variable
+
+Without a theme file, `GRFSH_PROMPT` customizes the default prompt. Placeholders: `{user}`, `{host}`, `{cwd}`, `{branch}`, `{dirty}`, `{git}`, `{status}`, `{duration}`, `{jobs}` and the colors `{green}`, `{blue}`, `{magenta}`, `{cyan}`, `{red}`, `{yellow}`, `{bold}`, `{reset}`.
 
 ```sh
 export GRFSH_PROMPT='{blue}{cwd}{reset} {git}{red}{status}{reset}> '
@@ -241,7 +272,7 @@ export GRFSH_PROMPT='{blue}{cwd}{reset} {git}{red}{status}{reset}> '
 
 <br>
 
-`cd`, `z`, `pushd`, `popd`, `dirs`, `pwd`, `printf`, `test`, `[`, `trap`, `history`, `echo`, `exit`, `export`, `unset`, `local`, `set`, `shift`, `read`, `source`, `.`, `eval`, `alias`, `unalias`, `type`, `command`, `return`, `break`, `continue`, `jobs`, `fg`, `bg`, `wait`, `kill`, `true`, `false`, `:`
+`cd`, `z`, `pushd`, `popd`, `dirs`, `pwd`, `printf`, `test`, `[`, `trap`, `history`, `declare`, `typeset`, `readonly`, `getopts`, `shopt`, `mapfile`, `readarray`, `exec`, `umask`, `ulimit`, `abbr`, `bindkey`, `complete`, `configure-prompt`, `echo`, `exit`, `export`, `unset`, `local`, `set`, `shift`, `read`, `source`, `.`, `eval`, `alias`, `unalias`, `type`, `command`, `return`, `break`, `continue`, `jobs`, `fg`, `bg`, `wait`, `kill`, `true`, `false`, `:`
 
 </details>
 
@@ -257,7 +288,8 @@ src/
   exec/      running commands, pipelines, redirections, processes
   builtins/  builtin commands
   table/     typed values, table commands, JSON and CSV, rendering
-  repl/      prompt, completion, highlighting, the interactive loop
+  repl/      prompt themes, completion, highlighting, keys, the interactive loop
+  check.rs   static checks behind grfsh --check
 ```
 
 </details>
@@ -275,9 +307,11 @@ src/
 | 4 | `trap`, `set -euo pipefail`, `printf`, `pushd`, history expansion | done |
 | 4 | Async git prompt, benchmarks, loop and string speedups, fuzz style tests | done |
 | 4 | `group-by`, `uniq-by`, `math`, `update`, login shell, release packaging | done |
-| 5 | `getopts`, `declare`, associative arrays, `$PIPESTATUS`, `**` globs, vi mode | planned |
-| 5 | Prompt hooks, right prompt, starship support, oh-my-zsh theme compatibility | planned |
-| 5 | `grfsh --check` for scripts, queryable history table, plugins | planned |
+| 5 | `getopts`, `declare`, associative arrays, `$PIPESTATUS`, `**` globs, process substitution | done |
+| 5 | Native themes, right and transient prompts, `configure-prompt`, hooks, vi mode | done |
+| 5 | `grfsh --check` for scripts, queryable history table, plugins, `abbr`, `bindkey` | done |
+| 6 | Conformance and differential tests, fuzzing, hardening | planned |
+| 6 | Releases, packages, man page, docs site, migration guides | planned |
 
 ## Star history
 
