@@ -1,0 +1,5 @@
+indented world
+raw $name `date`
+loop 1
+loop 2
+--- exit 0

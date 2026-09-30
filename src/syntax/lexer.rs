@@ -11,6 +11,7 @@ pub enum Token {
     Newline,
     Redirect(i32, RedirectKind),
     Heredoc { fd: i32, index: usize },
+    Arithmetic(String),
     Eof,
 }
 
@@ -250,6 +251,11 @@ impl Lexer {
                     let operator = if self.eat(';') { ";;" } else { ";" };
                     self.push(Token::Operator(operator), start);
                 }
+                '(' if self.peek_at(1) == Some('(') => {
+                    self.position += 2;
+                    let source = self.scan_arithmetic()?;
+                    self.push(Token::Arithmetic(source), start);
+                }
                 '(' => {
                     self.position += 1;
                     self.push(Token::Operator("("), start);
@@ -451,6 +457,11 @@ impl Lexer {
                     }
                     parts.into_iter().for_each(|part| word.part(part));
                 }
+                '$' if self.peek() == Some('\'') => {
+                    self.position += 1;
+                    let text = self.ansi_quoted()?;
+                    word.quoted_text(&text);
+                }
                 '$' => {
                     let part = self.dollar(false)?;
                     word.part(part);
@@ -480,6 +491,57 @@ impl Lexer {
             }
         }
         Ok(word.finish())
+    }
+
+    fn ansi_quoted(&mut self) -> Result<String, ParseError> {
+        let mut text = String::new();
+        loop {
+            let character = self
+                .bump()
+                .ok_or_else(|| ParseError::incomplete("unclosed $'"))?;
+            if character == '\'' {
+                return Ok(text);
+            }
+            if character != '\\' {
+                text.push(character);
+                continue;
+            }
+            let escaped = self
+                .bump()
+                .ok_or_else(|| ParseError::incomplete("unclosed $'"))?;
+            let mut digits = |radix: u32, limit: usize, first: Option<char>| {
+                let mut value = first.and_then(|digit| digit.to_digit(radix)).unwrap_or(0);
+                let mut count = usize::from(first.is_some());
+                while count < limit
+                    && let Some(digit) = self.peek().and_then(|next| next.to_digit(radix))
+                {
+                    value = value * radix + digit;
+                    self.position += 1;
+                    count += 1;
+                }
+                char::from_u32(value).unwrap_or('\u{fffd}')
+            };
+            match escaped {
+                'n' => text.push('\n'),
+                't' => text.push('\t'),
+                'r' => text.push('\r'),
+                'a' => text.push('\x07'),
+                'b' => text.push('\x08'),
+                'e' | 'E' => text.push('\x1b'),
+                'f' => text.push('\x0c'),
+                'v' => text.push('\x0b'),
+                'x' => text.push(digits(16, 2, None)),
+                'u' => text.push(digits(16, 4, None)),
+                'U' => text.push(digits(16, 8, None)),
+                '0'..='7' => text.push(digits(8, 3, Some(escaped))),
+                'c' => {
+                    if let Some(control) = self.bump() {
+                        text.push(char::from((control.to_ascii_uppercase() as u8) ^ 0x40));
+                    }
+                }
+                other => text.push(other),
+            }
+        }
     }
 
     fn single_quoted(&mut self) -> Result<String, ParseError> {
@@ -912,6 +974,15 @@ mod tests {
                 source: "echo $(date) ')'".into(),
                 quoted: false
             }]
+        );
+    }
+
+    #[test]
+    fn ansi_c_quoting() {
+        let word = words("$'tab\\there\\x41\\101\\'q'");
+        assert_eq!(
+            word[0].parts,
+            vec![WordPart::Quoted("tab\there\u{41}A'q".into())]
         );
     }
 

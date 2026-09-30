@@ -1,0 +1,4 @@
+err trap
+after
+exit trap
+--- exit 0

@@ -1,0 +1,5 @@
+a=none
+b=value
+c=file
+rest: rest1 rest2
+--- exit 0

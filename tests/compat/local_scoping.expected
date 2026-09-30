@@ -1,0 +1,6 @@
+g sees: f
+f: changed-by-g
+after: global
+3
+list outside: []
+--- exit 0

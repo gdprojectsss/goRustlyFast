@@ -18,6 +18,9 @@ pub fn words(shell: &mut Shell, words: &[Word]) -> Result<Vec<String>, String> {
                 globstar: shell.options.globstar,
             };
             fields.nullglob = shell.options.nullglob;
+            fields.ifs = shell
+                .get_variable("IFS")
+                .unwrap_or_else(|| DEFAULT_IFS.into());
             expand_into(shell, &expanded, &mut fields)?;
             out.extend(fields.finish());
         }
@@ -315,6 +318,11 @@ fn apply(
                 None => None,
             };
             Ok(match value {
+                Expanded::Many(values) if (name == "@" || name == "*") && subscript.is_none() => {
+                    let with_name: Vec<String> =
+                        std::iter::once(shell.arg0.clone()).chain(values).collect();
+                    Expanded::Many(slice(&with_name, offset, length))
+                }
                 Expanded::Many(values) => Expanded::Many(slice(&values, offset, length)),
                 other => other.map(|text| {
                     let chars: Vec<char> = text.chars().collect();
@@ -360,10 +368,33 @@ struct Fields {
     pattern_mode: bool,
     glob_options: glob::GlobOptions,
     nullglob: bool,
+    ifs: String,
 }
 
-fn is_field_separator(character: char) -> bool {
-    matches!(character, ' ' | '\t' | '\n')
+pub(crate) const DEFAULT_IFS: &str = " \t\n";
+
+pub(crate) fn split_ifs(text: &str, ifs: &str, limit: Option<usize>) -> Vec<String> {
+    let white = |character: char| ifs.contains(character) && character.is_whitespace();
+    let hard = |character: char| ifs.contains(character) && !character.is_whitespace();
+    let mut fields = Vec::new();
+    let mut rest = text.trim_start_matches(white);
+    while !rest.is_empty() {
+        if limit.is_some_and(|limit| fields.len() + 1 >= limit) {
+            fields.push(rest.trim_end_matches(white).to_string());
+            break;
+        }
+        let Some(end) = rest.find(|character: char| ifs.contains(character)) else {
+            fields.push(rest.to_string());
+            break;
+        };
+        fields.push(rest[..end].to_string());
+        let mut after = rest[end..].trim_start_matches(white);
+        if let Some(separator) = after.chars().next().filter(|character| hard(*character)) {
+            after = after[separator.len_utf8()..].trim_start_matches(white);
+        }
+        rest = after;
+    }
+    fields
 }
 
 impl Fields {
@@ -378,6 +409,7 @@ impl Fields {
             pattern_mode: false,
             glob_options: glob::GlobOptions::default(),
             nullglob: false,
+            ifs: DEFAULT_IFS.to_string(),
         }
     }
 
@@ -414,24 +446,24 @@ impl Fields {
             self.literal(text);
             return;
         }
-        if !self.split {
+        if !self.split || self.ifs.is_empty() {
             self.quoted(text);
             return;
         }
-        if text.starts_with(is_field_separator) {
+        let ifs = self.ifs.clone();
+        let separator = |character: char| ifs.contains(character);
+        if text.starts_with(separator) {
             self.break_field();
         }
-        let mut pieces = text
-            .split(is_field_separator)
-            .filter(|argument| !argument.is_empty())
-            .peekable();
-        while let Some(piece) = pieces.next() {
-            self.literal(piece);
-            if pieces.peek().is_some() {
+        let pieces = split_ifs(text, &ifs, None);
+        let count = pieces.len();
+        for (index, piece) in pieces.into_iter().enumerate() {
+            self.literal(&piece);
+            if index + 1 < count {
                 self.break_field();
             }
         }
-        if text.ends_with(is_field_separator) {
+        if text.ends_with(separator) {
             self.break_field();
         }
     }
@@ -489,6 +521,20 @@ mod tests {
         assert_eq!(expand(&mut shell, "$x"), ["a", "b", "c"]);
         assert_eq!(expand(&mut shell, "\"$x\""), ["a  b c"]);
         assert_eq!(expand(&mut shell, "pre$x"), ["prea", "b", "c"]);
+    }
+
+    #[test]
+    fn ifs_splitting_rules() {
+        let split = |text: &str, ifs: &str| split_ifs(text, ifs, None);
+        assert_eq!(split("  a  b  ", DEFAULT_IFS), ["a", "b"]);
+        assert_eq!(split("a::b:", ":"), ["a", "", "b"]);
+        assert_eq!(split(":a", ":"), ["", "a"]);
+        assert_eq!(split("a : b", " :"), ["a", "b"]);
+        assert_eq!(split_ifs("x:y:z", ":", Some(2)), ["x", "y:z"]);
+        let mut shell = Shell::new();
+        shell.set_variable("IFS", ",");
+        shell.set_variable("list", "a,b c,d");
+        assert_eq!(expand(&mut shell, "$list"), ["a", "b c", "d"]);
     }
 
     #[test]

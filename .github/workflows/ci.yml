@@ -11,7 +11,11 @@ env:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -24,3 +28,14 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
 
       - run: cargo test
+
+  compat-reference:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Regenerate expected outputs with the system bash
+        run: ./scripts/compat-update.sh
+
+      - name: Expected outputs still match bash
+        run: git diff --exit-code tests/compat

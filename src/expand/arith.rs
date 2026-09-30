@@ -8,9 +8,9 @@ enum Token {
 }
 
 const OPERATORS: &[&str] = &[
-    "**=", "<<=", ">>=", "**", "<<", ">>", "<=", ">=", "==", "!=", "&&", "||", "+=", "-=", "*=",
-    "/=", "%=", "&=", "|=", "^=", "+", "-", "*", "/", "%", "<", ">", "&", "|", "^", "!", "~", "=",
-    "(", ")", "?", ":",
+    "**=", "<<=", ">>=", "**", "<<", ">>", "<=", ">=", "==", "!=", "&&", "||", "++", "--", "+=",
+    "-=", "*=", "/=", "%=", "&=", "|=", "^=", "+", "-", "*", "/", "%", "<", ">", "&", "|", "^",
+    "!", "~", "=", "(", ")", "?", ":",
 ];
 
 fn tokenize(source: &str) -> Result<Vec<Token>, String> {
@@ -206,7 +206,20 @@ impl Evaluator<'_> {
         Ok(left)
     }
 
+    fn step(&mut self, name: &str, delta: i64, return_new: bool) -> Result<i64, String> {
+        let old = self.var(name)?;
+        let new = old.wrapping_add(delta);
+        self.shell.set_variable(name, &new.to_string());
+        Ok(if return_new { new } else { old })
+    }
+
     fn unary(&mut self) -> Result<i64, String> {
+        if let Some(operator @ ("++" | "--")) = self.peek_operator()
+            && let Some(Token::Name(name)) = self.tokens.get(self.position + 1).cloned()
+        {
+            self.position += 2;
+            return self.step(&name, if operator == "++" { 1 } else { -1 }, true);
+        }
         match self.peek_operator() {
             Some("-") => {
                 self.position += 1;
@@ -236,7 +249,17 @@ impl Evaluator<'_> {
             }
             Some(Token::Name(name)) => {
                 self.position += 1;
-                self.var(&name)
+                match self.peek_operator() {
+                    Some("++") => {
+                        self.position += 1;
+                        self.step(&name, 1, false)
+                    }
+                    Some("--") => {
+                        self.position += 1;
+                        self.step(&name, -1, false)
+                    }
+                    _ => self.var(&name),
+                }
             }
             Some(Token::Operator("(")) => {
                 self.position += 1;
@@ -284,6 +307,17 @@ mod tests {
         assert_eq!(eval(&mut shell, "n += 1").unwrap(), 5);
         assert_eq!(shell.get_variable("n").as_deref(), Some("5"));
         assert_eq!(eval(&mut shell, "unset_thing + 1").unwrap(), 1);
+    }
+
+    #[test]
+    fn increments() {
+        let mut shell = Shell::new();
+        shell.set_variable("i", "5");
+        assert_eq!(eval(&mut shell, "i++").unwrap(), 5);
+        assert_eq!(eval(&mut shell, "++i").unwrap(), 7);
+        assert_eq!(eval(&mut shell, "i--").unwrap(), 7);
+        assert_eq!(shell.get_variable("i").as_deref(), Some("6"));
+        assert_eq!(eval(&mut shell, "2 - -1").unwrap(), 3);
     }
 
     #[test]

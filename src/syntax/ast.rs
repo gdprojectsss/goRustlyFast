@@ -166,6 +166,13 @@ pub enum CommandKind {
         arms: Vec<CaseArm>,
     },
     Conditional(Condition),
+    Arithmetic(Word),
+    ArithmeticFor {
+        init: Word,
+        condition: Word,
+        step: Word,
+        body: List,
+    },
     FunctionDefinition {
         name: String,
         body: Rc<Command>,

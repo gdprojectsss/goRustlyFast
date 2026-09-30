@@ -1,5 +1,6 @@
 use std::io::Write;
 
+use crate::expand::{DEFAULT_IFS, split_ifs};
 use crate::shell::{self, Flow, Shell, ShellOptions};
 use crate::syntax::parser::is_name;
 use crate::sys;
@@ -187,7 +188,10 @@ pub(super) fn read(shell: &mut Shell, args: &[String]) -> i32 {
     }
 
     if let Some(array) = &options.array {
-        let fields = line.split_whitespace().map(String::from).collect();
+        let ifs = shell
+            .get_variable("IFS")
+            .unwrap_or_else(|| DEFAULT_IFS.into());
+        let fields = split_ifs(&line, &ifs, None);
         if let Err(message) = shell.set_array(array, Array::indexed(fields)) {
             shell::error(format!("read: {message}"));
             return 1;
@@ -276,15 +280,12 @@ fn remove_backslashes(text: &str) -> String {
 }
 
 fn assign_fields(shell: &mut Shell, names: &[String], line: &str) {
-    let mut rest = line.trim_start_matches([' ', '\t']);
+    let ifs = shell
+        .get_variable("IFS")
+        .unwrap_or_else(|| DEFAULT_IFS.into());
+    let fields = split_ifs(line, &ifs, Some(names.len()));
     for (index, name) in names.iter().enumerate() {
-        if index + 1 == names.len() {
-            shell.set_variable(name, rest.trim_end_matches([' ', '\t']));
-            break;
-        }
-        let end = rest.find([' ', '\t']).unwrap_or(rest.len());
-        shell.set_variable(name, &rest[..end]);
-        rest = rest[end..].trim_start_matches([' ', '\t']);
+        shell.set_variable(name, fields.get(index).map_or("", String::as_str));
     }
 }
 

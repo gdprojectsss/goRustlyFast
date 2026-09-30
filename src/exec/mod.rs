@@ -357,6 +357,55 @@ impl Shell {
                 self.loop_depth -= 1;
                 status
             }
+            CommandKind::Arithmetic(expression) => match expand::arithmetic(self, expression) {
+                Ok(value) => i32::from(value == 0),
+                Err(error) => {
+                    shell::error(error);
+                    1
+                }
+            },
+            CommandKind::ArithmeticFor {
+                init,
+                condition,
+                step,
+                body,
+            } => {
+                let evaluate = |shell: &mut Shell, word: &Word| -> Result<i64, String> {
+                    if word.parts.is_empty() {
+                        Ok(1)
+                    } else {
+                        expand::arithmetic(shell, word)
+                    }
+                };
+                if let Err(error) = evaluate(self, init) {
+                    shell::error(error);
+                    return 1;
+                }
+                let mut status = 0;
+                self.loop_depth += 1;
+                loop {
+                    match evaluate(self, condition) {
+                        Ok(0) => break,
+                        Ok(_) => {}
+                        Err(error) => {
+                            shell::error(error);
+                            status = 1;
+                            break;
+                        }
+                    }
+                    status = self.run_list(body);
+                    if self.loop_should_exit() {
+                        break;
+                    }
+                    if let Err(error) = evaluate(self, step) {
+                        shell::error(error);
+                        status = 1;
+                        break;
+                    }
+                }
+                self.loop_depth -= 1;
+                status
+            }
             CommandKind::Conditional(condition) => match self.evaluate_condition(condition) {
                 Ok(true) => 0,
                 Ok(false) => 1,

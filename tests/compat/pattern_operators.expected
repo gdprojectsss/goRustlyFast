@@ -1,0 +1,5 @@
+libfoo.so.1.2 usr/local/lib/libfoo.so.1.2 /usr/local/lib/libfoo.so.1 /usr/local/lib/libfoo
+/usr/local/LIB/libfoo.so.1.2 /usr/local/LIB/LIBfoo.so.1.2 USR/local/lib/libfoo.so.1.2 /usr/local/lib/libfoo.so.1.two
+Hello HELLO hello XHELLOX
+world wORLD
+--- exit 0

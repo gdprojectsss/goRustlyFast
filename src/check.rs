@@ -76,10 +76,10 @@ fn nested(command: &Command, visit: &mut impl FnMut(&List)) {
             visit(condition);
             visit(body);
         }
-        CommandKind::For { body, .. } => visit(body),
+        CommandKind::For { body, .. } | CommandKind::ArithmeticFor { body, .. } => visit(body),
         CommandKind::Case { arms, .. } => arms.iter().for_each(|arm| visit(&arm.body)),
         CommandKind::FunctionDefinition { body, .. } => nested(body, visit),
-        CommandKind::Simple(_) | CommandKind::Conditional(_) => {}
+        CommandKind::Simple(_) | CommandKind::Conditional(_) | CommandKind::Arithmetic(_) => {}
     }
 }
 

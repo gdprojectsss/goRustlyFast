@@ -123,6 +123,7 @@ impl Parser<'_> {
                 self.tokens[self.position].end,
             ),
             Token::Redirect(..) | Token::Heredoc { .. } => "redirection".to_string(),
+            Token::Arithmetic(_) => "((".to_string(),
         };
         ParseError::syntax(format!("syntax error near '{what}'"))
     }
@@ -243,6 +244,10 @@ impl Parser<'_> {
 
     fn command(&mut self) -> Result<Command> {
         let kind = match self.peek().clone() {
+            Token::Arithmetic(source) => {
+                self.next();
+                CommandKind::Arithmetic(lexer::parse_double_quoted_text(&source)?)
+            }
             Token::Operator("(") => {
                 self.next();
                 let body = self.list(&[")"])?;
@@ -537,6 +542,31 @@ impl Parser<'_> {
 
     fn for_clause(&mut self) -> Result<CommandKind> {
         self.next();
+        if let Token::Arithmetic(source) = self.peek().clone() {
+            self.next();
+            let parts: Vec<&str> = source.split(';').collect();
+            let [init, condition, step] = parts.as_slice() else {
+                return Err(ParseError::syntax(
+                    "for (( )) needs three expressions separated by ';'",
+                ));
+            };
+            let init = lexer::parse_double_quoted_text(init)?;
+            let condition = lexer::parse_double_quoted_text(condition)?;
+            let step = lexer::parse_double_quoted_text(step)?;
+            if self.is_operator(";") {
+                self.next();
+            }
+            self.skip_newlines();
+            self.expect_keyword("do")?;
+            let body = self.list(&["done"])?;
+            self.expect_keyword("done")?;
+            return Ok(CommandKind::ArithmeticFor {
+                init,
+                condition,
+                step,
+                body,
+            });
+        }
         let variable = match self.next() {
             Token::Word(word) => word
                 .as_literal()

@@ -1,0 +1,10 @@
+lt
+eq
+empty
+glob
+quoted-literal
+less
+dir
+1 42
+dparen
+--- exit 0

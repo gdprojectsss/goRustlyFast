@@ -56,11 +56,15 @@ fn visit_words(list: &List, visit: &mut impl FnMut(&crate::syntax::ast::Word)) {
                 visit_words(condition, visit);
                 visit_words(body, visit);
             }
-            CommandKind::For { body, .. } => visit_words(body, visit),
+            CommandKind::For { body, .. } | CommandKind::ArithmeticFor { body, .. } => {
+                visit_words(body, visit)
+            }
             CommandKind::Case { arms, .. } => {
                 arms.iter().for_each(|arm| visit_words(&arm.body, visit))
             }
-            CommandKind::Conditional(_) | CommandKind::FunctionDefinition { .. } => {}
+            CommandKind::Conditional(_)
+            | CommandKind::Arithmetic(_)
+            | CommandKind::FunctionDefinition { .. } => {}
         }
     }
     for item in list {

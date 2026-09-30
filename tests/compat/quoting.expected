@@ -1,0 +1,10 @@
+single $HOME double $x back slash
+a b c
+a  b   c
+[a  b   c]
+[a]
+[b]
+[c]
+nested 'quotes' and "escapes"
+not-ansi-c
+--- exit 0

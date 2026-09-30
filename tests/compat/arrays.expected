@@ -1,0 +1,7 @@
+4 one two words three
+6 0 1 2 3 4 10
+[zero][one][two words][three][four][ten]
+zero two words three four ten
+two words three
+empty: 0
+--- exit 0

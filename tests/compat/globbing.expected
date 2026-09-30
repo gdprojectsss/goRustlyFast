@@ -1,0 +1,6 @@
+a.txt b.txt
+*.nomatch
+c.md
+a.txt b.txt
+*.txt
+--- exit 0

@@ -1,0 +1,10 @@
+3
+one|two three|four
+<one>
+<two three>
+<four>
+<one two three four>
+two three four
+fallback dash assigned assigned
+alt 5 ell lo
+--- exit 0

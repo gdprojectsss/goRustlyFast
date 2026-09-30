@@ -1,0 +1,8 @@
+out
+more
+hidden error
+TO-ERR
+heredoc 2
+literal $HOME
+HERE STRING
+--- exit 0

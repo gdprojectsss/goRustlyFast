@@ -818,3 +818,11 @@ fn check_reports_problems_without_running() {
     assert_eq!(status, 1);
     assert!(!std::path::Path::new("/tmp/grfsh_check_should_not_exist").exists());
 }
+
+#[test]
+fn ifs_ansi_quotes_and_arithmetic_commands() {
+    let (out, _, _) = run_command(
+        "IFS=: read -r a b <<< 'x:y:z'; echo \"$a|$b\"; printf '[%s]' $'t\\tq'; echo; for ((i=0; i<3; i++)); do (( i == 1 )) && echo one; done",
+    );
+    assert_eq!(out, "x|y:z\n[t\tq]\none\n");
+}
