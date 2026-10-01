@@ -198,6 +198,17 @@ fn lookup(
         None => Ok(shell
             .get_variable(name)
             .map_or(Expanded::Missing, Expanded::One)),
+        Some(Subscript::All | Subscript::Joined) if shell.special_array(name).is_some() => Ok(
+            Expanded::Many(shell.special_array(name).unwrap_or_default()),
+        ),
+        Some(Subscript::Index(word)) if shell.special_array(name).is_some() => {
+            let index = arithmetic(shell, word)?;
+            let values = shell.special_array(name).unwrap_or_default();
+            Ok(usize::try_from(index)
+                .ok()
+                .and_then(|index| values.get(index).cloned())
+                .map_or(Expanded::Missing, Expanded::One))
+        }
         Some(Subscript::All | Subscript::Joined) => Ok(match shell.arrays.get(name) {
             Some(array) => Expanded::Many(array.values()),
             None if positional => Expanded::Many(shell.positional.clone()),

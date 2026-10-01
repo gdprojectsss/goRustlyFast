@@ -8,10 +8,7 @@ pub use crate::syntax::lexer::ParseError;
 
 type Result<T> = std::result::Result<T, ParseError>;
 
-const UNARY_CONDITIONS: &[&str] = &[
-    "-e", "-f", "-d", "-r", "-w", "-x", "-s", "-L", "-h", "-p", "-S", "-b", "-c", "-n", "-z", "-t",
-    "-v",
-];
+const UNARY_CONDITIONS: &[&str] = crate::builtins::test::UNARY;
 const BINARY_CONDITIONS: &[&str] = &[
     "=", "==", "!=", "=~", "-eq", "-ne", "-lt", "-le", "-gt", "-ge", "-nt", "-ot", "-ef",
 ];
@@ -67,6 +64,14 @@ struct Parser<'a> {
     position: usize,
     chars: Vec<char>,
     aliases: &'a HashMap<String, String>,
+}
+
+pub fn is_function_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with(|character: char| character.is_ascii_digit())
+        && name
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "_-.:+@".contains(character))
 }
 
 pub fn is_name(text: &str) -> bool {
@@ -291,7 +296,7 @@ impl Parser<'_> {
                     let name = match self.next() {
                         Token::Word(word) => word
                             .as_literal()
-                            .filter(|name| is_name(name))
+                            .filter(|name| is_function_name(name))
                             .map(String::from),
                         Token::Eof => return Err(ParseError::incomplete("expected function name")),
                         _ => None,
@@ -305,7 +310,7 @@ impl Parser<'_> {
                 }
                 Some(keyword) if RESERVED.contains(&keyword) => return Err(self.unexpected()),
                 Some(name)
-                    if is_name(name)
+                    if is_function_name(name)
                         && matches!(self.peek_ahead(1), Token::Operator("("))
                         && matches!(self.peek_ahead(2), Token::Operator(")")) =>
                 {
@@ -540,6 +545,19 @@ impl Parser<'_> {
         Ok(CommandKind::Case { subject, arms })
     }
 
+    fn loop_body(&mut self) -> Result<List> {
+        if self.is_keyword("{") {
+            self.next();
+            let body = self.list(&["}"])?;
+            self.expect_keyword("}")?;
+            return Ok(body);
+        }
+        self.expect_keyword("do")?;
+        let body = self.list(&["done"])?;
+        self.expect_keyword("done")?;
+        Ok(body)
+    }
+
     fn for_clause(&mut self) -> Result<CommandKind> {
         self.next();
         if let Token::Arithmetic(source) = self.peek().clone() {
@@ -557,9 +575,7 @@ impl Parser<'_> {
                 self.next();
             }
             self.skip_newlines();
-            self.expect_keyword("do")?;
-            let body = self.list(&["done"])?;
-            self.expect_keyword("done")?;
+            let body = self.loop_body()?;
             return Ok(CommandKind::ArithmeticFor {
                 init,
                 condition,
@@ -596,9 +612,7 @@ impl Parser<'_> {
             _ => {}
         }
         self.skip_newlines();
-        self.expect_keyword("do")?;
-        let body = self.list(&["done"])?;
-        self.expect_keyword("done")?;
+        let body = self.loop_body()?;
         Ok(CommandKind::For {
             variable,
             items,

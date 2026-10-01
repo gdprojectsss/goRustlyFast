@@ -213,6 +213,24 @@ pub fn matches_pattern(pattern: &str, text: &str) -> bool {
     pattern_index == pattern_chars.len()
 }
 
+fn character_class(name: &str) -> Option<fn(char) -> bool> {
+    Some(match name {
+        "alpha" => char::is_alphabetic,
+        "digit" => |character: char| character.is_ascii_digit(),
+        "alnum" => char::is_alphanumeric,
+        "space" => char::is_whitespace,
+        "blank" => |character: char| character == ' ' || character == '\t',
+        "upper" => char::is_uppercase,
+        "lower" => char::is_lowercase,
+        "punct" => |character: char| character.is_ascii_punctuation(),
+        "xdigit" => |character: char| character.is_ascii_hexdigit(),
+        "cntrl" => char::is_control,
+        "print" => |character: char| !character.is_control(),
+        "graph" => |character: char| !character.is_control() && !character.is_whitespace(),
+        _ => return None,
+    })
+}
+
 fn bracket(pattern_chars: &[char], start: usize, target: char) -> Option<(bool, usize)> {
     let mut index = start + 1;
     let negate = matches!(pattern_chars.get(index), Some('!' | '^'));
@@ -227,6 +245,24 @@ fn bracket(pattern_chars: &[char], start: usize, target: char) -> Option<(bool, 
             return Some((matched != negate, index + 1));
         }
         first = false;
+        if member == '[' && pattern_chars.get(index + 1) == Some(&':') {
+            let name_start = index + 2;
+            if let Some(length) = pattern_chars[name_start..]
+                .windows(2)
+                .position(|pair| pair == [':', ']'])
+            {
+                let name: String = pattern_chars[name_start..name_start + length]
+                    .iter()
+                    .collect();
+                if let Some(test) = character_class(&name) {
+                    if test(target) {
+                        matched = true;
+                    }
+                    index = name_start + length + 2;
+                    continue;
+                }
+            }
+        }
         if member == '\\' && index + 1 < pattern_chars.len() {
             index += 1;
             member = pattern_chars[index];
@@ -450,6 +486,15 @@ mod tests {
         assert!(!matches_pattern("[!a-c]x", "bx"));
         assert!(matches_pattern("[!a-c]x", "dx"));
         assert!(matches_pattern("[x", "[x"));
+    }
+
+    #[test]
+    fn posix_character_classes() {
+        assert!(matches_pattern("[[:digit:]]*", "42abc"));
+        assert!(!matches_pattern("[[:digit:]]*", "abc"));
+        assert!(matches_pattern("x[[:space:][:punct:]]y", "x y"));
+        assert!(matches_pattern("x[[:space:][:punct:]]y", "x,y"));
+        assert!(matches_pattern("[![:upper:]]", "a"));
     }
 
     #[test]

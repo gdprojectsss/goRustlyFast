@@ -64,6 +64,8 @@ pub struct Shell {
     pub getopts_offset: usize,
     pub current_line: usize,
     pub running_hook: bool,
+    pub source_stack: Vec<String>,
+    pub function_stack: Vec<String>,
     pub abbreviations: std::collections::BTreeMap<String, String>,
     pub key_bindings: Vec<(String, KeyBinding)>,
     pub bindings_version: u64,
@@ -112,6 +114,8 @@ impl Shell {
             getopts_offset: 0,
             current_line: 0,
             running_hook: false,
+            source_stack: Vec::new(),
+            function_stack: Vec::new(),
             abbreviations: std::collections::BTreeMap::new(),
             key_bindings: Vec::new(),
             bindings_version: 0,
@@ -189,6 +193,9 @@ impl Shell {
         if let Some(array) = self.arrays.get(name) {
             return array.first().cloned();
         }
+        if let Some(values) = self.special_array(name) {
+            return values.into_iter().next();
+        }
         self.variables
             .get(name)
             .cloned()
@@ -216,6 +223,20 @@ impl Shell {
             Some(attributes) => self.attributes.insert(name, attributes),
             None => self.attributes.remove(&name),
         };
+    }
+
+    pub fn special_array(&self, name: &str) -> Option<Vec<String>> {
+        match name {
+            "BASH_SOURCE" => Some(self.source_stack.iter().rev().cloned().collect()),
+            "FUNCNAME" => {
+                let mut names: Vec<String> = self.function_stack.iter().rev().cloned().collect();
+                if !names.is_empty() && self.source_stack.is_empty() {
+                    names.push("main".into());
+                }
+                Some(names)
+            }
+            _ => None,
+        }
     }
 
     pub fn is_associative(&self, name: &str) -> bool {

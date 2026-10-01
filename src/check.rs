@@ -27,8 +27,6 @@ const UNSUPPORTED_TEXT: &[(&str, &str)] = &[
     ),
     ("declare -n", "name references are not supported"),
     ("local -n", "name references are not supported"),
-    ("BASH_SOURCE", "BASH_SOURCE is not set"),
-    ("FUNCNAME", "FUNCNAME is not set"),
     ("trap DEBUG", "DEBUG traps are not supported"),
 ];
 

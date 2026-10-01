@@ -881,7 +881,9 @@ impl Shell {
         }
         let saved = std::mem::replace(&mut self.positional, argv[1..].to_vec());
         self.locals.push(HashMap::new());
+        self.function_stack.push(argv[0].clone());
         self.run_command(body, false);
+        self.function_stack.pop();
         if self.flow == Flow::Return {
             self.flow = Flow::Normal;
         }

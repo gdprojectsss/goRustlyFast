@@ -75,8 +75,35 @@ pub fn lex(source: &str) -> Result<Lexed, ParseError> {
     Lexer::new(source).run()
 }
 
+fn escape_bracket_spaces(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut quote = None;
+    let mut bracket = false;
+    let mut chars = text.chars().peekable();
+    while let Some(character) = chars.next() {
+        match (quote, character) {
+            (Some(open), _) if character == open => quote = None,
+            (None, '\'' | '"') if !bracket => quote = Some(character),
+            (None, '\\') => {
+                out.push(character);
+                if let Some(next) = chars.next() {
+                    out.push(next);
+                }
+                continue;
+            }
+            (None, '[') => bracket = true,
+            (None, ']') => bracket = false,
+            (None, ' ' | '\t') if bracket => out.push('\\'),
+            _ => {}
+        }
+        out.push(character);
+    }
+    out
+}
+
 pub fn parse_regex_word(text: &str) -> Result<Word, ParseError> {
-    let mut lexer = Lexer::new(text.trim());
+    let escaped = escape_bracket_spaces(text.trim());
+    let mut lexer = Lexer::new(&escaped);
     let word = lexer.word_until(|character| character == ' ' || character == '\t')?;
     if lexer.position < lexer.chars.len() {
         return Err(ParseError::syntax("unexpected space in regular expression"));
@@ -873,6 +900,20 @@ impl Lexer {
         loop {
             match self.bump() {
                 None => return Err(ParseError::incomplete("unclosed $((")),
+                Some('\'') => {
+                    self.single_quoted()?;
+                }
+                Some('"') => self.skip_double_quoted()?,
+                Some('`') => {
+                    self.backtick()?;
+                }
+                Some('\\') => {
+                    self.bump();
+                }
+                Some('$') if self.peek() == Some('(') && self.peek_at(1) != Some('(') => {
+                    self.position += 1;
+                    self.scan_substitution()?;
+                }
                 Some('(') => depth += 1,
                 Some(')') if depth > 0 => depth -= 1,
                 Some(')') => {
@@ -984,6 +1025,12 @@ mod tests {
             word[0].parts,
             vec![WordPart::Quoted("tab\there\u{41}A'q".into())]
         );
+    }
+
+    #[test]
+    fn arithmetic_with_nested_substitution() {
+        let word = words("$(($(echo ')' | wc -c) / 2))");
+        assert!(matches!(word[0].parts[0], WordPart::Arithmetic { .. }));
     }
 
     #[test]

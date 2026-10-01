@@ -107,6 +107,7 @@ fn run_script(shell: &mut Shell, path: &str, args: &[String]) -> i32 {
         }
     };
     shell.arg0 = path.to_string();
+    shell.source_stack.push(path.to_string());
     shell.positional = args.to_vec();
     shell::set_location(Some(path), 0);
     let mut lines = contents.lines().map(String::from);

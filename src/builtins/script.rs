@@ -22,8 +22,12 @@ pub(super) fn source(shell: &mut Shell, args: &[String]) -> i32 {
     let saved_positional =
         (args.len() > 1).then(|| std::mem::replace(&mut shell.positional, args[1..].to_vec()));
     shell.source_depth += 1;
+    shell.source_stack.push(path.clone());
+    let line = shell.current_line;
     let mut lines = contents.lines().map(String::from);
     let status = shell.run_lines(|| lines.next());
+    shell.current_line = line;
+    shell.source_stack.pop();
     shell.source_depth -= 1;
     if shell.flow == Flow::Return {
         shell.flow = Flow::Normal;

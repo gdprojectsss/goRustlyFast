@@ -39,3 +39,17 @@ jobs:
 
       - name: Expected outputs still match bash
         run: git diff --exit-code tests/compat
+
+  real-world:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo build --release
+
+      - name: Check and run well known shell scripts
+        run: ./scripts/real-world.sh

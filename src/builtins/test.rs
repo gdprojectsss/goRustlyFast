@@ -7,8 +7,8 @@ use crate::sys;
 const MAX_GROUPS: usize = 32;
 
 pub(crate) const UNARY: &[&str] = &[
-    "-e", "-f", "-d", "-r", "-w", "-x", "-s", "-L", "-h", "-p", "-S", "-b", "-c", "-n", "-z", "-t",
-    "-v",
+    "-e", "-a", "-f", "-d", "-r", "-w", "-x", "-s", "-L", "-h", "-p", "-S", "-b", "-c", "-n", "-z",
+    "-t", "-v", "-O", "-G", "-N", "-k", "-u", "-g",
 ];
 pub(crate) const BINARY: &[&str] = &[
     "=", "==", "!=", "<", ">", "-eq", "-ne", "-lt", "-le", "-gt", "-ge", "-nt", "-ot", "-ef",
@@ -24,7 +24,13 @@ fn accessible(path: &str, mode: libc::c_int) -> bool {
 pub(crate) fn unary(shell: &Shell, operator: &str, operand: &str) -> bool {
     let metadata = || std::fs::metadata(operand).ok();
     match operator {
-        "-e" => metadata().is_some(),
+        "-e" | "-a" => metadata().is_some(),
+        "-O" => metadata().is_some_and(|metadata| metadata.uid() == unsafe { libc::geteuid() }),
+        "-G" => metadata().is_some_and(|metadata| metadata.gid() == unsafe { libc::getegid() }),
+        "-N" => metadata().is_some_and(|metadata| metadata.mtime() > metadata.atime()),
+        "-k" => metadata().is_some_and(|metadata| metadata.mode() & 0o1000 != 0),
+        "-u" => metadata().is_some_and(|metadata| metadata.mode() & 0o4000 != 0),
+        "-g" => metadata().is_some_and(|metadata| metadata.mode() & 0o2000 != 0),
         "-f" => metadata().is_some_and(|metadata| metadata.is_file()),
         "-d" => metadata().is_some_and(|metadata| metadata.is_dir()),
         "-s" => metadata().is_some_and(|metadata| metadata.len() > 0),
