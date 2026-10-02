@@ -127,7 +127,6 @@ fn expand_into(shell: &mut Shell, word: &Word, fields: &mut Fields) -> Result<()
     Ok(())
 }
 
-#[cfg(test)]
 pub fn brace_expand(word: &Word) -> Vec<Word> {
     brace::expand(word)
 }

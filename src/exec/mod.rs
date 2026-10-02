@@ -191,6 +191,11 @@ impl Shell {
             match self.traps.get(name).cloned() {
                 Some(command) if !command.is_empty() => self.run_trap(&command),
                 Some(_) => {}
+                None if signal == libc::SIGHUP && self.interactive => {
+                    self.hang_up_jobs();
+                    self.last_status = 128 + libc::SIGHUP;
+                    self.flow = Flow::Exit;
+                }
                 None if signal == libc::SIGINT && self.interactive => {
                     eprintln!();
                     self.last_status = 128 + libc::SIGINT;
@@ -230,6 +235,13 @@ impl Shell {
         }
         self.last_status = status;
         self.running_hook = false;
+    }
+
+    fn hang_up_jobs(&mut self) {
+        for job in self.jobs.iter() {
+            let _ = sys::kill(-job.pgid, libc::SIGHUP);
+            let _ = sys::kill(-job.pgid, libc::SIGCONT);
+        }
     }
 
     pub(crate) fn run_exit_trap(&mut self) {

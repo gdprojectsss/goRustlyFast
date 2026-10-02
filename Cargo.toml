@@ -10,7 +10,7 @@ homepage = "https://github.com/gdprojectsss/goRustlyFast"
 readme = "README.md"
 keywords = ["shell", "cli", "terminal", "bash", "posix"]
 categories = ["command-line-utilities"]
-exclude = [".github/", "scripts/", "packaging/"]
+exclude = [".github/", "scripts/", "packaging/", "fuzz/"]
 
 [dependencies]
 rustyline = "15"

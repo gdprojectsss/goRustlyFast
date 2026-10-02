@@ -1,0 +1,50 @@
+[package]
+name = "grfsh-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+grfsh = { path = ".." }
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "parse"
+path = "fuzz_targets/parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "words"
+path = "fuzz_targets/words.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pattern"
+path = "fuzz_targets/pattern.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "arithmetic"
+path = "fuzz_targets/arithmetic.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "data"
+path = "fuzz_targets/data.rs"
+test = false
+doc = false
+bench = false

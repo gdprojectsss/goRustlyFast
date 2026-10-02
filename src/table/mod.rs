@@ -158,6 +158,14 @@ pub(crate) fn command_log(shell: &Shell, contents: &str) -> i32 {
     0
 }
 
+pub(crate) fn parse_untrusted(text: &str) {
+    let _ = parse_auto(text);
+    let _ = json::parse(text);
+    let _ = delimited::parse(text, ',');
+    let _ = wire::decode(text);
+    let _ = Table::from_whitespace(text);
+}
+
 fn emit(shell: &Shell, output: Output) {
     let text = match output {
         Output::Text(text) => text,

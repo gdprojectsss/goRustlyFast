@@ -16,6 +16,7 @@ use rustyline::{Cmd, EditMode, Editor, EventHandler};
 
 use crate::builtins;
 use crate::shell::{self, Flow, KeyBinding, Shell};
+use crate::signals;
 use crate::sys;
 use crate::table;
 
@@ -25,7 +26,27 @@ use prompt::PromptState;
 
 const USAGE: &str = "usage: grfsh [-l] [-i] [-c command [name [args...]]] [script [args...]]\n       grfsh --check script...";
 
+fn install_panic_handler() {
+    std::panic::set_hook(Box::new(|info| {
+        sys::restore_saved_terminal();
+        let location = info
+            .location()
+            .map(|location| format!(" at {}:{}", location.file(), location.line()))
+            .unwrap_or_default();
+        let message = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|text| text.to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "unknown error".into());
+        eprintln!(
+            "\ngrfsh hit an internal error{location}: {message}\nPlease report it at https://github.com/gdprojectsss/goRustlyFast/issues with the command that triggered it."
+        );
+    }));
+}
+
 pub fn run() -> i32 {
+    install_panic_handler();
     let mut args: Vec<String> = std::env::args().collect();
     let invoked_as = if args.is_empty() {
         String::new()
@@ -84,6 +105,7 @@ pub fn run() -> i32 {
             }
             if force_interactive || sys::isatty(0) {
                 shell.shell_pgid = sys::init_job_control();
+                sys::remember_terminal();
                 shell.interactive = true;
                 load_plugins(&mut shell);
                 interactive(&mut shell);
@@ -294,6 +316,13 @@ fn interactive(shell: &mut Shell) {
             }
             Err(ReadlineError::Eof) => break,
             Err(error) => {
+                if signals::any_pending() {
+                    shell.handle_signals();
+                    if shell.flow == Flow::Exit {
+                        break;
+                    }
+                    continue;
+                }
                 shell::error(error);
                 break;
             }
@@ -301,6 +330,7 @@ fn interactive(shell: &mut Shell) {
     }
 
     let _ = editor.save_history(&history);
+    sys::make_private(&history);
 }
 
 fn apply_bindings(

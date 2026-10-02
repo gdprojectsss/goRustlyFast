@@ -181,6 +181,7 @@ pub fn kill(pid: Pid, signal: libc::c_int) -> io::Result<()> {
 }
 
 pub fn init_job_control() -> Pid {
+    signals::set(libc::SIGHUP, signals::Disposition::Catch);
     unsafe {
         loop {
             let pgrp = libc::getpgrp();
@@ -443,5 +444,39 @@ pub fn disable_echo(fd: i32) -> Option<libc::termios> {
 pub fn restore_terminal(fd: i32, saved: &libc::termios) {
     unsafe {
         libc::tcsetattr(fd, libc::TCSANOW, saved);
+    }
+}
+
+pub fn write_private(path: &std::path::Path, contents: &[u8]) -> io::Result<()> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    file.write_all(contents)
+}
+
+pub fn make_private(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+}
+
+static SAVED_TERMINAL: std::sync::OnceLock<libc::termios> = std::sync::OnceLock::new();
+
+pub fn remember_terminal() {
+    let mut saved: libc::termios = unsafe { std::mem::zeroed() };
+    if unsafe { libc::tcgetattr(0, &mut saved) } == 0 {
+        let _ = SAVED_TERMINAL.set(saved);
+    }
+}
+
+pub fn restore_saved_terminal() {
+    if let Some(saved) = SAVED_TERMINAL.get() {
+        unsafe {
+            libc::tcsetattr(0, libc::TCSANOW, saved);
+        }
     }
 }

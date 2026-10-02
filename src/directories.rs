@@ -103,7 +103,7 @@ impl DirectoryHistory {
             .map(|entry| format!("{}\t{}\t{}\n", entry.rank, entry.last_visit, entry.path))
             .collect();
         let temporary = file.with_extension("tmp");
-        if std::fs::write(&temporary, contents).is_ok() {
+        if crate::sys::write_private(&temporary, contents.as_bytes()).is_ok() {
             let _ = std::fs::rename(&temporary, file);
         }
     }
