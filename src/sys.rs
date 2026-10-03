@@ -480,3 +480,11 @@ pub fn restore_saved_terminal() {
         }
     }
 }
+
+pub fn unblock_signals() {
+    unsafe {
+        let mut empty: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut empty);
+        libc::sigprocmask(libc::SIG_SETMASK, &empty, std::ptr::null_mut());
+    }
+}

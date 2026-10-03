@@ -47,6 +47,7 @@ fn install_panic_handler() {
 
 pub fn run() -> i32 {
     install_panic_handler();
+    sys::unblock_signals();
     let mut args: Vec<String> = std::env::args().collect();
     let invoked_as = if args.is_empty() {
         String::new()
