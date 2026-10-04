@@ -176,6 +176,13 @@ fn profile_path() -> PathBuf {
 }
 
 fn load_file(shell: &mut Shell, path: &std::path::Path) {
+    if !path.exists() {
+        return;
+    }
+    if let Err(problem) = crate::trust::check(path) {
+        shell::error(format!("not loading {problem}"));
+        return;
+    }
     let Ok(contents) = std::fs::read_to_string(path) else {
         return;
     };

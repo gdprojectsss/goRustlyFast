@@ -12,6 +12,7 @@ mod syntax;
 mod sys;
 mod table;
 mod text;
+mod trust;
 mod variables;
 
 pub use repl::run;

@@ -826,3 +826,23 @@ fn ifs_ansi_quotes_and_arithmetic_commands() {
     );
     assert_eq!(out, "x|y:z\n[t\tq]\none\n");
 }
+
+#[test]
+fn startup_files_writable_by_others_are_skipped() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = "/tmp/grfsh_trust_test_home";
+    let _ = std::fs::remove_dir_all(home);
+    std::fs::create_dir_all(home).unwrap();
+    let rc = format!("{home}/.grfshrc");
+    std::fs::write(&rc, "echo rc-ran\n").unwrap();
+    std::fs::set_permissions(&rc, std::fs::Permissions::from_mode(0o666)).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_grfsh"))
+        .env("HOME", home)
+        .env_remove("XDG_CONFIG_HOME")
+        .stdin(Stdio::null())
+        .output()
+        .expect("failed to run grfsh");
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("rc-ran"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("writable by other users"));
+    let _ = std::fs::remove_dir_all(home);
+}
