@@ -39,7 +39,7 @@ impl Terminal {
                 &mut fd,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
-                &mut size,
+                &raw mut size,
             )
         };
         assert!(pid >= 0, "forkpty failed");
