@@ -94,12 +94,11 @@ impl Terminal {
     }
 
     fn wait_for(&mut self, needle: &str) -> String {
-        let start = self.output.len();
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
-            if let Some(found) = self.output[start..].find(needle) {
-                let end = start + found + needle.len();
-                let seen = self.output[start..end].to_string();
+            if let Some(found) = self.output.find(needle) {
+                let end = found + needle.len();
+                let seen = self.output[..end].to_string();
                 self.output.drain(..end);
                 return seen;
             }
