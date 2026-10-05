@@ -846,3 +846,22 @@ fn startup_files_writable_by_others_are_skipped() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("writable by other users"));
     let _ = std::fs::remove_dir_all(home);
 }
+
+#[test]
+fn no_color_removes_escape_codes() {
+    let output = Command::new(env!("CARGO_BIN_EXE_grfsh"))
+        .args(["-c", "nope_command_for_color_test"])
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("failed to run grfsh");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.starts_with("grfsh: line 1: "), "{stderr}");
+    assert!(!stderr.contains('\x1b'));
+}
+
+#[test]
+fn help_lists_and_describes_builtins() {
+    let (out, _, status) = run_command("help getopts");
+    assert!(out.starts_with("getopts spec name [args]"));
+    assert_eq!(status, 0);
+}

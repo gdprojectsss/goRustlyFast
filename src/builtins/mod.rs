@@ -5,6 +5,7 @@ use crate::shell::{self, Shell};
 mod control;
 mod directory;
 mod getopts;
+mod help;
 mod interactive;
 mod jobs;
 mod output;
@@ -69,6 +70,7 @@ const BUILTINS: &[&str] = &[
     "abbr",
     "bindkey",
     "complete",
+    "help",
 ];
 
 pub(crate) fn is_builtin(name: &str) -> bool {
@@ -117,6 +119,7 @@ pub(crate) fn run(shell: &mut Shell, argv: &[String]) -> i32 {
         "mapfile" | "readarray" => script::mapfile(shell, args),
         "umask" => system::umask(args, &mut out),
         "abbr" => interactive::abbr(shell, args, &mut out),
+        "help" => help::run(args, &mut out),
         "bindkey" => interactive::bindkey(shell, args, &mut out),
         "complete" => interactive::complete(shell, args, &mut out),
         "configure-prompt" => {

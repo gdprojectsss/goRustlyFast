@@ -51,6 +51,58 @@ pub fn display_width(text: &str) -> usize {
     width
 }
 
+pub fn colors_enabled() -> bool {
+    let no_color = std::env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty());
+    let dumb = std::env::var("TERM").is_ok_and(|term| term == "dumb");
+    !no_color && !dumb
+}
+
+pub fn truecolor() -> bool {
+    std::env::var("COLORTERM").is_ok_and(|value| {
+        let value = value.to_ascii_lowercase();
+        value == "truecolor" || value == "24bit"
+    })
+}
+
+pub fn unicode_terminal() -> bool {
+    let locale = ["LC_ALL", "LC_CTYPE", "LANG"]
+        .iter()
+        .find_map(|name| std::env::var(name).ok().filter(|value| !value.is_empty()));
+    match locale {
+        Some(value) => {
+            let value = value.to_ascii_lowercase();
+            value.contains("utf-8") || value.contains("utf8")
+        }
+        None => true,
+    }
+}
+
+pub fn strip_ansi(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(character) = chars.next() {
+        if character == '\x1b' && chars.peek() == Some(&'[') {
+            chars.next();
+            for code in chars.by_ref() {
+                if ('@'..='~').contains(&code) {
+                    break;
+                }
+            }
+            continue;
+        }
+        out.push(character);
+    }
+    out
+}
+
+pub fn without_colors(text: String) -> String {
+    if colors_enabled() {
+        text
+    } else {
+        strip_ansi(&text)
+    }
+}
+
 pub fn truncate_to_width(text: &str, width: usize) -> String {
     let mut out = String::new();
     let mut used = 0;
@@ -75,6 +127,12 @@ mod tests {
         assert_eq!(display_width("\u{65e5}\u{672c}"), 4);
         assert_eq!(display_width("\x1b[1;32mok\x1b[0m"), 2);
         assert_eq!(display_width("e\u{301}"), 1);
+    }
+
+    #[test]
+    fn stripping_escape_codes() {
+        assert_eq!(strip_ansi("\x1b[1;31mred\x1b[0m plain"), "red plain");
+        assert_eq!(strip_ansi("no codes"), "no codes");
     }
 
     #[test]

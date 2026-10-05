@@ -121,7 +121,7 @@ impl Completer for ShellHelper {
 
 impl Highlighter for ShellHelper {
     fn highlight<'l>(&self, line: &'l str, _position: usize) -> Cow<'l, str> {
-        if line.is_empty() {
+        if line.is_empty() || !crate::text::colors_enabled() {
             return line.into();
         }
         highlight::highlight(line, |name| self.is_command(name)).into()
@@ -131,7 +131,10 @@ impl Highlighter for ShellHelper {
         if let Some((plain, colored)) = self.shown_right.borrow().as_ref()
             && plain == hint
         {
-            return colored.clone().into();
+            return crate::text::without_colors(colored.clone()).into();
+        }
+        if !crate::text::colors_enabled() {
+            return hint.into();
         }
         format!("{DIM}{hint}{RESET}").into()
     }

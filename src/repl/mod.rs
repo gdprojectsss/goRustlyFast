@@ -85,7 +85,8 @@ pub fn run() -> i32 {
                 shell.arg0 = name.clone();
             }
             shell.positional = args.iter().skip(3).cloned().collect();
-            shell::set_location(Some(&shell.arg0.clone()), 0);
+            let name = args.get(2).cloned().unwrap_or_default();
+            shell::set_location(Some(&name), 0);
             shell.run_source(command);
             shell.last_status
         }
@@ -108,6 +109,7 @@ pub fn run() -> i32 {
                 shell.shell_pgid = sys::init_job_control();
                 sys::remember_terminal();
                 shell.interactive = true;
+                welcome_once();
                 load_plugins(&mut shell);
                 interactive(&mut shell);
             } else {
@@ -254,6 +256,14 @@ fn interactive(shell: &mut Shell) {
             }
             None => theme::Screen::plain(prompt::build(&state)),
         };
+        let screen = theme::Screen {
+            prompt: crate::text::without_colors(screen.prompt),
+            right: screen.right.map(|right| helper::RightPrompt {
+                colored: crate::text::without_colors(right.colored),
+                ..right
+            }),
+            transient: screen.transient.map(crate::text::without_colors),
+        };
         if let Some(helper) = editor.helper_mut() {
             helper.set_right_prompt(screen.right);
         }
@@ -398,6 +408,21 @@ fn record_command(line: &str, directory: &str, duration: Duration, status: i32) 
         escape(directory),
         escape(line.trim())
     );
+}
+
+fn welcome_once() {
+    let directory = config_dir();
+    let marker = directory.join(".welcome-shown");
+    if marker.exists() || theme::theme_path(&directory).exists() || rc_path().exists() {
+        return;
+    }
+    println!(
+        "Welcome to grfsh {}. Run configure-prompt to pick a prompt style, or help for the list of builtins.",
+        env!("CARGO_PKG_VERSION")
+    );
+    if std::fs::create_dir_all(&directory).is_ok() {
+        let _ = std::fs::write(marker, "");
+    }
 }
 
 fn load_plugins(shell: &mut Shell) {

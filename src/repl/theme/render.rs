@@ -35,6 +35,18 @@ fn named(name: &str) -> Option<u8> {
     })
 }
 
+fn nearest_256(red: u8, green: u8, blue: u8) -> u8 {
+    const LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
+    let level = |value: u8| {
+        LEVELS
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, level)| level.abs_diff(value))
+            .map_or(0, |(index, _)| index as u8)
+    };
+    16 + 36 * level(red) + 6 * level(green) + level(blue)
+}
+
 pub(super) fn color_code(color: &str, background: bool) -> Option<String> {
     let layer = if background { 48 } else { 38 };
     if let Some(hex) = color.strip_prefix('#') {
@@ -43,7 +55,10 @@ pub(super) fn color_code(color: &str, background: bool) -> Option<String> {
         }
         let channel = |range: std::ops::Range<usize>| u8::from_str_radix(&hex[range], 16).ok();
         let (red, green, blue) = (channel(0..2)?, channel(2..4)?, channel(4..6)?);
-        return Some(format!("{layer};2;{red};{green};{blue}"));
+        if crate::text::truecolor() {
+            return Some(format!("{layer};2;{red};{green};{blue}"));
+        }
+        return Some(format!("{layer};5;{}", nearest_256(red, green, blue)));
     }
     let index = match color.parse::<u8>() {
         Ok(index) => index,
@@ -185,6 +200,13 @@ fn prompt_char(theme: &Theme, context: &PromptContext) -> String {
 }
 
 pub(in crate::repl) fn render(theme: &Theme, context: &PromptContext) -> RenderedPrompt {
+    if theme.icons != Icons::Ascii && !crate::text::unicode_terminal() {
+        let ascii = Theme {
+            icons: Icons::Ascii,
+            ..theme.clone()
+        };
+        return render(&ascii, context);
+    }
     let left = draw(theme, &collect(theme, &theme.left, context), false);
     let right = draw(theme, &collect(theme, &theme.right, context), true);
     let symbol = prompt_char(theme, context);

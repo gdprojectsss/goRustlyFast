@@ -170,12 +170,12 @@ fn emit(shell: &Shell, output: Output) {
     let text = match output {
         Output::Text(text) => text,
         Output::Table(table) if shell.pipe_to_table => wire::encode(&table),
-        Output::Table(table) if sys::isatty(1) => render::render(
+        Output::Table(table) if sys::isatty(1) => crate::text::without_colors(render::render(
             &table,
             Style::Pretty,
             sys::terminal_width(1),
             datetime::now(),
-        ),
+        )),
         Output::Table(table) => render::render(&table, Style::Plain, None, datetime::now()),
     };
     let mut out = std::io::stdout().lock();

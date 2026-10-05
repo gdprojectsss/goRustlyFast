@@ -370,11 +370,17 @@ pub fn set_location(script: Option<&str>, line: usize) {
 
 pub fn error(message: impl Display) {
     let prefix = LOCATION.with(|location| match location.borrow().as_ref() {
+        Some((script, line)) if *line > 0 && script.is_empty() => format!("line {line}: "),
         Some((script, line)) if *line > 0 => format!("{script}: line {line}: "),
+        Some((script, _)) if script.is_empty() => String::new(),
         Some((script, _)) => format!("{script}: "),
         None => String::new(),
     });
-    eprintln!("\x1b[1;31mgrfsh:\x1b[0m {prefix}{message}");
+    if crate::text::colors_enabled() {
+        eprintln!("\x1b[1;31mgrfsh:\x1b[0m {prefix}{message}");
+    } else {
+        eprintln!("grfsh: {prefix}{message}");
+    }
 }
 
 #[cfg(test)]
