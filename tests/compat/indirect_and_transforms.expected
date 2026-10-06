@@ -1,0 +1,16 @@
+value
+beta
+item alpha
+item beta
+item gamma
+value VALUE
+fallback
+PREFIX_ONE PREFIX_TWO
+name PREFIX_ONE
+name PREFIX_TWO
+'it'\''s a test'
+''
+tab	here
+IT'S A TEST It's a test it's a test
+i r
+--- exit 0

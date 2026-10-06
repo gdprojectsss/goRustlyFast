@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fmt::Display;
+use std::io::IsTerminal;
 use std::rc::Rc;
 
 use crate::directories::DirectoryHistory;
@@ -376,7 +377,7 @@ pub fn error(message: impl Display) {
         Some((script, _)) => format!("{script}: "),
         None => String::new(),
     });
-    if crate::text::colors_enabled() {
+    if crate::text::colors_enabled() && std::io::stderr().is_terminal() {
         eprintln!("\x1b[1;31mgrfsh:\x1b[0m {prefix}{message}");
     } else {
         eprintln!("grfsh: {prefix}{message}");

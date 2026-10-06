@@ -111,6 +111,12 @@ pub fn parse_regex_word(text: &str) -> Result<Word, ParseError> {
     Ok(word)
 }
 
+pub fn ansi_c(text: &str) -> String {
+    Lexer::new(&format!("{}'", text.replace('\'', "\\'")))
+        .ansi_quoted()
+        .unwrap_or_else(|_| text.to_string())
+}
+
 pub fn parse_double_quoted_text(text: &str) -> Result<Word, ParseError> {
     let parts = Lexer::new(text).double_quoted_until(None)?;
     Ok(Word { parts })
@@ -678,12 +684,33 @@ impl Lexer {
         if self.peek() == Some('!') && self.peek_at(1).is_some_and(is_name_start) {
             self.position += 1;
             let name = self.parameter_name()?;
-            if !matches!(self.subscript()?, Some(Subscript::All | Subscript::Joined))
-                || !self.eat('}')
-            {
-                return Err(ParseError::syntax("bad substitution"));
+            if matches!(self.peek(), Some('*' | '@')) && self.peek_at(1) == Some('}') {
+                let joined = self.bump() == Some('*');
+                self.position += 1;
+                return Ok(WordPart::Names {
+                    prefix: name,
+                    joined,
+                    quoted,
+                });
             }
-            return Ok(WordPart::Indices { name, quoted });
+            return match self.subscript()? {
+                Some(Subscript::All | Subscript::Joined) if self.eat('}') => {
+                    Ok(WordPart::Indices { name, quoted })
+                }
+                None => {
+                    let operator = if self.eat('}') {
+                        None
+                    } else {
+                        Some(Box::new(self.parameter_operation()?))
+                    };
+                    Ok(WordPart::Indirect {
+                        name,
+                        operator,
+                        quoted,
+                    })
+                }
+                Some(_) => Err(ParseError::syntax("bad substitution")),
+            };
         }
 
         let name = self.parameter_name()?;
@@ -793,6 +820,12 @@ impl Lexer {
                     all,
                 }
             }
+            '@' => match (self.bump(), self.bump()) {
+                (Some(letter), Some('}')) if "QEULua".contains(letter) => {
+                    ParameterOperation::Transform(letter)
+                }
+                _ => return Err(ParseError::syntax("bad substitution")),
+            },
             _ => return Err(ParseError::syntax("bad substitution")),
         };
         Ok(operation)

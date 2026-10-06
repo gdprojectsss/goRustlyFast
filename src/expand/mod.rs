@@ -106,6 +106,38 @@ fn expand_into(shell: &mut Shell, word: &Word, fields: &mut Fields) -> Result<()
                 };
                 push_value(fields, Expanded::Many(keys), *quoted, false);
             }
+            WordPart::Indirect {
+                name,
+                operator,
+                quoted,
+            } => {
+                let target = shell.get_variable(name).unwrap_or_default();
+                let (target, subscript) = indirect_target(&target)?;
+                let joined = target == "*" || matches!(subscript, Some(Subscript::Joined));
+                let value = lookup(shell, &target, subscript.as_ref())?;
+                let value = match operator {
+                    Some(operator) => apply(shell, &target, subscript.as_ref(), value, operator)?,
+                    None => value,
+                };
+                push_value(fields, value, *quoted, joined);
+            }
+            WordPart::Names {
+                prefix,
+                joined,
+                quoted,
+            } => {
+                let mut names: Vec<String> = shell
+                    .variables
+                    .keys()
+                    .chain(shell.arrays.keys())
+                    .cloned()
+                    .chain(std::env::vars_os().filter_map(|(name, _)| name.into_string().ok()))
+                    .filter(|name| name.starts_with(prefix.as_str()))
+                    .collect();
+                names.sort();
+                names.dedup();
+                push_value(fields, Expanded::Many(names), *quoted, *joined);
+            }
             WordPart::CommandSubstitution { source, quoted } => {
                 let out = shell.capture(source);
                 if *quoted {
@@ -233,6 +265,48 @@ fn lookup(
     }
 }
 
+fn indirect_target(target: &str) -> Result<(String, Option<Subscript>), String> {
+    let invalid = || format!("{target}: invalid indirect expansion");
+    let Some((name, rest)) = target.split_once('[') else {
+        if target.is_empty() {
+            return Err(invalid());
+        }
+        return Ok((target.to_string(), None));
+    };
+    let index = rest.strip_suffix(']').ok_or_else(invalid)?;
+    let subscript = match index {
+        "@" => Subscript::All,
+        "*" => Subscript::Joined,
+        index => Subscript::Index(Word {
+            parts: vec![WordPart::Literal(index.to_string())],
+        }),
+    };
+    Ok((name.to_string(), Some(subscript)))
+}
+
+fn transform(shell: &Shell, name: &str, letter: char, text: &str) -> String {
+    match letter {
+        'Q' => {
+            if text.is_empty() {
+                "''".into()
+            } else {
+                format!("'{}'", text.replace('\'', "'\\''"))
+            }
+        }
+        'E' => crate::syntax::lexer::ansi_c(text),
+        'U' => text.to_uppercase(),
+        'L' => text.to_lowercase(),
+        'u' => {
+            let mut chars = text.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        }
+        _ => crate::builtins::attribute_letters(shell, name),
+    }
+}
+
 fn assign_fallback(
     shell: &mut Shell,
     name: &str,
@@ -321,6 +395,9 @@ fn apply(
                 None => String::new(),
             }
         })),
+        ParameterOperation::Transform(letter) => {
+            Ok(value.map(|text| transform(shell, name, *letter, text)))
+        }
         ParameterOperation::Substring { offset, length } => {
             let offset = arithmetic(shell, offset)?;
             let length = match length {

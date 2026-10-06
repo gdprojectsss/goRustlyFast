@@ -98,7 +98,7 @@ fn quote(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
-fn describe(shell: &Shell, name: &str) -> Option<String> {
+pub(crate) fn attribute_letters(shell: &Shell, name: &str) -> String {
     let attributes = shell.attributes.get(name).copied().unwrap_or_default();
     let mut letters = String::new();
     if let Some(array) = shell.arrays.get(name) {
@@ -116,6 +116,11 @@ fn describe(shell: &Shell, name: &str) -> Option<String> {
             letters.push(letter);
         }
     }
+    letters
+}
+
+fn describe(shell: &Shell, name: &str) -> Option<String> {
+    let mut letters = attribute_letters(shell, name);
     if letters.is_empty() {
         letters.push('-');
     }

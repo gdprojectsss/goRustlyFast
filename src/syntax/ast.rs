@@ -19,6 +19,16 @@ pub enum WordPart {
         name: String,
         quoted: bool,
     },
+    Indirect {
+        name: String,
+        operator: Option<Box<ParameterOperation>>,
+        quoted: bool,
+    },
+    Names {
+        prefix: String,
+        joined: bool,
+        quoted: bool,
+    },
     CommandSubstitution {
         source: String,
         quoted: bool,
@@ -80,6 +90,7 @@ pub enum ParameterOperation {
         upper: bool,
         all: bool,
     },
+    Transform(char),
     Substring {
         offset: Word,
         length: Option<Word>,

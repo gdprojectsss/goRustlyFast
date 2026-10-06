@@ -17,6 +17,7 @@ pub(crate) mod trap;
 mod variables;
 
 pub(crate) use directory::change_directory;
+pub(crate) use variables::attribute_letters;
 
 const BUILTINS: &[&str] = &[
     "cd",
