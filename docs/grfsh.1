@@ -1,0 +1,241 @@
+.TH GRFSH 1 2026-10-16 "grfsh 1.0.0" "User Commands"
+.SH NAME
+grfsh \- a small Unix shell with bash style scripting and typed table pipelines
+.SH SYNOPSIS
+.B grfsh
+.RB [ \-l ]
+.RB [ \-i ]
+.RI [ script " [" args ...]]
+.br
+.B grfsh
+.B \-c
+.I command
+.RI [ name " [" args ...]]
+.br
+.B grfsh
+.B \-\-check
+.IR script ...
+.SH DESCRIPTION
+.B grfsh
+reads commands from a terminal, a script file or a string and runs them.
+Its syntax follows bash for the common cases: pipelines, redirections on any
+file descriptor, conditionals, loops,
+.BR case ,
+functions, indexed and associative arrays, parameter expansion operators,
+arithmetic, brace expansion, here documents, process substitution and job
+control.
+.PP
+Interactive sessions add autosuggestions from history, syntax highlighting,
+context aware completion, a theme engine for the prompt, abbreviations, key
+bindings and a
+.B z
+command for frequently used directories.
+.PP
+Table commands such as
+.BR files ,
+.BR procs ,
+.BR load ,
+.BR where " and " sort\-by
+pass typed rows to each other and print plain text when their output goes to
+any other program.
+.SH OPTIONS
+.TP
+.BI \-c " command"
+Run
+.I command
+and exit. The next argument, if given, becomes
+.BR $0 ,
+and the rest become the positional parameters.
+.TP
+.BR \-l ", " \-\-login
+Act as a login shell and read the profile file before the rc file. A shell
+started with an argv[0] that begins with a dash does the same.
+.TP
+.B \-i
+Run interactively even when standard input is not a terminal.
+.TP
+.BI \-\-check " script" ...
+Parse each script without running it and report syntax errors, unsupported
+bash features and unknown commands with their line numbers. Exits with status
+1 when errors are found.
+.TP
+.BR \-V ", " \-\-version
+Print the version and exit.
+.TP
+.BR \-h ", " \-\-help
+Print a usage summary and exit.
+.SH STARTUP FILES
+A login shell first runs
+.I ~/.config/grfsh/profile
+or
+.IR ~/.grfsh_profile .
+Shells that read commands from a terminal or standard input then run
+.I ~/.config/grfsh/grfshrc
+or
+.IR ~/.grfshrc ,
+and interactive shells load every
+.I init.grfsh
+found under
+.IR ~/.config/grfsh/plugins/ .
+.PP
+A startup file or plugin is skipped with a warning when it, or the directory
+holding it, belongs to another user or can be written by group or others.
+.SH PROMPT
+Run
+.B configure\-prompt
+to choose a theme with live previews, or
+.B configure\-prompt \-\-preset
+.I name
+to pick one of
+.BR lean ,
+.BR classic ,
+.BR rainbow ,
+.BR pure " or " minimal .
+The result is written to
+.IR ~/.config/grfsh/theme ,
+a plain
+.I key = value
+file that is reread when it changes. Without a theme file the
+.B GRFSH_PROMPT
+variable customizes the default prompt.
+.PP
+Functions named
+.BR precmd ,
+.BR preexec " and " chpwd ,
+or listed in the arrays
+.BR precmd_functions ,
+.BR preexec_functions " and " chpwd_functions ,
+run before each prompt, before each command line and after each directory
+change.
+.SH BUILTINS
+Run
+.B help
+for the full list with descriptions and
+.B help
+.I name
+for the usage of one builtin. The builtins are
+.BR . ,
+.BR : ,
+.BR [ ,
+.BR abbr ,
+.BR alias ,
+.BR bg ,
+.BR bindkey ,
+.BR break ,
+.BR cd ,
+.BR command ,
+.BR complete ,
+.BR configure\-prompt ,
+.BR continue ,
+.BR declare ,
+.BR dirs ,
+.BR echo ,
+.BR eval ,
+.BR exec ,
+.BR exit ,
+.BR export ,
+.BR false ,
+.BR fg ,
+.BR getopts ,
+.BR help ,
+.BR history ,
+.BR jobs ,
+.BR kill ,
+.BR local ,
+.BR mapfile ,
+.BR popd ,
+.BR printf ,
+.BR pushd ,
+.BR pwd ,
+.BR read ,
+.BR readarray ,
+.BR readonly ,
+.BR return ,
+.BR set ,
+.BR shift ,
+.BR shopt ,
+.BR source ,
+.BR test ,
+.BR trap ,
+.BR true ,
+.BR type ,
+.BR typeset ,
+.BR ulimit ,
+.BR umask ,
+.BR unalias ,
+.BR unset ,
+.BR wait " and " z .
+.SH TABLE COMMANDS
+.TP
+.BR files " [path] [\-a] [\-r]"
+List a directory as a table with name, type, size and modified columns.
+.TP
+.B procs
+List running processes.
+.TP
+.BI load " file"
+Read a csv, tsv, json or jsonl file, or any other file as lines.
+.TP
+.BR from " csv|tsv|json|jsonl|ws|lines"
+Parse text from a pipe into a table.
+.TP
+.BI where " column op value"
+Keep rows that match. Operators are
+.BR == ", " != ", " =~ ", " !~ ", " eq ", " ne ", " lt ", " le ", " gt " and " ge ,
+and conditions can be joined with
+.BR and " and " or .
+Values follow the column type, so sizes accept units such as
+.B 10mb
+and dates accept ages such as
+.BR 2d .
+.TP
+.BR sort\-by ", " select ", " reject ", " first ", " skip ", " reverse ", " count ", " get ", " group\-by ", " uniq\-by ", " math ", " update ", " to
+Reshape, aggregate or print tables. See
+.BR help .
+.SH ENVIRONMENT
+.TP
+.B CDPATH
+Directories searched by
+.B cd
+for relative names.
+.TP
+.B GRFSH_PROMPT
+Template for the default prompt when no theme file exists.
+.TP
+.B GRFSH_THEME
+Name of a theme preset to use when no theme file exists.
+.TP
+.B IFS
+Field separators used for word splitting and
+.BR read .
+.TP
+.B NO_COLOR
+When set to a non empty value, disables all colors.
+.TP
+.BR XDG_CONFIG_HOME ", " XDG_DATA_HOME
+Base directories for configuration and the command log.
+.SH FILES
+.TP
+.I ~/.grfsh_history
+Line editor history, mode 0600.
+.TP
+.I ~/.grfsh_dirs
+Directory visit counts used by
+.BR z .
+.TP
+.I ~/.local/share/grfsh/commands.tsv
+Command log with time, duration, status and directory, read by
+.BR "history \-\-table" .
+.TP
+.I ~/.config/grfsh/theme
+Prompt theme.
+.SH EXIT STATUS
+The status of the last command run, 2 for a syntax error, 126 when a command
+cannot be executed, 127 when a command is not found, and 128 plus the signal
+number when a command is killed by a signal.
+.SH SEE ALSO
+.BR bash (1),
+.BR sh (1),
+.BR starship (1)
+.SH BUGS
+Report bugs at https://github.com/gdprojectsss/goRustlyFast/issues

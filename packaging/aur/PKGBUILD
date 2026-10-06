@@ -1,0 +1,43 @@
+pkgname=grfsh-git
+_name=grfsh
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Small Unix shell with bash style scripting, prompt themes and typed table pipelines"
+arch=('x86_64' 'aarch64')
+url="https://github.com/gdprojectsss/goRustlyFast"
+license=('MIT')
+depends=('gcc-libs')
+makedepends=('cargo' 'git')
+provides=("$_name")
+conflicts=("$_name")
+install=grfsh.install
+source=("$_name::git+https://github.com/gdprojectsss/goRustlyFast.git")
+sha256sums=('SKIP')
+
+pkgver() {
+    cd "$_name"
+    printf "%s.r%s.%s" "$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)" \
+        "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+prepare() {
+    cd "$_name"
+    cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+    cd "$_name"
+    cargo build --frozen --release
+}
+
+check() {
+    cd "$_name"
+    cargo test --frozen --release --lib
+}
+
+package() {
+    cd "$_name"
+    install -Dm755 target/release/grfsh "$pkgdir/usr/bin/grfsh"
+    install -Dm644 docs/grfsh.1 "$pkgdir/usr/share/man/man1/grfsh.1"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

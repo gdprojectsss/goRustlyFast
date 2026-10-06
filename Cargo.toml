@@ -20,3 +20,23 @@ libc = "0.2"
 lto = true
 codegen-units = 1
 strip = true
+
+[package.metadata.deb]
+maintainer = "gdprojectsss <danielgin810@gmail.com>"
+section = "shells"
+priority = "optional"
+extended-description = """\
+grfsh is a small Unix shell with bash style scripting, job control, \
+prompt themes and pipelines that pass typed tables between commands."""
+assets = [
+    ["target/release/grfsh", "usr/bin/", "755"],
+    ["docs/grfsh.1", "usr/share/man/man1/grfsh.1", "644"],
+    ["README.md", "usr/share/doc/grfsh/README.md", "644"],
+]
+
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/grfsh", dest = "/usr/bin/grfsh", mode = "755" },
+    { source = "docs/grfsh.1", dest = "/usr/share/man/man1/grfsh.1", mode = "644" },
+    { source = "README.md", dest = "/usr/share/doc/grfsh/README.md", mode = "644", doc = true },
+]
