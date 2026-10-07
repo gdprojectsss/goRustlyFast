@@ -13,6 +13,38 @@ const OPERATORS: &[&str] = &[
     "!", "~", "=", "(", ")", "?", ":",
 ];
 
+fn parse_number(text: &str) -> Option<i64> {
+    if let Some((base, digits)) = text.split_once('#') {
+        let base: u32 = base.parse().ok().filter(|base| (2..=64).contains(base))?;
+        if digits.is_empty() {
+            return None;
+        }
+        return digits.chars().try_fold(0i64, |total, character| {
+            let digit = match character {
+                '0'..='9' => character as u32 - '0' as u32,
+                'a'..='z' => character as u32 - 'a' as u32 + 10,
+                'A'..='Z' if base <= 36 => character as u32 - 'A' as u32 + 10,
+                'A'..='Z' => character as u32 - 'A' as u32 + 36,
+                '@' => 62,
+                '_' => 63,
+                _ => return None,
+            };
+            (digit < base).then(|| {
+                total
+                    .wrapping_mul(i64::from(base))
+                    .wrapping_add(i64::from(digit))
+            })
+        });
+    }
+    if let Some(hex_digits) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+        return i64::from_str_radix(hex_digits, 16).ok();
+    }
+    if text.len() > 1 && text.starts_with('0') {
+        return i64::from_str_radix(&text[1..], 8).ok();
+    }
+    text.parse().ok()
+}
+
 fn tokenize(source: &str) -> Result<Vec<Token>, String> {
     let mut tokens = Vec::new();
     let mut rest = source.trim_start();
@@ -20,14 +52,12 @@ fn tokenize(source: &str) -> Result<Vec<Token>, String> {
         let character = rest.chars().next().unwrap_or(' ');
         if character.is_ascii_digit() {
             let end = rest
-                .find(|character: char| !character.is_ascii_alphanumeric())
+                .find(|character: char| {
+                    !(character.is_ascii_alphanumeric() || "#@_".contains(character))
+                })
                 .unwrap_or(rest.len());
             let text = &rest[..end];
-            let number = match text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
-                Some(hex_digits) => i64::from_str_radix(hex_digits, 16),
-                None => text.parse(),
-            }
-            .map_err(|_| format!("invalid number '{text}'"))?;
+            let number = parse_number(text).ok_or_else(|| format!("invalid number '{text}'"))?;
             tokens.push(Token::Number(number));
             rest = &rest[end..];
         } else if character == '_' || character.is_ascii_alphabetic() {
@@ -291,6 +321,8 @@ mod tests {
         assert_eq!(calc("-3 + 5"), 2);
         assert_eq!(calc("7 % 3 == 1 && 1"), 1);
         assert_eq!(calc("0x10 + 1"), 17);
+        assert_eq!(calc("2#1010 + 010"), 18);
+        assert_eq!(calc("16#ff + 36#z + 64#_"), 255 + 35 + 63);
     }
 
     #[test]

@@ -170,6 +170,10 @@ pub fn getpid() -> Pid {
     unsafe { libc::getpid() }
 }
 
+pub fn parent_pid() -> Pid {
+    unsafe { libc::getppid() }
+}
+
 pub fn setpgid(pid: Pid, pgid: Pid) {
     unsafe {
         libc::setpgid(pid, pgid);

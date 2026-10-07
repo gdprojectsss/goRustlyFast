@@ -186,6 +186,7 @@ impl Shell {
             "RANDOM" => return Some((random() % 32768).to_string()),
             "LINENO" => return Some(self.current_line.to_string()),
             "SECONDS" => return Some(self.started.elapsed().as_secs().to_string()),
+            "PPID" => return Some(crate::sys::parent_pid().to_string()),
             _ => {}
         }
         if let Ok(index) = name.parse::<usize>() {
