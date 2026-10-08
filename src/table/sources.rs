@@ -90,7 +90,7 @@ pub(super) fn procs(args: &[String]) -> Result<Table, String> {
         return Err(format!("unexpected argument '{argument}'"));
     }
     let output = Command::new("ps")
-        .args(["-axo", "pid=,ppid=,pcpu=,pmem=,rss=,comm="])
+        .args(["-eo", "pid=,ppid=,pcpu=,pmem=,rss=,comm="])
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output()

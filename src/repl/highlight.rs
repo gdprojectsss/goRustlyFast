@@ -87,14 +87,17 @@ fn extract_spans(line: &str) -> Vec<Span<'_>> {
     let mut spans = Vec::new();
     let mut chars = line.char_indices().peekable();
 
-    while let Some(&(pos, ch)) = chars.peek() {
-        match ch {
+    while let Some(&(position, character)) = chars.peek() {
+        match character {
             ' ' | '\t' => {
-                let start = pos;
-                while chars.peek().is_some_and(|&(_, c)| c == ' ' || c == '\t') {
+                let start = position;
+                while chars
+                    .peek()
+                    .is_some_and(|&(_, next)| next == ' ' || next == '\t')
+                {
                     chars.next();
                 }
-                let end = chars.peek().map_or(line.len(), |&(i, _)| i);
+                let end = chars.peek().map_or(line.len(), |&(index, _)| index);
                 spans.push(Span {
                     text: &line[start..end],
                     kind: SpanKind::Whitespace,
@@ -102,95 +105,95 @@ fn extract_spans(line: &str) -> Vec<Span<'_>> {
             }
             '#' => {
                 spans.push(Span {
-                    text: &line[pos..],
+                    text: &line[position..],
                     kind: SpanKind::Comment,
                 });
                 return spans;
             }
             '|' => {
                 chars.next();
-                if chars.peek().is_some_and(|&(_, c)| c == '|') {
+                if chars.peek().is_some_and(|&(_, next)| next == '|') {
                     chars.next();
                     spans.push(Span {
-                        text: &line[pos..pos + 2],
+                        text: &line[position..position + 2],
                         kind: SpanKind::Operator,
                     });
                 } else {
                     spans.push(Span {
-                        text: &line[pos..pos + 1],
+                        text: &line[position..position + 1],
                         kind: SpanKind::Operator,
                     });
                 }
             }
             '&' => {
                 chars.next();
-                if chars.peek().is_some_and(|&(_, c)| c == '&') {
+                if chars.peek().is_some_and(|&(_, next)| next == '&') {
                     chars.next();
                     spans.push(Span {
-                        text: &line[pos..pos + 2],
+                        text: &line[position..position + 2],
                         kind: SpanKind::Operator,
                     });
                 } else {
                     spans.push(Span {
-                        text: &line[pos..pos + 1],
+                        text: &line[position..position + 1],
                         kind: SpanKind::Operator,
                     });
                 }
             }
             ';' | '>' | '<' => {
                 chars.next();
-                if ch == '>' && chars.peek().is_some_and(|&(_, c)| c == '>') {
+                if character == '>' && chars.peek().is_some_and(|&(_, next)| next == '>') {
                     chars.next();
                     spans.push(Span {
-                        text: &line[pos..pos + 2],
+                        text: &line[position..position + 2],
                         kind: SpanKind::Operator,
                     });
                 } else {
                     spans.push(Span {
-                        text: &line[pos..pos + 1],
+                        text: &line[position..position + 1],
                         kind: SpanKind::Operator,
                     });
                 }
             }
             '\'' => {
                 chars.next();
-                while let Some(&(_, c)) = chars.peek() {
+                while let Some(&(_, next)) = chars.peek() {
                     chars.next();
-                    if c == '\'' {
+                    if next == '\'' {
                         break;
                     }
                 }
-                let end = chars.peek().map_or(line.len(), |&(i, _)| i);
+                let end = chars.peek().map_or(line.len(), |&(index, _)| index);
                 spans.push(Span {
-                    text: &line[pos..end],
+                    text: &line[position..end],
                     kind: SpanKind::SingleQuoted,
                 });
             }
             '"' => {
                 chars.next();
-                while let Some(&(_, c)) = chars.peek() {
+                while let Some(&(_, next)) = chars.peek() {
                     chars.next();
-                    if c == '"' {
+                    if next == '"' {
                         break;
                     }
-                    if c == '\\' {
+                    if next == '\\' {
                         chars.next();
                     }
                 }
-                let end = chars.peek().map_or(line.len(), |&(i, _)| i);
+                let end = chars.peek().map_or(line.len(), |&(index, _)| index);
                 spans.push(Span {
-                    text: &line[pos..end],
+                    text: &line[position..end],
                     kind: SpanKind::DoubleQuoted,
                 });
             }
             '$' => {
                 chars.next();
-                if chars.peek().is_some_and(|&(_, c)| c == '(') {
+                if chars.peek().is_some_and(|&(_, next)| next == '(') {
                     chars.next();
                     let mut depth = 1;
-                    while let Some(&(_, c)) = chars.peek() {
+                    while let Some(&(_, next)) = chars.peek() {
                         chars.next();
-                        match c {
+                        match next {
                             '(' => depth += 1,
                             ')' => {
                                 depth -= 1;
@@ -201,58 +204,58 @@ fn extract_spans(line: &str) -> Vec<Span<'_>> {
                             _ => {}
                         }
                     }
-                    let end = chars.peek().map_or(line.len(), |&(i, _)| i);
+                    let end = chars.peek().map_or(line.len(), |&(index, _)| index);
                     spans.push(Span {
-                        text: &line[pos..end],
+                        text: &line[position..end],
                         kind: SpanKind::Substitution,
                     });
                 } else {
                     while chars
                         .peek()
-                        .is_some_and(|&(_, c)| c.is_alphanumeric() || c == '_')
+                        .is_some_and(|&(_, next)| next.is_alphanumeric() || next == '_')
                     {
                         chars.next();
                     }
-                    let end = chars.peek().map_or(line.len(), |&(i, _)| i);
+                    let end = chars.peek().map_or(line.len(), |&(index, _)| index);
                     spans.push(Span {
-                        text: &line[pos..end],
+                        text: &line[position..end],
                         kind: SpanKind::Variable,
                     });
                 }
             }
             '`' => {
                 chars.next();
-                while let Some(&(_, c)) = chars.peek() {
+                while let Some(&(_, next)) = chars.peek() {
                     chars.next();
-                    if c == '`' {
+                    if next == '`' {
                         break;
                     }
                 }
-                let end = chars.peek().map_or(line.len(), |&(i, _)| i);
+                let end = chars.peek().map_or(line.len(), |&(index, _)| index);
                 spans.push(Span {
-                    text: &line[pos..end],
+                    text: &line[position..end],
                     kind: SpanKind::Substitution,
                 });
             }
             _ => {
-                let is_word_char = |c: char| {
+                let is_word_char = |next: char| {
                     !matches!(
-                        c,
+                        next,
                         ' ' | '\t' | '|' | '&' | ';' | '>' | '<' | '\'' | '"' | '$' | '`' | '#'
                     )
                 };
-                while let Some(&(_, c)) = chars.peek() {
-                    if !is_word_char(c) {
+                while let Some(&(_, next)) = chars.peek() {
+                    if !is_word_char(next) {
                         break;
                     }
                     chars.next();
-                    if c == '\\' {
+                    if next == '\\' {
                         chars.next();
                     }
                 }
-                let end = chars.peek().map_or(line.len(), |&(i, _)| i);
+                let end = chars.peek().map_or(line.len(), |&(index, _)| index);
                 spans.push(Span {
-                    text: &line[pos..end],
+                    text: &line[position..end],
                     kind: SpanKind::Word,
                 });
             }
