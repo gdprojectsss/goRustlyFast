@@ -1,3 +1,4 @@
+mod agent;
 mod builtins;
 mod check;
 mod commands;

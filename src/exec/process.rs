@@ -31,7 +31,9 @@ impl Shell {
     }
 
     pub(crate) fn enter_child(&mut self, pgid: Option<i32>, foreground: bool) {
-        if let Some(pgid) = pgid {
+        if self.agent {
+            crate::agent::detach_from_terminal();
+        } else if let Some(pgid) = pgid {
             let pgid = if pgid == 0 { sys::getpid() } else { pgid };
             sys::setpgid(0, pgid);
             if foreground && self.interactive {

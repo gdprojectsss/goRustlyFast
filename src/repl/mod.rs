@@ -24,7 +24,7 @@ use completion::ShellNames;
 use helper::ShellHelper;
 use prompt::PromptState;
 
-const USAGE: &str = "usage: grfsh [-l] [-i] [-c command [name [args...]]] [script [args...]]\n       grfsh --check script...";
+const USAGE: &str = "usage: grfsh [-l] [-i] [--agent] [--json] [-c command [name [args...]]] [script [args...]]\n       grfsh --check script...";
 
 fn install_panic_handler() {
     std::panic::set_hook(Box::new(|info| {
@@ -56,15 +56,38 @@ pub fn run() -> i32 {
     };
     let mut login = invoked_as.starts_with('-');
     let mut force_interactive = false;
+    let mut agent = crate::agent::requested();
+    let mut json = false;
     while let Some(option) = args.first() {
         match option.as_str() {
             "-l" | "--login" => login = true,
             "-i" => force_interactive = true,
+            "--agent" => agent = true,
+            "--json" => {
+                agent = true;
+                json = true;
+            }
             _ => break,
         }
         args.remove(0);
     }
     let mut shell = Shell::new();
+    let runs_code = match args.first().map(String::as_str) {
+        Some("-c") => args.len() > 1,
+        Some(option) => !option.starts_with('-') || option == "-",
+        None => false,
+    };
+    let mut capture = None;
+    if agent {
+        crate::agent::prepare_environment();
+        shell.agent = true;
+        if runs_code {
+            match crate::agent::Capture::begin(json) {
+                Ok(started) => capture = Some(started),
+                Err(error) => shell::error(format!("--agent: {}", sys::error_message(&error))),
+            }
+        }
+    }
 
     let status = match args.first().map(String::as_str) {
         Some("-h") | Some("--help") => {
@@ -120,6 +143,18 @@ pub fn run() -> i32 {
     };
     shell.last_status = status;
     shell.run_exit_trap();
+    if let Some(capture) = capture {
+        let outcome = capture.finish();
+        if json {
+            let directory = std::env::current_dir()
+                .map(|path| path.display().to_string())
+                .unwrap_or_default();
+            let result = crate::agent::result_json(&outcome, shell.last_status, &directory);
+            println!("{}", result.to_text());
+        } else {
+            crate::agent::print_plain(&outcome);
+        }
+    }
     shell.last_status
 }
 

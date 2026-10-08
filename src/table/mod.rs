@@ -3,7 +3,7 @@ mod data;
 mod datetime;
 mod delimited;
 mod filters;
-mod json;
+pub(crate) mod json;
 mod render;
 mod sources;
 mod value;
