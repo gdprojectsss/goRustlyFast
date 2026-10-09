@@ -138,6 +138,11 @@ const TOPICS: &[(&str, &str, &str)] = &[
         "trap [action] [signal ...]",
         "run code on signals, EXIT or ERR",
     ),
+    (
+        "timeout",
+        "timeout [-s signal] [-k duration] duration command [args]",
+        "run a command and stop its whole process group after a time limit",
+    ),
     ("true", "true", "succeed"),
     ("type", "type name ...", "show how a name would be run"),
     (

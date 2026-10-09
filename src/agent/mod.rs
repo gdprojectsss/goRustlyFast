@@ -45,6 +45,27 @@ pub(crate) fn detach_from_terminal() {
     }
 }
 
+pub(crate) fn job_log_path() -> Option<std::path::PathBuf> {
+    budget::output_directory().map(|directory| {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_nanos());
+        directory.join(format!("job-{stamp}.log"))
+    })
+}
+
+pub(crate) fn send_output_to(path: &std::path::Path) {
+    let Some(path) = path.to_str() else {
+        return;
+    };
+    if let Ok(fd) = sys::open(path, libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC) {
+        unsafe { libc::fchmod(fd, 0o600) };
+        let _ = sys::dup2(fd, 1);
+        let _ = sys::dup2(fd, 2);
+        sys::close(fd);
+    }
+}
+
 pub(crate) struct Capture {
     saved_out: Option<i32>,
     saved_err: Option<i32>,

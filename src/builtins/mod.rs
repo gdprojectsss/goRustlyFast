@@ -13,6 +13,7 @@ mod printf;
 mod script;
 mod system;
 pub(crate) mod test;
+mod timeout;
 pub(crate) mod trap;
 mod variables;
 
@@ -72,6 +73,7 @@ const BUILTINS: &[&str] = &[
     "bindkey",
     "complete",
     "help",
+    "timeout",
 ];
 
 pub(crate) fn is_builtin(name: &str) -> bool {
@@ -129,6 +131,10 @@ pub(crate) fn run(shell: &mut Shell, argv: &[String]) -> i32 {
             return crate::repl::theme::wizard::run(shell, &directory, args);
         }
         "ulimit" => system::ulimit(args, &mut out),
+        "timeout" => {
+            drop(out);
+            return timeout::run(shell, args);
+        }
         "test" | "[" => test::run(shell, &argv[0], args),
         "trap" => trap::run(shell, args, &mut out),
         "printf" => printf::run(shell, args, &mut out),

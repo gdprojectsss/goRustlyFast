@@ -73,3 +73,35 @@ fn commands_cannot_open_the_terminal() {
     ]);
     assert_eq!(stdout(&output), "status=1\n");
 }
+
+#[test]
+fn timeout_stops_the_whole_process_group() {
+    let started = std::time::Instant::now();
+    let output = grfsh(&[
+        "-c",
+        "timeout 0.3 sh -c 'sleep 20 & sleep 20'; echo status=$?",
+    ]);
+    assert_eq!(stdout(&output), "status=124\n");
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+}
+
+#[test]
+fn timeout_kill_after_and_functions() {
+    let output = grfsh(&[
+        "-c",
+        "timeout -s INT -k 0.2 0.2 sh -c 'trap \"\" INT; sleep 20'; echo $?; f() { echo inside; }; timeout 5 f; timeout 5 false; echo $?",
+    ]);
+    assert_eq!(stdout(&output), "137\ninside\n1\n");
+}
+
+#[test]
+fn background_jobs_write_to_a_log_in_agent_mode() {
+    let output = grfsh(&["--agent", "-c", "echo from-job & wait"]);
+    let text = stdout(&output);
+    let path = text
+        .lines()
+        .find_map(|line| line.split("writes its output to ").nth(1))
+        .expect("log notice");
+    assert_eq!(std::fs::read_to_string(path).expect("log"), "from-job\n");
+    let _ = std::fs::remove_file(path);
+}

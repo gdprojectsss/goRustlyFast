@@ -62,7 +62,7 @@ pub(crate) fn trim(text: &str, limit: usize) -> Trimmed {
     }
 }
 
-pub(crate) fn save_full_output(text: &str, label: &str) -> Option<PathBuf> {
+pub(crate) fn output_directory() -> Option<PathBuf> {
     let directory =
         std::env::temp_dir().join(format!("grfsh-output-{}", unsafe { libc::getuid() }));
     std::fs::DirBuilder::new()
@@ -70,6 +70,13 @@ pub(crate) fn save_full_output(text: &str, label: &str) -> Option<PathBuf> {
         .mode(0o700)
         .create(&directory)
         .ok()?;
+    let metadata = std::fs::symlink_metadata(&directory).ok()?;
+    let owned = std::os::unix::fs::MetadataExt::uid(&metadata) == unsafe { libc::getuid() };
+    (metadata.is_dir() && owned).then_some(directory)
+}
+
+pub(crate) fn save_full_output(text: &str, label: &str) -> Option<PathBuf> {
+    let directory = output_directory()?;
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_millis());

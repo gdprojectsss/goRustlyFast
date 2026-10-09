@@ -8,9 +8,13 @@ use crate::table;
 
 impl Shell {
     pub(crate) fn run_background(&mut self, item: &AndOr) {
+        let log = self.agent.then(crate::agent::job_log_path).flatten();
         match sys::fork() {
             Ok(0) => {
                 self.enter_child(Some(0), false);
+                if let Some(path) = &log {
+                    crate::agent::send_output_to(path);
+                }
                 let status =
                     if item.rest.is_empty() && !item.first.negate && item.first.commands.len() == 1
                     {
@@ -23,6 +27,12 @@ impl Shell {
             Ok(pid) => {
                 sys::setpgid(pid, pid);
                 self.started_background(pid, &item.text);
+                if let Some(path) = &log {
+                    eprintln!(
+                        "grfsh: background job {pid} writes its output to {}",
+                        path.display()
+                    );
+                }
                 self.last_background_pid = Some(pid);
                 self.last_status = 0;
             }
