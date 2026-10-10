@@ -115,6 +115,11 @@ const TOPICS: &[(&str, &str, &str)] = &[
         "readonly [name[=value] ...]",
         "make variables read only",
     ),
+    (
+        "replace",
+        "replace [--all] [-v] file old new | replace file < blocks",
+        "replace text that appears exactly once, writing the file atomically",
+    ),
     ("return", "return [n]", "leave a function or sourced file"),
     (
         "set",
@@ -167,6 +172,11 @@ const TOPICS: &[(&str, &str, &str)] = &[
         "remove variables, array elements or functions",
     ),
     ("wait", "wait [-n] [%job]", "wait for background jobs"),
+    (
+        "write-file",
+        "write-file [-p] [-a] [-v] file < text",
+        "write standard input to a file atomically",
+    ),
     (
         "z",
         "z [-l] term ...",

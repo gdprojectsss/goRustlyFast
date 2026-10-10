@@ -105,3 +105,19 @@ fn background_jobs_write_to_a_log_in_agent_mode() {
     assert_eq!(std::fs::read_to_string(path).expect("log"), "from-job\n");
     let _ = std::fs::remove_file(path);
 }
+
+#[test]
+fn replace_and_write_file_edit_atomically() {
+    let directory = std::env::temp_dir().join(format!("grfsh_edit_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    let file = directory.join("notes/a.txt");
+    let script = format!(
+        "printf 'one\\ntwo\\ntwo\\n' | write-file -p {path}; replace {path} one ONE; replace {path} two TWO; echo status=$?; replace --all {path} two 2; cat {path}",
+        path = file.display()
+    );
+    let output = grfsh(&["-c", &script]);
+    assert_eq!(stdout(&output), "status=1\nONE\n2\n2\n");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("appears 2 times, at lines 2, 3"));
+    let _ = std::fs::remove_dir_all(&directory);
+}

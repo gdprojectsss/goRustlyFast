@@ -4,6 +4,7 @@ use crate::shell::{self, Shell};
 
 mod control;
 mod directory;
+mod files;
 mod getopts;
 mod help;
 mod interactive;
@@ -74,6 +75,8 @@ const BUILTINS: &[&str] = &[
     "complete",
     "help",
     "timeout",
+    "replace",
+    "write-file",
 ];
 
 pub(crate) fn is_builtin(name: &str) -> bool {
@@ -131,6 +134,8 @@ pub(crate) fn run(shell: &mut Shell, argv: &[String]) -> i32 {
             return crate::repl::theme::wizard::run(shell, &directory, args);
         }
         "ulimit" => system::ulimit(args, &mut out),
+        "replace" => files::replace(args, &mut out),
+        "write-file" => files::write_file(args, &mut out),
         "timeout" => {
             drop(out);
             return timeout::run(shell, args);
