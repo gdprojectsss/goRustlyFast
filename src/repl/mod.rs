@@ -24,7 +24,7 @@ use completion::ShellNames;
 use helper::ShellHelper;
 use prompt::PromptState;
 
-const USAGE: &str = "usage: grfsh [-l] [-i] [--agent] [--json] [-c command [name [args...]]] [script [args...]]\n       grfsh --check script...";
+const USAGE: &str = "usage: grfsh [-l] [-i] [--agent] [--json] [-c command [name [args...]]] [script [args...]]\n       grfsh --check script...\n       grfsh --explain command | --explain -f script";
 
 fn install_panic_handler() {
     std::panic::set_hook(Box::new(|info| {
@@ -95,6 +95,7 @@ pub fn run() -> i32 {
             0
         }
         Some("--check") => crate::check::run(&args[1..]),
+        Some("--explain") => crate::agent::explain_arguments(&mut shell, &args[1..]),
         Some("-V") | Some("--version") => {
             println!("grfsh {}", env!("CARGO_PKG_VERSION"));
             0

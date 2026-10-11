@@ -121,3 +121,30 @@ fn replace_and_write_file_edit_atomically() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("appears 2 times, at lines 2, 3"));
     let _ = std::fs::remove_dir_all(&directory);
 }
+
+#[test]
+fn explain_shows_expansions_without_running_anything() {
+    let marker = std::env::temp_dir().join(format!("grfsh_explain_{}", std::process::id()));
+    let script = format!(
+        "dir=; rm -rf \"$dir\"/*; touch {marker}; echo $(touch {marker}) done; git reset --hard",
+        marker = marker.display()
+    );
+    let output = grfsh(&["--explain", &script]);
+    let text = stdout(&output);
+    assert!(text.contains("warning: $dir is empty or unset here"));
+    assert!(text.contains("warning: this deletes"));
+    assert!(text.contains("is not run while explaining"));
+    assert!(text.contains("git reset --hard discards uncommitted changes"));
+    assert!(!marker.exists());
+}
+
+#[test]
+fn explain_builtin_sees_current_variables_and_keeps_state() {
+    let output = grfsh(&[
+        "-c",
+        "target=build; explain rm -r $target; cd /; explain cd /tmp; pwd",
+    ]);
+    let text = stdout(&output);
+    assert!(text.contains("rm -r build"));
+    assert!(text.ends_with("/\n"));
+}

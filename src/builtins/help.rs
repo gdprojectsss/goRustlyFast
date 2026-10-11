@@ -63,6 +63,11 @@ const TOPICS: &[(&str, &str, &str)] = &[
         "export [name[=value] ...]",
         "export variables to commands",
     ),
+    (
+        "explain",
+        "explain command... | explain -f script",
+        "show what a command line expands to without running it",
+    ),
     ("false", "false", "fail"),
     ("fg", "fg [%job]", "bring a job to the foreground"),
     (

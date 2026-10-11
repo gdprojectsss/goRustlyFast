@@ -77,6 +77,7 @@ const BUILTINS: &[&str] = &[
     "timeout",
     "replace",
     "write-file",
+    "explain",
 ];
 
 pub(crate) fn is_builtin(name: &str) -> bool {
@@ -136,6 +137,10 @@ pub(crate) fn run(shell: &mut Shell, argv: &[String]) -> i32 {
         "ulimit" => system::ulimit(args, &mut out),
         "replace" => files::replace(args, &mut out),
         "write-file" => files::write_file(args, &mut out),
+        "explain" => {
+            drop(out);
+            return explain(shell, args);
+        }
         "timeout" => {
             drop(out);
             return timeout::run(shell, args);
@@ -160,6 +165,24 @@ pub(crate) fn run(shell: &mut Shell, argv: &[String]) -> i32 {
     };
     let _ = out.flush();
     status
+}
+
+fn explain(shell: &mut Shell, args: &[String]) -> i32 {
+    match crate::sys::fork() {
+        Ok(0) => {
+            shell.enter_child(None, false);
+            let status = crate::agent::explain_arguments(shell, args);
+            crate::sys::exit_now(status)
+        }
+        Ok(pid) => crate::sys::waitpid(pid, 0)
+            .ok()
+            .flatten()
+            .map_or(1, crate::sys::WaitResult::status),
+        Err(error) => {
+            shell::error(format!("fork: {}", crate::sys::error_message(&error)));
+            1
+        }
+    }
 }
 
 pub(super) fn parse_count(command: &str, args: &[String], default: i32) -> Result<i32, i32> {

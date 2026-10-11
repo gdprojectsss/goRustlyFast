@@ -1,4 +1,5 @@
 mod budget;
+mod explain;
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -8,6 +9,7 @@ use crate::sys;
 use crate::table::json::Json;
 
 pub(crate) use budget::{line_limit, save_full_output, trim};
+pub(crate) use explain::explain;
 
 const ENVIRONMENT: &[(&str, &str)] = &[
     ("GRFSH_AGENT", "1"),
@@ -64,6 +66,27 @@ pub(crate) fn send_output_to(path: &std::path::Path) {
         let _ = sys::dup2(fd, 2);
         sys::close(fd);
     }
+}
+
+pub(crate) fn explain_arguments(shell: &mut crate::shell::Shell, args: &[String]) -> i32 {
+    let source = match args {
+        [flag, path] if flag == "-f" || flag == "--file" => match std::fs::read_to_string(path) {
+            Ok(source) => source,
+            Err(error) => {
+                crate::shell::error(format!("explain: {path}: {}", sys::error_message(&error)));
+                return 2;
+            }
+        },
+        [] => {
+            crate::shell::error("explain: usage: explain command... | explain -f script");
+            return 2;
+        }
+        words => words.join(" "),
+    };
+    let mut out = std::io::stdout().lock();
+    let status = explain(shell, &source, &mut out);
+    let _ = out.flush();
+    status
 }
 
 pub(crate) struct Capture {

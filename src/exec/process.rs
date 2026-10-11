@@ -142,6 +142,9 @@ impl Shell {
         source: &str,
         output: bool,
     ) -> Result<String, String> {
+        if self.explaining {
+            return Ok(format!("{}({source})", if output { '>' } else { '<' }));
+        }
         let (read_end, write_end) =
             sys::pipe().map_err(|error| format!("pipe: {}", sys::error_message(&error)))?;
         let (kept, given) = if output {
@@ -184,6 +187,9 @@ impl Shell {
     }
 
     pub(crate) fn capture(&mut self, source: &str) -> String {
+        if self.explaining {
+            return format!("$({})", source.trim());
+        }
         if let Some(path) = file_read_shortcut(source) {
             let path = match crate::syntax::lexer::parse_double_quoted_text(&path)
                 .map_err(|error| error.to_string())
