@@ -3,8 +3,10 @@ mod data;
 mod datetime;
 mod delimited;
 mod filters;
+mod ignore;
 pub(crate) mod json;
 mod render;
+mod search;
 mod sources;
 mod value;
 mod wire;
@@ -21,8 +23,8 @@ use render::Style;
 use value::Value;
 
 const COMMANDS: &[&str] = &[
-    "files", "procs", "load", "from", "to", "where", "sort-by", "select", "reject", "first",
-    "skip", "reverse", "count", "get", "group-by", "uniq-by", "math", "update",
+    "files", "procs", "search", "load", "from", "to", "where", "sort-by", "select", "reject",
+    "first", "skip", "reverse", "count", "get", "group-by", "uniq-by", "math", "update",
 ];
 const CONSUMERS: &[&str] = &[
     "to", "where", "sort-by", "select", "reject", "first", "skip", "reverse", "count", "get",
@@ -59,6 +61,17 @@ pub(crate) fn run(shell: &mut Shell, argv: &[String]) -> i32 {
     let result = match name {
         "files" => sources::files(args).map(Output::Table),
         "procs" => sources::procs(args).map(Output::Table),
+        "search" => {
+            search::parse(args)
+                .and_then(|search| search.run())
+                .map(|(hits, files_only)| {
+                    if shell.pipe_to_table || sys::isatty(1) {
+                        Output::Table(search::to_table(&hits, files_only))
+                    } else {
+                        Output::Text(search::to_text(&hits, files_only))
+                    }
+                })
+        }
         "load" => sources::load(args).map(Output::Table),
         "from" => read_input(name).and_then(|text| sources::from(args, &text).map(Output::Table)),
         "to" => read_table(name).and_then(|table| sources::to(args, &table).map(Output::Text)),

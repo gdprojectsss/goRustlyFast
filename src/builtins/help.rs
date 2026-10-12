@@ -194,6 +194,11 @@ const TOPICS: &[(&str, &str, &str)] = &[
     ),
     ("procs", "procs", "table of running processes"),
     (
+        "search",
+        "search [-i] [-F] [-H] [-l] [-g glob] pattern [path...]",
+        "search file contents, skipping .gitignore'd, hidden and binary files",
+    ),
+    (
         "load",
         "load file",
         "read csv, tsv, json or lines into a table",

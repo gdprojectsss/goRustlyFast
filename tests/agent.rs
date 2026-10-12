@@ -148,3 +148,27 @@ fn explain_builtin_sees_current_variables_and_keeps_state() {
     assert!(text.contains("rm -r build"));
     assert!(text.ends_with("/\n"));
 }
+
+#[test]
+fn search_respects_gitignore_and_prints_grep_style_text() {
+    let directory = std::env::temp_dir().join(format!("grfsh_search_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(directory.join(".git")).unwrap();
+    std::fs::create_dir_all(directory.join("build")).unwrap();
+    std::fs::create_dir_all(directory.join("src")).unwrap();
+    std::fs::write(directory.join(".gitignore"), "build/\n*.log\n!keep.log\n").unwrap();
+    for file in ["build/out", "a.log", "keep.log", "src/main.rs", ".env"] {
+        std::fs::write(directory.join(file), "x\nneedle here\n").unwrap();
+    }
+    std::fs::write(directory.join("src/data.bin"), b"needle\0binary").unwrap();
+    let script = format!(
+        "cd {}; search needle; search -l -g '*.rs' NEEDLE -i; search needle | count",
+        directory.display()
+    );
+    let output = grfsh(&["-c", &script]);
+    assert_eq!(
+        stdout(&output),
+        "keep.log:2:needle here\nsrc/main.rs:2:needle here\nsrc/main.rs\n2\n"
+    );
+    let _ = std::fs::remove_dir_all(&directory);
+}
