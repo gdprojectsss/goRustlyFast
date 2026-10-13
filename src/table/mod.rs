@@ -47,8 +47,8 @@ const COMMANDS: &[&str] = &[
     "update",
 ];
 const CONSUMERS: &[&str] = &[
-    "to", "where", "sort-by", "select", "reject", "first", "skip", "reverse", "count", "get",
-    "group-by", "uniq-by", "math", "update",
+    "replace", "to", "where", "sort-by", "select", "reject", "first", "skip", "reverse", "count",
+    "get", "group-by", "uniq-by", "math", "update",
 ];
 
 pub(crate) enum Output {
@@ -191,6 +191,50 @@ pub(crate) fn command_log(shell: &Shell, contents: &str) -> i32 {
     }
     emit(shell, Output::Table(table));
     0
+}
+
+pub(crate) fn locations(text: &str) -> Result<Vec<(String, Option<usize>)>, String> {
+    let table = match wire::decode(text) {
+        Some(decoded) => Some(decoded?),
+        None if text.trim_start().starts_with(['[', '{']) => json::parse(text)
+            .ok()
+            .map(|parsed| Table::from_json(&parsed)),
+        None => None,
+    };
+    if let Some(table) = table {
+        let path_column = table
+            .columns
+            .iter()
+            .position(|column| column == "path")
+            .ok_or("the piped table has no path column")?;
+        let line_column = table.columns.iter().position(|column| column == "line");
+        return Ok(table
+            .rows
+            .iter()
+            .filter_map(|row| {
+                let Value::Text(path) = &row[path_column] else {
+                    return None;
+                };
+                let line = line_column.and_then(|column| match row[column] {
+                    Value::Int(line) => usize::try_from(line).ok(),
+                    _ => None,
+                });
+                Some((path.clone(), line))
+            })
+            .collect());
+    }
+    Ok(text
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            let mut parts = line.splitn(3, ':');
+            let path = parts.next().unwrap_or_default().to_string();
+            match parts.next().and_then(|number| number.parse().ok()) {
+                Some(number) => (path, Some(number)),
+                None => (line.to_string(), None),
+            }
+        })
+        .collect())
 }
 
 pub(crate) fn parse_untrusted(text: &str) {

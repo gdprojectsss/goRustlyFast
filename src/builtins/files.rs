@@ -5,8 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::shell;
 use crate::sys;
 
-const REPLACE_USAGE: &str =
-    "replace: usage: replace [--all] [-v] file old new, or replace [--all] [-v] file < blocks";
+const REPLACE_USAGE: &str = "replace: usage: replace [--all] [-n] [-v] file old new, replace [--all] [-n] [-v] file < blocks, or search ... | replace [-n] old new";
 const WRITE_USAGE: &str = "write-file: usage: write-file [-p] [-a] [-v] file < text";
 
 fn target(path: &str) -> PathBuf {
@@ -172,19 +171,159 @@ pub(crate) fn apply_replacements(
     Ok((text, total))
 }
 
+pub(crate) fn changed_region(
+    before: &str,
+    after: &str,
+) -> Option<(usize, Vec<String>, Vec<String>)> {
+    let old: Vec<&str> = before.lines().collect();
+    let new: Vec<&str> = after.lines().collect();
+    let prefix = old
+        .iter()
+        .zip(&new)
+        .take_while(|(left, right)| left == right)
+        .count();
+    let suffix = old[prefix..]
+        .iter()
+        .rev()
+        .zip(new[prefix..].iter().rev())
+        .take_while(|(left, right)| left == right)
+        .count();
+    let removed: Vec<String> = old[prefix..old.len() - suffix]
+        .iter()
+        .map(|line| line.to_string())
+        .collect();
+    let added: Vec<String> = new[prefix..new.len() - suffix]
+        .iter()
+        .map(|line| line.to_string())
+        .collect();
+    (!removed.is_empty() || !added.is_empty()).then_some((prefix + 1, removed, added))
+}
+
+fn show_change(out: &mut dyn Write, file: &str, before: &str, after: &str) {
+    if let Some((line, removed, added)) = changed_region(before, after) {
+        let _ = writeln!(out, "{file}:{line}");
+        for text in removed {
+            let _ = writeln!(out, "- {text}");
+        }
+        for text in added {
+            let _ = writeln!(out, "+ {text}");
+        }
+    }
+}
+
+fn noun(count: usize) -> &'static str {
+    if count == 1 {
+        "replacement"
+    } else {
+        "replacements"
+    }
+}
+
+fn replace_lines(contents: &str, lines: &[usize], old: &str, new: &str) -> (String, usize) {
+    let mut count = 0;
+    let updated = contents
+        .split_inclusive('\n')
+        .enumerate()
+        .map(|(index, line)| {
+            if lines.contains(&(index + 1)) {
+                count += line.matches(old).count();
+                line.replace(old, new)
+            } else {
+                line.to_string()
+            }
+        })
+        .collect();
+    (updated, count)
+}
+
+fn replace_piped(old: &str, new: &str, dry_run: bool, out: &mut dyn Write) -> i32 {
+    if old.is_empty() {
+        shell::error("replace: the text to replace is empty");
+        return 2;
+    }
+    let input = match read_stdin("replace") {
+        Ok(input) => input,
+        Err(message) => {
+            shell::error(message);
+            return 2;
+        }
+    };
+    let mut files: Vec<(String, Option<Vec<usize>>)> = Vec::new();
+    let locations = match crate::table::locations(&input) {
+        Ok(locations) => locations,
+        Err(message) => {
+            shell::error(format!("replace: {message}"));
+            return 2;
+        }
+    };
+    for (path, line) in locations {
+        let position = files.iter().position(|(known, _)| *known == path);
+        let index = position.unwrap_or_else(|| {
+            files.push((path.clone(), Some(Vec::new())));
+            files.len() - 1
+        });
+        match (line, &mut files[index].1) {
+            (Some(line), Some(lines)) => lines.push(line),
+            (None, scope) => *scope = None,
+            _ => {}
+        }
+    }
+    let mut total = 0;
+    let mut status = 0;
+    for (file, lines) in files {
+        let path = target(&file);
+        let contents = match std::fs::read_to_string(&path) {
+            Ok(contents) => contents,
+            Err(error) => {
+                shell::error(format!("replace: {file}: {}", sys::error_message(&error)));
+                status = 1;
+                continue;
+            }
+        };
+        let (updated, count) = match lines {
+            Some(lines) => replace_lines(&contents, &lines, old, new),
+            None => (contents.replace(old, new), contents.matches(old).count()),
+        };
+        if count == 0 {
+            continue;
+        }
+        total += count;
+        if dry_run {
+            show_change(out, &file, &contents, &updated);
+            continue;
+        }
+        if let Err(error) = write_atomically(&path, updated.as_bytes()) {
+            shell::error(format!("replace: {file}: {}", sys::error_message(&error)));
+            status = 1;
+            continue;
+        }
+        let _ = writeln!(out, "{file}: {count} {}", noun(count));
+    }
+    if total == 0 && status == 0 {
+        shell::error(format!(
+            "replace: '{old}' was not found in the piped locations"
+        ));
+        return 1;
+    }
+    status
+}
+
 pub(super) fn replace(args: &[String], out: &mut dyn Write) -> i32 {
     let mut all = false;
     let mut verbose = false;
+    let mut dry_run = false;
     let mut positional = Vec::new();
     for argument in args {
         match argument.as_str() {
             "--all" | "-a" => all = true,
             "-v" | "--verbose" => verbose = true,
+            "-n" | "--dry-run" => dry_run = true,
             _ => positional.push(argument.clone()),
         }
     }
     let blocks = match positional.as_slice() {
         [_, old, new] => vec![(old.clone(), new.clone())],
+        [old, new] if !sys::isatty(0) => return replace_piped(old, new, dry_run, out),
         [_] => match read_stdin("replace").and_then(|text| parse_blocks(&text)) {
             Ok(blocks) => blocks,
             Err(message) => {
@@ -213,17 +352,16 @@ pub(super) fn replace(args: &[String], out: &mut dyn Write) -> i32 {
             return 1;
         }
     };
+    if dry_run {
+        show_change(out, file, &contents, &updated);
+        return 0;
+    }
     if let Err(error) = write_atomically(&path, updated.as_bytes()) {
         shell::error(format!("replace: {file}: {}", sys::error_message(&error)));
         return 1;
     }
     if verbose {
-        let noun = if count == 1 {
-            "replacement"
-        } else {
-            "replacements"
-        };
-        let _ = writeln!(out, "{file}: {count} {noun}");
+        let _ = writeln!(out, "{file}: {count} {}", noun(count));
     }
     0
 }
@@ -317,6 +455,23 @@ mod tests {
         let blocks = vec![("fn main() {\n    run();".to_string(), String::new())];
         let error = apply_replacements("x\nfn main() {\n  run();\n", &blocks, false).unwrap_err();
         assert!(error.contains("first line appears at line 2"));
+    }
+
+    #[test]
+    fn changes_are_reported_as_one_region() {
+        assert_eq!(
+            changed_region("a\nb\nc\n", "a\nB\nc\n"),
+            Some((2, vec!["b".into()], vec!["B".into()]))
+        );
+        assert_eq!(changed_region("same\n", "same\n"), None);
+    }
+
+    #[test]
+    fn only_listed_lines_change() {
+        assert_eq!(
+            replace_lines("x\nx x\nx\n", &[2], "x", "y"),
+            ("x\ny y\nx\n".into(), 2)
+        );
     }
 
     #[test]

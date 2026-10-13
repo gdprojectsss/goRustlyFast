@@ -122,7 +122,7 @@ const TOPICS: &[(&str, &str, &str)] = &[
     ),
     (
         "replace",
-        "replace [--all] [-v] file old new | replace file < blocks",
+        "replace [--all] [-n] [-v] file old new | replace file < blocks | search ... | replace old new",
         "replace text that appears exactly once, writing the file atomically",
     ),
     ("return", "return [n]", "leave a function or sourced file"),

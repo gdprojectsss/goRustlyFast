@@ -172,3 +172,23 @@ fn search_respects_gitignore_and_prints_grep_style_text() {
     );
     let _ = std::fs::remove_dir_all(&directory);
 }
+
+#[test]
+fn search_results_pipe_into_replace() {
+    let directory = std::env::temp_dir().join(format!("grfsh_pipe_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(directory.join("a.txt"), "old one\nkeep old\nold two\n").unwrap();
+    std::fs::write(directory.join("b.txt"), "old\n").unwrap();
+    let script = format!(
+        "cd {}; search '^old' a.txt | replace -n old new; search '^old' a.txt | replace old new; cat a.txt; search -l old . | replace old x; cat b.txt",
+        directory.display()
+    );
+    let output = grfsh(&["-c", &script]);
+    assert_eq!(
+        stdout(&output),
+        "a.txt:1\n- old one\n- keep old\n- old two\n+ new one\n+ keep old\n+ new two\n\
+         a.txt: 2 replacements\nnew one\nkeep old\nnew two\na.txt: 1 replacement\nb.txt: 1 replacement\nx\n"
+    );
+    let _ = std::fs::remove_dir_all(&directory);
+}
