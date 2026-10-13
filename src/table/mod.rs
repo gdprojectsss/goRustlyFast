@@ -8,6 +8,7 @@ pub(crate) mod json;
 mod render;
 mod search;
 mod sources;
+mod status;
 mod value;
 mod wire;
 
@@ -23,8 +24,27 @@ use render::Style;
 use value::Value;
 
 const COMMANDS: &[&str] = &[
-    "files", "procs", "search", "load", "from", "to", "where", "sort-by", "select", "reject",
-    "first", "skip", "reverse", "count", "get", "group-by", "uniq-by", "math", "update",
+    "files",
+    "procs",
+    "search",
+    "git-status",
+    "ports",
+    "load",
+    "from",
+    "to",
+    "where",
+    "sort-by",
+    "select",
+    "reject",
+    "first",
+    "skip",
+    "reverse",
+    "count",
+    "get",
+    "group-by",
+    "uniq-by",
+    "math",
+    "update",
 ];
 const CONSUMERS: &[&str] = &[
     "to", "where", "sort-by", "select", "reject", "first", "skip", "reverse", "count", "get",
@@ -61,6 +81,8 @@ pub(crate) fn run(shell: &mut Shell, argv: &[String]) -> i32 {
     let result = match name {
         "files" => sources::files(args).map(Output::Table),
         "procs" => sources::procs(args).map(Output::Table),
+        "git-status" => status::git_status(args).map(Output::Table),
+        "ports" => status::ports(args).map(Output::Table),
         "search" => {
             search::parse(args)
                 .and_then(|search| search.run())

@@ -194,6 +194,16 @@ const TOPICS: &[(&str, &str, &str)] = &[
     ),
     ("procs", "procs", "table of running processes"),
     (
+        "git-status",
+        "git-status [--ignored] [path...]",
+        "table of changed files with state, staged and unstaged columns",
+    ),
+    (
+        "ports",
+        "ports",
+        "table of listening TCP ports with the owning process",
+    ),
+    (
         "search",
         "search [-i] [-F] [-H] [-l] [-g glob] pattern [path...]",
         "search file contents, skipping .gitignore'd, hidden and binary files",
