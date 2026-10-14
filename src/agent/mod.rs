@@ -1,5 +1,6 @@
 mod budget;
 mod explain;
+mod serve;
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -10,6 +11,7 @@ use crate::table::json::Json;
 
 pub(crate) use budget::{line_limit, save_full_output, trim};
 pub(crate) use explain::explain;
+pub(crate) use serve::{client, register, serve, timed_out, unregister};
 
 const ENVIRONMENT: &[(&str, &str)] = &[
     ("GRFSH_AGENT", "1"),

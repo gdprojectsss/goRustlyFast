@@ -277,6 +277,9 @@ impl Shell {
         if self.interactive {
             sys::tcsetpgrp(pgid);
         }
+        if self.agent {
+            crate::agent::register(&pids);
+        }
         let mut statuses = Vec::with_capacity(pids.len());
         let mut stopped = Vec::new();
         let mut interrupted = false;
@@ -289,6 +292,9 @@ impl Shell {
                 }
                 _ => statuses.push(0),
             }
+        }
+        if self.agent {
+            crate::agent::unregister(&pids);
         }
         self.pipe_statuses = statuses.clone();
         let status = if self.options.pipefail {

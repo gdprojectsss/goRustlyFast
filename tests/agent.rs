@@ -192,3 +192,45 @@ fn search_results_pipe_into_replace() {
     );
     let _ = std::fs::remove_dir_all(&directory);
 }
+
+#[test]
+fn serve_keeps_state_between_requests() {
+    let socket = std::env::temp_dir().join(format!("grfsh-{}.sock", std::process::id()));
+    let socket = socket.to_str().unwrap().to_string();
+    struct Server(std::process::Child);
+    impl Drop for Server {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let mut server = Server(
+        Command::new(env!("CARGO_BIN_EXE_grfsh"))
+            .args(["--serve", &socket])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    for _ in 0..100 {
+        if std::path::Path::new(&socket).exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let first = grfsh(&[
+        "--client",
+        &socket,
+        "cd /; name=kept; greet() { echo \"hi $name\"; }",
+    ]);
+    assert_eq!(first.status.code(), Some(0));
+    let second = grfsh(&["--client", &socket, "greet; pwd"]);
+    assert_eq!(stdout(&second), "hi kept\n/\n");
+    let slow = grfsh(&["--client", &socket, "-t", "0.3", "while true; do :; done"]);
+    assert_eq!(slow.status.code(), Some(124));
+    let json = grfsh(&["--json", "--client", &socket, "echo out; false"]);
+    assert!(stdout(&json).contains("\"status\":1,\"stdout\":\"out\\n\""));
+    let _ = grfsh(&["--client", &socket, "exit 0"]);
+    assert!(server.0.wait().unwrap().success());
+    assert!(!std::path::Path::new(&socket).exists());
+}

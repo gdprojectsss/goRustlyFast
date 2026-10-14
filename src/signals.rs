@@ -34,6 +34,10 @@ pub fn set(signal: libc::c_int, disposition: Disposition) {
     }
 }
 
+pub fn mark_pending() {
+    ANY_PENDING.store(true, Ordering::SeqCst);
+}
+
 pub fn any_pending() -> bool {
     ANY_PENDING.load(Ordering::SeqCst)
 }

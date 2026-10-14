@@ -186,6 +186,10 @@ impl Shell {
     }
 
     pub(crate) fn handle_signals(&mut self) {
+        if self.agent && crate::agent::timed_out() {
+            self.last_status = 124;
+            self.flow = Flow::Interrupted;
+        }
         for signal in signals::take_pending() {
             let name = sys::signal_name(signal).unwrap_or_default();
             match self.traps.get(name).cloned() {

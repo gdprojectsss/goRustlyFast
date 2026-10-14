@@ -24,7 +24,7 @@ use completion::ShellNames;
 use helper::ShellHelper;
 use prompt::PromptState;
 
-const USAGE: &str = "usage: grfsh [-l] [-i] [--agent] [--json] [-c command [name [args...]]] [script [args...]]\n       grfsh --check script...\n       grfsh --explain command | --explain -f script";
+const USAGE: &str = "usage: grfsh [-l] [-i] [--agent] [--json] [-c command [name [args...]]] [script [args...]]\n       grfsh --check script...\n       grfsh --explain command | --explain -f script\n       grfsh --serve socket | --client socket [-t seconds] command";
 
 fn install_panic_handler() {
     std::panic::set_hook(Box::new(|info| {
@@ -74,6 +74,10 @@ pub fn run() -> i32 {
     let mut shell = Shell::new();
     let runs_code = match args.first().map(String::as_str) {
         Some("-c") => args.len() > 1,
+        Some("--serve") => {
+            agent = true;
+            false
+        }
         Some(option) => !option.starts_with('-') || option == "-",
         None => false,
     };
@@ -95,6 +99,20 @@ pub fn run() -> i32 {
             0
         }
         Some("--check") => crate::check::run(&args[1..]),
+        Some("--serve") => match args.get(1) {
+            Some(path) => crate::agent::serve(&mut shell, path),
+            None => {
+                shell::error("--serve: expected a socket path");
+                2
+            }
+        },
+        Some("--client") => match args.get(1) {
+            Some(path) => crate::agent::client(path, &args[2..], json),
+            None => {
+                shell::error("--client: expected a socket path");
+                2
+            }
+        },
         Some("--explain") => crate::agent::explain_arguments(&mut shell, &args[1..]),
         Some("-V") | Some("--version") => {
             println!("grfsh {}", env!("CARGO_PKG_VERSION"));
@@ -344,7 +362,7 @@ fn interactive(shell: &mut Shell) {
                 let directory = std::env::var("PWD").unwrap_or_default();
                 shell.run_source(&line);
                 duration = started.elapsed();
-                record_command(&line, &directory, duration, shell.last_status);
+                log_command(&line, &directory, duration, shell.last_status);
                 if shell.flow == Flow::Interrupted {
                     shell.last_status = 128 + libc::SIGINT;
                 }
@@ -413,7 +431,7 @@ pub(crate) fn command_log_path() -> PathBuf {
         .join("grfsh/commands.tsv")
 }
 
-fn record_command(line: &str, directory: &str, duration: Duration, status: i32) {
+pub(crate) fn log_command(line: &str, directory: &str, duration: Duration, status: i32) {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
     let path = command_log_path();
