@@ -281,7 +281,13 @@ impl Lexer {
                 }
                 ';' => {
                     self.position += 1;
-                    let operator = if self.eat(';') { ";;" } else { ";" };
+                    let operator = if self.eat(';') {
+                        if self.eat('&') { ";;&" } else { ";;" }
+                    } else if self.eat('&') {
+                        ";&"
+                    } else {
+                        ";"
+                    };
                     self.push(Token::Operator(operator), start);
                 }
                 '(' if self.peek_at(1) == Some('(') => {

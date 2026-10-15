@@ -438,8 +438,14 @@ impl Shell {
                         return 1;
                     }
                 };
+                let mut status = 0;
+                let mut run_next = false;
                 for arm in arms {
+                    let mut matched = run_next;
                     for pattern in &arm.patterns {
+                        if matched {
+                            break;
+                        }
                         let pattern = match expand::pattern(self, pattern) {
                             Ok(pattern) => pattern,
                             Err(error) => {
@@ -447,12 +453,23 @@ impl Shell {
                                 return 1;
                             }
                         };
-                        if expand::glob::matches_pattern(&pattern, &subject) {
-                            return self.run_list(&arm.body);
-                        }
+                        matched = expand::glob::matches_pattern(&pattern, &subject);
+                    }
+                    run_next = false;
+                    if !matched {
+                        continue;
+                    }
+                    status = self.run_list(&arm.body);
+                    if self.flow != Flow::Normal {
+                        return status;
+                    }
+                    match arm.end {
+                        CaseEnd::Stop => return status,
+                        CaseEnd::FallThrough => run_next = true,
+                        CaseEnd::TestNext => {}
                     }
                 }
-                0
+                status
             }
             CommandKind::For {
                 variable,

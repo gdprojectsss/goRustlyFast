@@ -162,7 +162,7 @@ impl Parser<'_> {
 
     fn at_terminator(&self, terminators: &[&str]) -> bool {
         terminators.iter().any(|terminator| {
-            if *terminator == ")" || *terminator == ";;" {
+            if matches!(*terminator, ")" | ";;" | ";&" | ";;&") {
                 self.is_operator(terminator)
             } else {
                 self.is_keyword(terminator)
@@ -534,13 +534,24 @@ impl Parser<'_> {
                 return Err(self.unexpected());
             }
             self.next();
-            let body = self.list(&[";;", "esac"])?;
-            if self.is_operator(";;") {
+            let body = self.list(&[";;", ";&", ";;&", "esac"])?;
+            let end = if self.is_operator(";&") {
+                CaseEnd::FallThrough
+            } else if self.is_operator(";;&") {
+                CaseEnd::TestNext
+            } else {
+                CaseEnd::Stop
+            };
+            if self.is_operator(";;") || self.is_operator(";&") || self.is_operator(";;&") {
                 self.next();
             } else if !self.is_keyword("esac") {
                 return Err(self.unexpected());
             }
-            arms.push(CaseArm { patterns, body });
+            arms.push(CaseArm {
+                patterns,
+                body,
+                end,
+            });
         }
         Ok(CommandKind::Case { subject, arms })
     }

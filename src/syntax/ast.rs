@@ -207,8 +207,16 @@ pub enum Condition {
     Single(Word),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CaseEnd {
+    Stop,
+    FallThrough,
+    TestNext,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct CaseArm {
+    pub end: CaseEnd,
     pub patterns: Vec<Word>,
     pub body: List,
 }
