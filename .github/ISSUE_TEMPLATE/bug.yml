@@ -1,0 +1,31 @@
+name: Bug report
+description: Something in grfsh behaves wrongly or crashes
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The command or script you ran, what grfsh did, and what you expected.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: bash
+    attributes:
+      label: What bash or zsh does
+      description: If another shell behaves differently, paste its output.
+  - type: input
+    id: version
+    attributes:
+      label: grfsh version
+      description: Output of grfsh --version
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: Operating system and terminal
+      placeholder: macOS 26.6, iTerm2
+    validations:
+      required: true

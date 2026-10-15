@@ -1,0 +1,16 @@
+name: Feature request
+description: A bash feature grfsh lacks, or an idea for something new
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you would like
+      description: Show the command or script you want to write, and what it should do.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why
+      description: What you are trying to get done, and how you work around it today.

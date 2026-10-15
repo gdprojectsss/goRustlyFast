@@ -15,6 +15,28 @@ grfsh \- a small Unix shell with bash style scripting and typed table pipelines
 .B grfsh
 .B \-\-check
 .IR script ...
+.br
+.B grfsh
+.B \-\-explain
+.IR command " | " \-f " " script
+.br
+.B grfsh
+.RB [ \-\-agent ]
+.RB [ \-\-json ]
+.B \-c
+.I command
+.br
+.B grfsh
+.B \-\-serve
+.I socket
+.br
+.B grfsh
+.RB [ \-\-json ]
+.B \-\-client
+.I socket
+.RB [ \-t
+.IR seconds ]
+.I command
 .SH DESCRIPTION
 .B grfsh
 reads commands from a terminal, a script file or a string and runs them.
@@ -58,6 +80,48 @@ Run interactively even when standard input is not a terminal.
 Parse each script without running it and report syntax errors, unsupported
 bash features and unknown commands with their line numbers. Exits with status
 1 when errors are found.
+.TP
+.BI \-\-explain " command"
+Print each command of
+.I command
+after expansion, with globs resolved, without running anything. Command
+substitutions are left unexpanded. Notes point out deletions, force pushes,
+overwritten files and variables that expand to nothing.
+.B \-f
+.I script
+explains a file.
+.TP
+.B \-\-agent
+Agent mode for programs that drive the shell. Pagers become
+.BR cat ,
+colors and git prompts are turned off, standard input is
+.I /dev/null
+when it would be a terminal, and commands run without a controlling
+terminal. Output longer than
+.B GRFSH_OUTPUT_LINES
+lines keeps its first and last lines and the full text is saved to a private
+file whose path is printed. Background jobs write to log files.
+.TP
+.B \-\-json
+Agent mode that prints one JSON object with the status, standard output,
+standard error, duration, final directory and changed environment variables.
+.TP
+.BI \-\-serve " socket"
+Serve an agent mode shell on a Unix socket with mode 0600. Each line is a
+command or a JSON object with
+.BR command ,
+.B timeout
+and
+.B id
+fields, and each reply is a JSON line. State carries over between requests.
+.B exit
+stops the server.
+.TP
+.BI \-\-client " socket"
+Send one command to a server and print its output, exiting with its status.
+.B \-t
+.I seconds
+sets a time limit.
 .TP
 .BR \-V ", " \-\-version
 Print the version and exit.
@@ -133,6 +197,7 @@ for the usage of one builtin. The builtins are
 .BR eval ,
 .BR exec ,
 .BR exit ,
+.BR explain ,
 .BR export ,
 .BR false ,
 .BR fg ,
@@ -150,12 +215,14 @@ for the usage of one builtin. The builtins are
 .BR read ,
 .BR readarray ,
 .BR readonly ,
+.BR replace ,
 .BR return ,
 .BR set ,
 .BR shift ,
 .BR shopt ,
 .BR source ,
 .BR test ,
+.BR timeout ,
 .BR trap ,
 .BR true ,
 .BR type ,
@@ -164,7 +231,33 @@ for the usage of one builtin. The builtins are
 .BR umask ,
 .BR unalias ,
 .BR unset ,
-.BR wait " and " z .
+.BR wait ,
+.B write\-file
+and
+.BR z .
+.TP
+.BI "timeout \fR[\fP\-s " signal "\fR] [\fP\-k " duration "\fR]\fP " "duration command"
+Run a command, function or builtin in its own process group and signal the
+whole group when the time runs out. Returns 124 after a timeout.
+.TP
+.BI "replace \fR[\fP\-\-all\fR] [\fP\-n\fR]\fP " "file old new"
+Replace text that must appear exactly once, writing the file atomically.
+With only a file, read blocks marked by lines starting with
+.BR <<<<<<< ,
+.B =======
+and
+.B >>>>>>>
+from standard input. With only
+.I old
+and
+.I new
+and a pipe on standard input, replace on the lines listed by
+.BR search .
+.B \-n
+shows the change without writing.
+.TP
+.BI "write\-file \fR[\fP\-p\fR] [\fP\-a\fR]\fP " file
+Write standard input to a file atomically.
 .SH TABLE COMMANDS
 .TP
 .BR files " [path] [\-a] [\-r]"
@@ -172,6 +265,20 @@ List a directory as a table with name, type, size and modified columns.
 .TP
 .B procs
 List running processes.
+.TP
+.BI "search \fR[\fP\-i\fR] [\fP\-F\fR] [\fP\-l\fR] [\fP\-g " glob "\fR]\fP " "pattern \fR[\fPpath...\fR]\fP"
+Search file contents, skipping hidden files, binary files and anything
+ignored by
+.I .gitignore
+files. Prints
+.I path:line:text
+to programs and files, and a table otherwise.
+.TP
+.B git\-status
+List changed files with their state.
+.TP
+.B ports
+List listening TCP ports and the processes that own them.
 .TP
 .BI load " file"
 Read a csv, tsv, json or jsonl file, or any other file as lines.
@@ -205,6 +312,12 @@ Template for the default prompt when no theme file exists.
 .B GRFSH_THEME
 Name of a theme preset to use when no theme file exists.
 .TP
+.B GRFSH_AGENT
+When set to 1, run in agent mode.
+.TP
+.B GRFSH_OUTPUT_LINES
+Output limit in agent mode, 400 by default, 0 for no limit.
+.TP
 .B IFS
 Field separators used for word splitting and
 .BR read .
@@ -234,6 +347,8 @@ The status of the last command run, 2 for a syntax error, 126 when a command
 cannot be executed, 127 when a command is not found, and 128 plus the signal
 number when a command is killed by a signal.
 .SH SEE ALSO
+The full documentation is at https://grf.sh/docs/
+.PP
 .BR bash (1),
 .BR sh (1),
 .BR starship (1)

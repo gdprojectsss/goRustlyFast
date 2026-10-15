@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-repo="gdprojectsss/goRustlyFast"
+site="${GRFSH_DOWNLOAD_BASE:-https://grf.sh}"
 install_dir="${GRFSH_INSTALL_DIR:-$HOME/.local/bin}"
 version="${GRFSH_VERSION:-latest}"
 
@@ -19,15 +19,14 @@ case "$(uname -s)/$(uname -m)" in
 esac
 
 if [ "$version" = latest ]; then
-    tag="$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest" \
-        | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1)"
+    tag="$(curl -fsSL "$site/latest" | head -n 1)"
 else
     tag="$version"
 fi
 [ -n "$tag" ] || fail "could not find a release"
 
 name="grfsh-$tag-$target"
-url="https://github.com/$repo/releases/download/$tag/$name.tar.gz"
+url="$site/download/$tag/$name.tar.gz"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
