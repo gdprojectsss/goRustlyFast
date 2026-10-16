@@ -53,3 +53,19 @@ jobs:
 
       - name: Check and run well known shell scripts
         run: ./scripts/real-world.sh
+
+  bench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: sudo apt-get update && sudo apt-get install -y dash hyperfine jq
+
+      - run: cargo build --release
+
+      - name: Stay within 1.5 times the time of dash
+        run: ./scripts/bench-check.sh

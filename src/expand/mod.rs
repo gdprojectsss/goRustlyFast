@@ -2,15 +2,30 @@ mod arith;
 mod brace;
 pub mod glob;
 
+use std::rc::Rc;
+
 use crate::shell::Shell;
 use crate::syntax::ast::{FallbackKind, ParameterOperation, Subscript, Word, WordPart};
 use crate::sys;
 use crate::variables::Key;
 
+thread_local! {
+    static DEFAULT_SEPARATORS: Rc<str> = Rc::from(DEFAULT_IFS);
+}
+
+fn separators(shell: &Shell) -> Rc<str> {
+    match shell.variables.get("IFS") {
+        Some(ifs) => Rc::from(ifs.as_str()),
+        None => DEFAULT_SEPARATORS.with(Rc::clone),
+    }
+}
+
 pub fn words(shell: &mut Shell, words: &[Word]) -> Result<Vec<String>, String> {
     let mut out = Vec::new();
+    let ifs = separators(shell);
     for word in words {
-        for expanded in brace::expand(word) {
+        let braced = brace::expand(word);
+        for expanded in braced.as_deref().unwrap_or(std::slice::from_ref(word)) {
             let mut fields = Fields::new(true);
             fields.glob_options = glob::GlobOptions {
                 dotglob: shell.options.dotglob,
@@ -18,10 +33,8 @@ pub fn words(shell: &mut Shell, words: &[Word]) -> Result<Vec<String>, String> {
                 globstar: shell.options.globstar,
             };
             fields.nullglob = shell.options.nullglob;
-            fields.ifs = shell
-                .get_variable("IFS")
-                .unwrap_or_else(|| DEFAULT_IFS.into());
-            expand_into(shell, &expanded, &mut fields)?;
+            fields.ifs = Rc::clone(&ifs);
+            expand_into(shell, expanded, &mut fields)?;
             out.extend(fields.finish());
         }
     }
@@ -160,7 +173,7 @@ fn expand_into(shell: &mut Shell, word: &Word, fields: &mut Fields) -> Result<()
 }
 
 pub fn brace_expand(word: &Word) -> Vec<Word> {
-    brace::expand(word)
+    brace::expand(word).unwrap_or_else(|| vec![word.clone()])
 }
 
 pub fn evaluate_arithmetic(shell: &mut Shell, text: &str) -> Result<i64, String> {
@@ -455,7 +468,7 @@ struct Fields {
     pattern_mode: bool,
     glob_options: glob::GlobOptions,
     nullglob: bool,
-    ifs: String,
+    ifs: Rc<str>,
 }
 
 pub(crate) const DEFAULT_IFS: &str = " \t\n";
@@ -496,7 +509,7 @@ impl Fields {
             pattern_mode: false,
             glob_options: glob::GlobOptions::default(),
             nullglob: false,
-            ifs: DEFAULT_IFS.to_string(),
+            ifs: DEFAULT_SEPARATORS.with(Rc::clone),
         }
     }
 
@@ -537,7 +550,7 @@ impl Fields {
             self.quoted(text);
             return;
         }
-        let ifs = self.ifs.clone();
+        let ifs = Rc::clone(&self.ifs);
         let separator = |character: char| ifs.contains(character);
         if text.starts_with(separator) {
             self.break_field();

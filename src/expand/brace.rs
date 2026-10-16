@@ -8,17 +8,17 @@ enum Item {
     Part(WordPart),
 }
 
-pub fn expand(word: &Word) -> Vec<Word> {
+pub fn expand(word: &Word) -> Option<Vec<Word>> {
     let has_brace = word
         .parts
         .iter()
         .any(|part| matches!(part, WordPart::Literal(text) if text.contains('{')));
     if !has_brace {
-        return vec![word.clone()];
+        return None;
     }
     let mut results = Vec::new();
     expand_items(to_items(word), &mut results);
-    results.into_iter().map(from_items).collect()
+    Some(results.into_iter().map(from_items).collect())
 }
 
 fn to_items(word: &Word) -> Vec<Item> {
@@ -203,6 +203,7 @@ mod tests {
             })
             .unwrap();
         expand(&word)
+            .unwrap_or_else(|| vec![word.clone()])
             .into_iter()
             .map(|word| {
                 word.parts

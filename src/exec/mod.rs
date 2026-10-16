@@ -285,15 +285,12 @@ impl Shell {
             [command] => self.run_command(command, false),
             commands => self.run_forked(commands, text),
         };
-        let statuses = if pipeline.commands.len() == 1 {
-            vec![status]
+        if pipeline.commands.len() == 1 {
+            self.last_pipe_statuses.clear();
+            self.last_pipe_statuses.push(status);
         } else {
-            std::mem::take(&mut self.pipe_statuses)
-        };
-        self.arrays.insert(
-            "PIPESTATUS".into(),
-            Array::indexed(statuses.iter().map(|status| status.to_string()).collect()),
-        );
+            self.last_pipe_statuses = std::mem::take(&mut self.pipe_statuses);
+        }
         let status = if pipeline.negate {
             (status == 0) as i32
         } else {

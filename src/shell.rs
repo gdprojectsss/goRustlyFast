@@ -72,6 +72,7 @@ pub struct Shell {
     pub bindings_version: u64,
     pub completion_specs: std::collections::BTreeMap<String, CompletionSpec>,
     pub pipe_statuses: Vec<i32>,
+    pub last_pipe_statuses: Vec<i32>,
     pub substitution_fds: Vec<i32>,
     pub substitution_pids: Vec<i32>,
     pub started: std::time::Instant,
@@ -124,6 +125,7 @@ impl Shell {
             bindings_version: 0,
             completion_specs: std::collections::BTreeMap::new(),
             pipe_statuses: Vec::new(),
+            last_pipe_statuses: Vec::new(),
             substitution_fds: Vec::new(),
             substitution_pids: Vec::new(),
             started: std::time::Instant::now(),
@@ -234,6 +236,12 @@ impl Shell {
     pub fn special_array(&self, name: &str) -> Option<Vec<String>> {
         match name {
             "BASH_SOURCE" => Some(self.source_stack.iter().rev().cloned().collect()),
+            "PIPESTATUS" => Some(
+                self.last_pipe_statuses
+                    .iter()
+                    .map(|status| status.to_string())
+                    .collect(),
+            ),
             "FUNCNAME" => {
                 let mut names: Vec<String> = self.function_stack.iter().rev().cloned().collect();
                 if !names.is_empty() && self.source_stack.is_empty() {
