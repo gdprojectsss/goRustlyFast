@@ -1,6 +1,6 @@
 class Grfsh < Formula
   desc "Small Unix shell with bash style scripting and typed table pipelines"
-  homepage "https://github.com/gdprojectsss/goRustlyFast"
+  homepage "https://grf.sh"
   license "MIT"
   head "https://github.com/gdprojectsss/goRustlyFast.git", branch: "main"
 
