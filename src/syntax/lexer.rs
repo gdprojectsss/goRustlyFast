@@ -75,6 +75,7 @@ impl fmt::Display for ParseError {
 #[derive(Debug)]
 pub struct Lexed {
     pub tokens: Vec<Spanned>,
+    pub heredocs: Vec<Word>,
 }
 
 pub fn lex(source: &str) -> Result<Lexed, ParseError> {
@@ -91,7 +92,10 @@ pub fn lex(source: &str) -> Result<Lexed, ParseError> {
             break;
         }
     }
-    Ok(Lexed { tokens })
+    Ok(Lexed {
+        tokens,
+        heredocs: lexer.heredocs,
+    })
 }
 
 fn escape_bracket_spaces(text: &str) -> String {
@@ -292,6 +296,11 @@ impl<'a> Lexer<'a> {
 
     pub(crate) fn heredoc_body(&self, index: usize) -> Word {
         self.heredocs.get(index).cloned().unwrap_or_default()
+    }
+
+    pub(crate) fn adopt_heredoc(&mut self, body: Word) -> usize {
+        self.heredocs.push(body);
+        self.heredocs.len() - 1
     }
 
     pub(crate) fn release_consumed(&mut self) {

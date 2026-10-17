@@ -2,6 +2,7 @@ use std::io::{self, Write};
 
 use crate::shell::{self, Shell};
 
+mod aliases;
 mod control;
 mod deparse;
 mod directory;
@@ -115,8 +116,8 @@ pub(crate) fn run(shell: &mut Shell, argv: &[String]) -> i32 {
         }
         "unset" => variables::unset(shell, args),
         "echo" => output::echo(args, &mut out),
-        "alias" => variables::alias(shell, args, &mut out),
-        "unalias" => variables::unalias(shell, args),
+        "alias" => aliases::alias(shell, args, &mut out),
+        "unalias" => aliases::unalias(shell, args),
         "true" | ":" => 0,
         "false" => 1,
         "return" => control::return_from(shell, args),
