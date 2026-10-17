@@ -37,7 +37,7 @@
 <br>
 
 > [!NOTE]
-> grfsh 1.0 runs real scripts and makes a pleasant interactive shell, but it does not cover all of bash: extended globs, name references, coprocesses and `select` are missing. Run `grfsh --check script.sh` to see whether a script uses anything grfsh cannot run, and see [compatibility](https://grf.sh/docs/compatibility/) for the full list.
+> grfsh runs real scripts and makes a pleasant interactive shell, but it does not cover all of bash yet: it passes about 82% of the Oils bash spec suite, where bash itself passes 89%. Run `grfsh --check script.sh` to see whether a script uses anything grfsh cannot run, and see [compatibility](https://grf.sh/docs/compatibility/) for the full list.
 
 ## What is grfsh?
 

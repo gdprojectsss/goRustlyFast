@@ -9,16 +9,14 @@ alias/22	Loop split across alias and arg works
 alias/23	Loop split across alias in another way
 alias/24	Loop split across both iterative and recursive aliases
 alias/28	Two aliases in pipeline
-alias/31	Alias is respected inside eval
 alias/34	alias with line continuation in the middle
 alias/35	alias for left brace
 alias/36	alias for left paren
 alias/39	here doc inside alias
-append/8	error: append used like env prefix
+alias/46	alias with keywords
 append/14	typeset s${dyn}+=
 arg-parse/1	shift 1 extra
 arg-parse/2	continue 1 extra, break, etc.
-arith-context/0	Multiple right brackets inside expression
 arith-context/4	Array index on LHS with indices
 arith-context/6	Ambiguous colon in slice
 arith-context/9	$[ is a synonym for $((
@@ -26,27 +24,10 @@ arith-context/10	$[$var is a synonym for $(($var (#2426)
 arith-context/11	$[$undefined] is a synonym for $(($undefined (#2566)
 arith-context/13	Empty expression for (( ))
 arith-context/15	Empty expression a[]
-arith-dynamic/0	Double quotes
-arith-dynamic/1	Single quotes
-arith-dynamic/2	Substitutions
-arith-dynamic/3	Variable references
-arith/10	Invalid string to int
 arith/13	Integer constant validation
-arith/19	Increment and decrement array elements
 arith/20	Increment undefined variables with nounset
-arith/21	Comma operator (borrowed from C)
-arith/25	Logical Ops Short Circuit
-arith/29	Array indexing in arith
-arith/39	Recursive name evaluation is a result of runtime parse/eval
 arith/40	nounset with arithmetic
-arith/53	Double subscript
-arith/56	comma operator
-arith/58	array assignment with dynamic array name
-arith/60	unary array assignment with dynamic var name
-arith/61	Dynamic parsing of arithmetic
-arith/69	undef[0]
-arith/71	s[0] with string abc
-arith/72	s[0] with string 42
+arith/70	undef[0] with nounset
 array-assign/1	Indexed LHS with spaces
 array-assign/2	Nested a[i[0]]=0
 array-assign/3	Multiple LHS array words
@@ -57,266 +38,132 @@ array-assign/7	Are quotes allowed?
 array-assign/8	Tricky parsing - a[ a[0]=1 ]=X  a[ a[0]+=1 ]+=X
 array-assign/9	argv.py a[1 + 2]=
 array-assign/10	declare builtin doesn't allow spaces
-array-assoc/0	Literal syntax ([x]=y)
-array-assoc/1	set associative array to indexed array literal (very surprising bash behavior)
 array-assoc/2	Can initialize assoc array with the "(key value ...)" sequence
-array-assoc/3	create empty assoc array, put, then get
-array-assoc/7	coerce to string with ${A[*]}, etc.
-array-assoc/13	lookup with double quoted strings "mykey"
-array-assoc/14	lookup with single quoted string
-array-assoc/15	lookup with unquoted $key and quoted "$i$i"
-array-assoc/17	bash bug: "i+1" and i+1 are the same key
-array-assoc/18	Array stored in associative array gets converted to string (without strict_array)
-array-assoc/19	Indexed array as key of associative array coerces to string (without shopt -s strict_array)
-array-assoc/20	Append to associative array value A['x']+='suffix'
 array-assoc/21	Slice of associative array doesn't make sense in bash
-array-assoc/24	(( A[5] += 42 ))
-array-assoc/25	(( A[5] += 42 )) with empty cell
-array-assoc/26	setting key to itself (from bash-bug mailing list)
 array-assoc/28	associative array and brace expansion
 array-assoc/30	unset -v and assoc array
 array-assoc/31	nameref and assoc array
 array-assoc/32	${!ref} and assoc array
 array-assoc/33	printf -v and assoc array
-array-assoc/36	test -v assoc[key]
+array-assoc/34	bash bug: (( A["$key"] = 1 )) doesn't work
 array-assoc/37	test -v with dynamic parsing
-array-assoc/38	[[ -v assoc[key] ]]
-array-assoc/39	[[ -v assoc[key] ]] syntax errors
-array-assoc/40	BashAssoc a+=()
-array-assoc/41	BashAssoc ${a[@]@Q}
-array-compat/0	Assignment Causes Array Decay
-array-compat/1	Array Decay with IFS
-array-compat/2	User arrays decay
-array-compat/7	array decays to string when comparing with [[ a = b ]]
-array-compat/10	value.BashArray internal representation - Indexed
-array-compat/11	value.BashArray internal representation - Assoc (ordering is a problem)
 array-literal/0	Tilde expansions in RHS of [k]=v (BashArray)
-array-literal/1	Tilde expansions in RHS of [k]=v (BashAssoc)
 array-literal/2	index increments without [k]= (BashArray)
 array-literal/3	[k]=$v and [k]="$@" (BashArray)
 array-literal/4	[k]=$v and [k]="$@" (BashAssoc)
 array-literal/5	append to element (BashArray)
 array-literal/6	append to element (BashAssoc)
-array-literal/7	non-index forms of element (BashAssoc)
-array-literal/8	Evaluation order (1)
 array-literal/9	Evaluation order (2)
 array-literal/10	Evaluation order (3)
-array-literal/11	[k1]=v1 (BashArray)
-array-literal/12	[k1]=v1 (BashAssoc)
 array-literal/13	[k1]=v1 looking like brace expansions (BashAssoc)
 array-literal/14	[k1]=v1 looking like brace expansions (BashArray)
 array-literal/15	BashArray cannot be changed to BashAssoc and vice versa
 array-literal/17	(strict_array) declare -A s+=()
-array-literal/18	(strict_array) assoc=(key value ...) is not allowed
+array-sparse/0	Performance demo
 array-sparse/11	unset -v a[i] with out-of-bound negative index
-array-sparse/13	[[ -v a[i] ]]
-array-sparse/15	((sp[i])) and ((sp[i]++))
-array-sparse/16	((sp[i])) and ((sp[i]++)) with invalid negative index
 array-sparse/19	${a[@]:offset:length}
 array-sparse/20	${@:offset:length}
 array-sparse/21	${a[@]:BigInt}
-array-sparse/25	${a[@]@P}, ${a[@]@Q}, and ${a[@]@a}
-array-sparse/26	${a[@]-unset}, ${a[@]:-empty}, etc.
 array-sparse/28	${!a[0]}
-array-sparse/30	"${a[*]}"
 array-sparse/31	compgen -F _set_COMPREPLY
 array-sparse/34	(YSH) $[a1 === a2]
-array-sparse/35	(YSH) append v1 v2... (a)
 array-sparse/36	(YSH) $[bool(a)]
-array-sparse/39	Initializing indexed array with ([index]=value)
 array/3	space before ( in array initialization
-array/5	array with invalid token
-array/10	Negative index and sparse array
-array/11	Negative index and sparse array
-array/17	Retrieve sparse array indices with ${!a}
 array/18	${!a[1]} is named ref in bash
 array/25	Exporting array doesn't do anything, not even first element
 array/27	Arrays can't be used as env bindings
 array/28	Associative arrays can't be used as env bindings either
-array/32	Set array item to array
 array/35	Negative slice length
-array/43	Single array with :-
 array/53	array default
 array/55	declare -a / local -a is empty array
-array/56	Create sparse array
-array/57	Create sparse array implicitly
-array/58	Append sparse arrays
 array/59	Slice of sparse array with [@]
-array/61	Using an array itself as the index on RHS
-array/65	Is element set?  test -v a[i]
-array/66	[[ -v a[i] ]]
 array/67	test -v a[i] with arith expressions
-array/68	More arith expressions in [[ -v array[expr]] ]]
-array/70	Regression: Negative index in [[ -v a[index] ]]
 array/73	Regression: unset a[-2]: out-of-bound negative index should cause error
 array/74	Regression: Out-of-bound negative offset for ${a[@]:offset}
-array/77	Regression: silent out-of-bound negative index in ${a[-2]} and $((a[-2]))
 assign-deferred/4	export a[7]=8
 assign-deferred/5	'builtin' prefix is allowed on assignments
 assign-deferred/6	'command' prefix is allowed on assignments
-assign-deferred/7	is 'builtin' prefix and array allowed?  OSH is smarter
-assign-deferred/8	is 'command' prefix and array allowed?  OSH is smarter
-assign-dialects/0	K and V are variables in (( array[K] = V ))
 assign-dialects/2	test -v with arrays
-assign-dialects/3	test -v with assoc arrays
-assign-extended/2	declare -f exit code indicates function existence
 assign-extended/4	declare -F with shopt -s extdebug prints more info
 assign-extended/5	declare -F with shopt -s extdebug and main file
 assign-extended/7	declare
 assign-extended/8	declare -p
-assign-extended/9	declare -p doesn't print binary data, but can be loaded into bash
 assign-extended/10	declare -p var
-assign-extended/11	declare -p arr
 assign-extended/12	declare -p foo=bar doesn't make sense
-assign-extended/13	declare -pnrx
-assign-extended/14	declare -paA
-assign-extended/15	declare -pnrx var
 assign-extended/18	ble.sh: eval -- "$(declare -p var arr)"
-assign-extended/19	declare -p and value.Undef
 assign-extended/20	eval -- "$(declare -p arr)" (restore arrays w/ unset elements)
-assign-extended/22	typeset -f
-assign-extended/24	typeset -r makes a string readonly
-assign-extended/25	typeset -ar makes it readonly
 assign-extended/29	syntax error in array assignment
-assign-extended/30	declare -g (bash-specific; bash-completion uses it)
 assign-extended/31	myvar=typeset (another form of dynamic assignment)
 assign-extended/32	dynamic array parsing is not allowed
 assign-extended/33	dynamic flag in array in assign builtin
-assign-extended/34	typeset +x
 assign-extended/36	function name with /
-assign-extended/38	unset and shell funcs
-assign/2	Env binding can use preceding bindings, but not subsequent ones
 assign/16	dynamic local variables (and splitting)
-assign/18	'local x' does not set variable
-assign/21	'declare -A' and then dict assignment
 assign/25	Test above without 'local' (which is not POSIX)
 assign/30	assignment using dynamic keyword (splits in most shells, not in zsh/osh)
 assign/31	assignment using dynamic var names doesn't split
 assign/45	"declare -a arr" and "readonly -a a" creates an empty array (OSH)
 background/1	wait -n with arguments - arguments are respected
-background/5	wait with invalid arg
-background/6	wait for N parallel jobs
-background/7	wait for N parallel jobs and check failure
-background/10	Start background pipeline, wait $pid
-background/14	Brace group in background, wait all
-background/15	Wait on background process PID
-background/16	Wait on multiple specific IDs returns last status
-background/20	Background process and then a singleton pipeline
-background/21	jobs prints one line per job
-background/22	jobs -p prints one line per job
-background/24	YSH wait --all
-background/25	YSH wait --verbose
 background/26	Signal message for killed background job
 ble-features/0	[bash_unset] local-unset / dynamic-unset for localvar
 ble-features/1	[bash_unset] local-unset / dynamic-unset for localvar (mutated from tempenv)
 ble-features/2	[bash_unset] local-unset / dynamic-unset for tempenv
 ble-features/3	[bash_unset] function call with tempenv vs tempenv-eval
 ble-features/4	[bash_unset] localvar-inherit from tempenv
-ble-features/7	[compat_array] scalar write to associative arrays
-ble-idioms/0	recursive arith: one level
-ble-idioms/1	recursive arith: two levels
-ble-idioms/2	recursive arith: short circuit &&, ||
-ble-idioms/3	recursive arith: short circuit ?:
-ble-idioms/4	recursive arith: side effects
-ble-idioms/5	recursive arith: recursion
-ble-idioms/6	recursive arith: array elements
 ble-idioms/10	is-array with ${var@a}
 ble-idioms/12	shift unshift reverse
 ble-idioms/13	shopt -u expand_aliases and eval
 ble-idioms/14	Issue #1069 [40] BUG: a=(declare v); "${a[@]}" fails
 ble-idioms/15	Issue #1069 [40] BUG: a=declare; "$a" v=1 fails
-ble-idioms/17	Issue #1069 [49] BUG: \return 0 does not work (other variations)
 ble-idioms/18	Issue #1069 [52] BUG: \builtin local v=1 fails
 ble-idioms/19	Issue #1069 [53] BUG: a[1 + 1]=2, etc. fails
 ble-idioms/20	Issue #1069 [53] - LHS array parsing a[1 + 2]=3 (see spec/array-assign for more)
-ble-idioms/23	Issue #1069 [57] - Variable v should be visible after IFS= eval 'local v=...'
-ble-idioms/25	Issue #1069 [59] - Assigning Str to BashArray/BashAssoc should not remove BashArray/BashAssoc
 ble-unset/1	[bash_unset] local-unset / dynamic-unset for localvar on nested-context
 ble-unset/2	[bash_unset] dynamic-unset for nested localvars
 blog1/1	${###}
 blog1/2	${####}
 blog1/3	${##2}
 blog1/4	${###2}
-blog1/8	Julia example from spec/oil-user-feedback
 blog2/2	-a -a -a
 bool-parse/1	test builtin: ( = ) is confusing: equality test or non-empty string test
 bool-parse/2	test builtin: ( == ) is confusing: equality test or non-empty string test
-bool-parse/4	Not allowed: [[ ) ]] and [[ ( ]]
 bool-parse/7	[[ -f -f ]] and [[ -f == ]]
 brace-expansion/28	Tilde expansion with brace expansion
 brace-expansion/29	Two kinds of tilde expansion
 brace-expansion/42	Mixed case char expansion is invalid
-bugs/3	assign readonly -- one line
 bugs/5	assign readonly -- multiple lines -- set -o posix
-bugs/8	First word like foo$x() and foo$[1+2] (regression)
-bugs/9	Function names
 bugs/10	file with NUL byte
-bugs/11	fastlex: PS1 format string that's incomplete / with NUL byte
+bugs/19	command execution $(echo 42 | tee PWNED) not allowed
 bugs/21	unset doesn't allow command execution
 bugs/27	Crash after changing $[] to be alias of $(( ))
 builtin-bash/0	help
 builtin-bash/1	bad help topic
-builtin-bash/5	mapfile (delimiter): -d delim
 builtin-bash/6	mapfile (delimiter): -d '' (null-separated)
-builtin-bash/10	mapfile (store position): -O start
-builtin-bash/12	mapfile / readarray stdin  TODO: Fix me.
 builtin-bracket/21	operator/operand ambiguity with ]
 builtin-bracket/22	operator/operand ambiguity with -a
-builtin-bracket/39	test -o for options
 builtin-cd/1	cd BAD/..
 builtin-cd/2	cd with 2 or more args - with strict_arg_parse
-builtin-cd/8	pwd with symlink and -P
 builtin-cd/9	setting $PWD doesn't affect the value of 'pwd' builtin
 builtin-cd/10	unset PWD; then pwd
 builtin-cd/11	'unset PWD; pwd' before any cd (tickles a rare corner case)
 builtin-cd/12	lie about PWD; pwd before any cd
-builtin-cd/19	cd permits double bare dash
-builtin-cd/20	cd to symlink with -L and -P
-builtin-cd/21	cd to relative path with -L and -P
-builtin-cd/26	Survey of getcwd() syscall
 builtin-completion/0	complete with no args and complete -p both print completion spec
 builtin-completion/1	complete -F f is usage error
 builtin-completion/2	complete with nonexistent function
-builtin-completion/4	-A function prints functions
-builtin-completion/5	Invalid syntax
 builtin-completion/6	how compgen calls completion functions
 builtin-completion/7	complete -o -F (git)
 builtin-completion/8	compopt with invalid syntax
 builtin-completion/9	compopt fails when not in completion function
-builtin-completion/10	compgen -f on invalid  dir
-builtin-completion/11	compgen -f
-builtin-completion/12	compgen -v with local vars
-builtin-completion/13	compgen -v on unknown var
-builtin-completion/14	compgen -v P
-builtin-completion/15	compgen -e with global/local exported vars
-builtin-completion/16	compgen -e on known, but unexported, var
-builtin-completion/17	compgen -e on unknown var
-builtin-completion/18	compgen -e P
-builtin-completion/19	compgen with actions: function / variable / file
 builtin-completion/20	compgen with actions: alias, setopt
 builtin-completion/21	compgen with actions: shopt
 builtin-completion/22	compgen with action and suffix: helptopic
-builtin-completion/25	compgen -A user
-builtin-completion/26	compgen -A command completes external commands
-builtin-completion/27	compgen -A command completes functions and aliases
-builtin-completion/28	compgen -A command completes builtins and keywords
-builtin-completion/29	compgen -k shows the same keywords as bash
-builtin-completion/31	compgen -k completes reserved shell keywords
-builtin-completion/32	-o filenames and -o nospace have no effect with compgen
-builtin-completion/33	-o plusdirs and -o dirnames with compgen
 builtin-completion/34	compgen -o default completes files and dirs
 builtin-completion/35	compgen doesn't respect -X for user-defined functions
 builtin-completion/36	compgen -W words -X filter
 builtin-completion/37	compgen -f -X filter -- $cur
-builtin-completion/38	compgen doesn't need shell quoting
-builtin-completion/39	compgen -W 'one two three'
 builtin-completion/40	compgen -W evaluates code in $()
 builtin-completion/41	compgen -W uses IFS, and delimiters are escaped with \
 builtin-completion/42	Parse errors for compgen -W and complete -W
 builtin-completion/43	Runtime errors for compgen -W
-builtin-completion/44	Runtime errors for compgen -F func
-builtin-completion/45	compgen -W '' cmd is not a usage error
-builtin-completion/46	compgen -A builtin
 builtin-completion/47	complete -C vs. compgen -C
 builtin-completion/50	compgen -F with scalar COMPREPLY
 builtin-dirs/1	pushd usage
@@ -324,29 +171,8 @@ builtin-dirs/2	popd usage error
 builtin-dirs/8	dirs -p to print one entry per line
 builtin-dirs/9	dirs -l to print in long format, no tilde prefix
 builtin-dirs/16	pushd does not take more than one argument
-builtin-echo/9	echo -e with C escapes
-builtin-echo/10	echo -e with whitespace C escapes
-builtin-echo/12	\c stops processing input
-builtin-echo/13	echo -e with hex escape
-builtin-echo/14	echo -e with octal escape
-builtin-echo/15	echo -e with 4 digit unicode escape
-builtin-echo/16	echo -e with 8 digit unicode escape
-builtin-echo/17	\0377 is the highest octal byte
-builtin-echo/18	\0400 is one more than the highest octal byte
-builtin-echo/19	\0777 is out of range
-builtin-echo/20	incomplete hex escape
-builtin-echo/22	incomplete octal escape
-builtin-echo/23	incomplete unicode escape
-builtin-echo/24	\u6
 builtin-eval-source/1	eval accepts/ignores --
 builtin-eval-source/2	eval usage
-builtin-eval-source/4	eval YSH block with 'break continue return error'
-builtin-eval-source/8	source accepts/ignores --
-builtin-eval-source/15	Eval in does tilde expansion
-builtin-eval-source/16	Eval in bash does tilde expansion in array
-builtin-eval-source/18	source looks in PATH for files
-builtin-eval-source/19	source finds files in PATH before current dir
-builtin-eval-source/22	sourcing along PATH should ignore directories
 builtin-fc/0	fc -l lists history commands
 builtin-fc/1	fc -ln lists history commands without numbers
 builtin-fc/2	fc -lr lists history commands in reverse order
@@ -381,23 +207,9 @@ builtin-history/11	history usage
 builtin-history/12	HISTSIZE shrinks the in-memory history when changed
 builtin-history/13	HISTFILESIZE shrinks the history file when changed
 builtin-history/14	recording history can be toggled with set -o/+o history
-builtin-history/15	shopt histappend toggle check
 builtin-history/16	shopt histappend - osh ignores shopt and appends, bash sometimes overwrites
-builtin-kill/0	kill -15 kills the process with SIGTERM
-builtin-kill/1	kill -KILL kills the process with SIGKILL
-builtin-kill/2	kill -n 9 specifies the signal number
-builtin-kill/3	kill -s TERM specifies the signal name
-builtin-kill/4	kill -terM -SigterM isn't case sensitive
-builtin-kill/5	kill HUP pid gives the correct error
-builtin-kill/6	kill -l shows signals
-builtin-kill/7	kill -L also shows signals
-builtin-kill/8	kill -l 10 TERM translates between names and numbers
-builtin-kill/9	kill -L checks for invalid input
-builtin-kill/10	kill -l with exit code
-builtin-kill/11	kill -l with 128 is invalid
 builtin-kill/12	kill -l 0 returns EXIT
 builtin-kill/13	kill -l 0 INT lists both signals
-builtin-kill/14	kill -9999 is an invalid signal
 builtin-meta-assign/1	command export,readonly
 builtin-meta-assign/2	command local
 builtin-meta-assign/3	export, builtin export
@@ -408,52 +220,16 @@ builtin-meta-assign/7	static builtin command ASSIGN, command builtin ASSIGN
 builtin-meta-assign/8	dynamic builtin command ASSIGN, command builtin ASSIGN
 builtin-meta-assign/9	builtin typeset, export,readonly
 builtin-meta-assign/10	builtin declare,local
-builtin-meta/0	command -v
-builtin-meta/1	command -v executable, builtin
-builtin-meta/2	command -v with multiple names
-builtin-meta/3	command -v doesn't find non-executable file
-builtin-meta/4	command -v doesn't find executable dir
-builtin-meta/5	command -V
-builtin-meta/6	command -V nonexistent
-builtin-meta/10	command -p (override existing program)
-builtin-meta/12	command -p (find hidden tool in default path)
-builtin-meta/14	builtin
-builtin-meta/15	builtin ls not found
 builtin-meta/16	builtin usage
 builtin-meta/17	builtin command echo hi
 builtin-misc/1	Print shell strings with weird chars: set and printf %q and ${x@Q}
 builtin-misc/2	Print shell strings with normal chars: set and printf %q and ${x@Q}
-builtin-printf/3	printf -v a[1]
-builtin-printf/4	printf -v syntax error
 builtin-printf/5	dynamic declare instead of %s
 builtin-printf/6	dynamic declare instead of %q
-builtin-printf/7	printf -v dynamic scope
-builtin-printf/8	printf with too few arguments
-builtin-printf/9	printf with too many arguments
-builtin-printf/13	printf %6.4x X o
-builtin-printf/26	Invalid UTF-8
-builtin-printf/27	Too large
-builtin-printf/32	printf backslash escapes
-builtin-printf/33	printf octal backslash escapes
-builtin-printf/34	printf unicode backslash escapes
 builtin-printf/38	printf %c unicode - prints the first BYTE of a string - it does not respect UTF-8
-builtin-printf/42	printf negative numbers
 builtin-printf/44	printf # flag
-builtin-printf/45	Runtime error for invalid integer
-builtin-printf/46	%(strftime format)T
-builtin-printf/47	%(strftime format)T doesn't respect TZ if not exported
-builtin-printf/48	%(strftime format)T TZ in environ but not in shell's memory
-builtin-printf/49	%10.5(strftime format)T
 builtin-printf/52	printf positive integer overflow
 builtin-printf/53	printf negative integer overflow
-builtin-printf/55	printf %b unicode escapes
-builtin-printf/56	printf %b respects \c early return
-builtin-printf/60	printf %d with + prefix (positive sign)
-builtin-printf/61	leading spaces are accepted in value given to %d %X, but not trailing spaces
-builtin-printf/62	Arbitrary base 64#a is rejected (unlike in shell arithmetic)
-builtin-process/3	exec builtin accepts --
-builtin-process/4	exec -- 2>&1
-builtin-process/5	exec -a sets argv[0]
 builtin-process/8	Exit builtin with too many args
 builtin-process/14	ulimit -a doesn't take arg
 builtin-process/16	YSH readability: ulimit --all the same as ulimit -a
@@ -461,241 +237,65 @@ builtin-process/20	arg that would overflow 64 bits is detected
 builtin-process/21	ulimit -f 1 prevents files larger 512 bytes
 builtin-process/23	ulimit -S for soft limit (default), -H for hard limit
 builtin-process/24	Changing resource limit is denied
-builtin-read/9	read -n doesn't strip whitespace (bug fix)
-builtin-read/10	read -d -n - respects delimiter and splits
-builtin-read/13	read without args uses $REPLY, no splitting occurs (without -n)
-builtin-read/14	read -n vs. -N
-builtin-read/15	read -N ignores delimiters
 builtin-read/24	read multiple lines with IFS=:
 builtin-read/28	read -a reads into array
-builtin-read/33	read -t 0 tests if input is available
-builtin-read/35	read -t -0.5 is invalid
-builtin-read/36	read -u
-builtin-read/38	read -u -s
-builtin-read/39	read -u 3 -d 5
-builtin-read/40	read -u 3 -d b -N 6
-builtin-read/41	read -N doesn't respect delimiter, while read -n does
-builtin-read/50	read -n and backslash escape
-builtin-read/51	read -n 4 with incomplete backslash
-builtin-read/53	"backslash + newline" should be swallowed regardless of "-d <delim>"
 builtin-read/59	IFS='\ ' and backslash escaping
 builtin-read/60	max_split and backslash escaping
 builtin-read/61	IFS=x read a b <<< xxxxxx
 builtin-read/62	read and "\ "
 builtin-read/63	read bash bug
+builtin-set/5	set -u with undefined variable exits the interpreter
 builtin-set/6	set -u with undefined var in interactive shell does NOT exit the interpreter
-builtin-set/11	set -o lists options
 builtin-set/12	'set' and 'eval' round trip
-builtin-set/13	set - - and so forth
-builtin-set/14	set - leading single dash is ignored, turns off xtrace verbose (#2364)
-builtin-set/15	set - stops option processing like set --
 builtin-set/16	A single + is an ignored flag; not an argument
 builtin-set/17	set - + and + -
-builtin-set/18	set -a exports variables
-builtin-set/19	set +a stops exporting
-builtin-set/20	set -o allexport (long form)
-builtin-set/21	variables set before set -a are not exported
-builtin-set/22	set -a exports local variables
-builtin-set/23	set -a exports declare variables
 builtin-special/10	bash 'type' gets confused - says 'function', but runs builtin
 builtin-special/11	command, builtin - both can be redefined, not special (regression)
-builtin-times/0	times shows two formatted lines
-builtin-trap-bash/3	trap DEBUG ignores $?
 builtin-trap-bash/4	but trap DEBUG respects errexit
-builtin-trap-bash/5	trap DEBUG with 'return'
 builtin-trap-bash/6	trap DEBUG with 'exit'
 builtin-trap-bash/7	trap DEBUG with non-compound commands
-builtin-trap-bash/8	trap DEBUG and control flow
-builtin-trap-bash/9	trap DEBUG and command sub / subshell
 builtin-trap-bash/10	trap DEBUG not run in forked interpreter for first pipeline part
 builtin-trap-bash/11	One 'echo' in first pipeline part - why does bash behave differently from case above?
 builtin-trap-bash/12	trap DEBUG and pipeline (lastpipe difference)
-builtin-trap-bash/13	trap DEBUG function call
 builtin-trap-bash/14	trap DEBUG case
 builtin-trap-bash/15	trap DEBUG for each
 builtin-trap-bash/16	trap DEBUG for expr
-builtin-trap-bash/17	trap DEBUG if while
-builtin-trap-bash/18	trap RETURN
 builtin-trap-bash/19	Compare trap DEBUG vs. trap ERR
 builtin-trap-bash/20	Combine DEBUG trap and USR1 trap
 builtin-trap-bash/21	Combine ERR trap and USR1 trap
 builtin-trap-bash/22	Combine DEBUG trap and ERR trap
-builtin-trap-err/9	trap ERR doesn't run in subprograms - subshell, command sub, async
-builtin-trap-err/10	set -o errtrace: trap ERR runs in subprograms
-builtin-trap-err/11	trap ERR doesn't run with &
-builtin-trap-err/12	set -o errtrace: trap ERR with &
-builtin-trap-err/13	trap ERR not active in shell functions in (bash behavior)
-builtin-trap-err/14	set -o errtrace - trap ERR runs in shell functions
-builtin-trap-err/15	set -o errtrace - trap ERR runs in shell functions (LINENO)
 builtin-trap-err/17	trap ERR with for,  case, { }
 builtin-trap-err/18	trap ERR with redirect
 builtin-trap-err/22	error in trap ERR (recursive)
 builtin-trap/0	traps are not active inside subshells $() ()  trap | cat
-builtin-trap/1	trap accepts/ignores --
-builtin-trap/6	print trap handler with multiple lines
-builtin-trap/7	trap -p is like trap: it prints the handlers and full signal names
-builtin-trap/8	Register the same handler for multiple signals
-builtin-trap/10	trap EXIT clears the EXIT trap
-builtin-trap/11	trap 0 is equivalent to trap EXIT
-builtin-trap/25	traps are cleared in subshell (started with &)
 builtin-trap/26	trap USR1, sleep, SIGINT: non-interactively
-builtin-trap/27	trap INT, sleep, SIGINT: non-interactively
-builtin-trap/28	trap EXIT, sleep, SIGINT: non-interactively
 builtin-trap/29	Remove trap with an unsigned integer
-builtin-trap/30	trap '' sets handler to empty string (SIG_IGN)
-builtin-trap/31	trap '' with multiple signals
-builtin-type-bash/0	type -t -> function
-builtin-type-bash/1	type -t -> alias
-builtin-type-bash/2	type -t -> builtin
-builtin-type-bash/3	type -t -> keyword
-builtin-type-bash/4	type -t control flow
-builtin-type-bash/5	type -t -> file
-builtin-type-bash/7	type -t -> not found
-builtin-type-bash/8	type -p and -P builtin -> file
-builtin-type-bash/9	type -a -P gives multiple files
-builtin-type-bash/11	type -p builtin -> not a file
-builtin-type-bash/13	type -P builtin -> not a file
-builtin-type-bash/14	type -P builtin -> not a file but file found
-builtin-type-bash/16	type -f builtin -> function and file exists
-builtin-type-bash/17	type prints function source code
-builtin-type-bash/18	type -ap -> function
-builtin-type-bash/19	type -a -> alias; prints alias definition
-builtin-type-bash/20	type -ap -> alias
-builtin-type-bash/21	type -a -> builtin
-builtin-type-bash/22	type -ap -> builtin
-builtin-type-bash/23	type -a -> keyword
-builtin-type-bash/24	type -a -> file
-builtin-type-bash/25	type -ap -> file; abbreviated
-builtin-type-bash/26	type -a -> builtin and file
-builtin-type-bash/27	type -a -> builtin and file and shell function
-builtin-type-bash/28	type -ap -> builtin and file; doesn't print builtin or function
-builtin-type-bash/30	type -P does not find directories (regression)
-builtin-type/0	type -> keyword builtin
-builtin-type/2	type of relative path
-builtin-umask/4	symbolic syntax error: empty clause u-r,,u-r
-builtin-umask/9	'umask -p' prints a form that can be eval'd
-builtin-umask/12	set umask with symbolic mode: u-rw  ...  u=,g+,o-  ...
-builtin-umask/14	umask allow overwriting and duplicates
-builtin-umask/15	umask a is valid who
-builtin-umask/19	umask default who
 builtin-umask/22	umask permcopy running value
-builtin-vars/1	Export sets a global variable that persists after export -n
-builtin-vars/6	Export existing local variable
-builtin-vars/7	Export a local that shadows a global
-builtin-vars/8	Export a variable before defining it
-builtin-vars/9	Unset exported variable, then define it again.  It's NOT still exported.
-builtin-vars/21	Unset readonly variable
-builtin-vars/22	Unset a function without -f
+builtin-vars/17	assign to readonly variable - errexit
 builtin-vars/24	Unset and scope (bug #653)
 builtin-vars/32	Unset wrong type
 builtin-vars/33	unset -v assoc (related to issue #661)
-builtin-vars/35	Unset array member with dynamic parsing
-builtin-vars/36	Use local twice
-builtin-vars/37	Local without variable is still unset!
-builtin-vars/39	unset a[-1] (bf.bash regression)
-case_/11	\(\) in pattern (regression)
-command-sub/1	case in subshell
-command-sub/7	Making keyword out of command sub should NOT work
 command-sub/15	Double Quotes in Command Sub in Double Quotes
-command_/5	File with no shebang is executed
-command_/6	File with relative path and no shebang is executed
-command_/7	File in relative subdirectory and no shebang is executed
-command_/8	$PATH lookup
 command_/9	filling $PATH cache, then insert the same command earlier in cache
 command_/10	filling $PATH cache, then deleting command
-command_/11	Non-executable on $PATH
 command_/12	hash without args prints the cache
 command_/13	hash with args
 command_/15	Executing command with same name as directory in PATH (#2429)
-dbracket/14	Octal literals with -eq
-dbracket/15	Hex literals with -eq
-dbracket/18	-eq on strings
 dbracket/24	[[ over multiple lines is OK
-dbracket/26	User array compared to "$@" (broken unless shopt -s strict_array)
-dbracket/27	Array coerces to string (shopt -s strict_array to disallow)
-dbracket/30	-eq does dynamic arithmetic parsing (not supported in OSH)
-dbracket/31	-eq coercion produces weird results
-dbracket/33	[[ '(' foo ]] is syntax error
 dbracket/35	[[ -z ]] is syntax error
-dbracket/37	[[ -z '>' a ]] is syntax error
-dbracket/39	[[ ]] is syntax error
-dbracket/40	[[ && ]] is syntax error
 dbracket/41	[[ a 3< b ]] doesn't work (bug regression)
 dbracket/44	tilde expansion with =~ (confusing)
-dbracket/48	negative numbers - zero, decimal, octal, hex, base N
 divergence/2	Changing PATH will invalidate PATH cache
-divergence/3	builtin cat crashes a subshell (#2530)
-dparen/4	(( )) with arrays
-dparen/6	bash and mksh: V in (( a[K] = V )) gets coerced to integer
-dparen/7	bash: K in (( A[K] = V )) is a constant string
-dparen/8	BUG: (( V = A[K] )) doesn't retrieve the right value
 dparen/9	bash: V in (( A["K"] = V )) gets coerced to integer
 dparen/10	literal strings inside (( ))
 dparen/13	set associative array
-dparen/14	Example of incrementing associative array entry with var key (ble.sh)
-errexit-osh/0	command sub: errexit is NOT inherited and outer shell keeps going
-errexit-osh/10	strict_errexit and errexit disabled
-errexit-osh/11	command sub with command_sub_errexit only
-errexit-osh/15	global assignment with command sub: middle command fails
-errexit-osh/17	local: middle command fails and keeps going
-errexit-osh/33	Regression
 errexit/11	errexit and brace group { }
-errexit/25	background processes respect errexit
-errexit/27	simple command / assign - redir failure DOES respect errexit
 errexit/28	simple command that's an alias - redir failure checked
 errexit/32	errexit and compound command with redirect, ending with && (regression)
 errexit/34	set -e in function #2
 exit-status/2	subshell OverflowError https://github.com/oilshell/oil/issues/996
 exit-status/3	func subshell OverflowError https://github.com/oilshell/oil/issues/996
-explore-parsing/2	Is \r considered whitespace?
-extglob-files/0	@() matches exactly one of the patterns
-extglob-files/1	?() matches 0 or 1
-extglob-files/2	*() matches 0 or more
-extglob-files/3	+() matches 1 or more
-extglob-files/4	!(*.h|*.cc) to match everything except C++
-extglob-files/5	Two adjacent alternations
-extglob-files/6	Nested extended glob pattern
-extglob-files/7	Extended glob patterns with spaces
-extglob-files/8	Filenames with spaces
-extglob-files/9	nullglob with extended glob
-extglob-files/10	Glob other punctuation chars (lexer mode)
-extglob-files/11	More glob escaping
-extglob-files/12	Escaping of pipe (glibc bug, see demo/glibc_fnmatch.c)
-extglob-files/13	Extended glob as argument to ${undef:-} (dynamic globbing)
-extglob-files/15	Extended glob in same word as array
-extglob-files/16	Extended glob with word splitting
-extglob-files/17	In Array Literal and for loop
-extglob-files/18	No extended glob with simple_word_eval (YSH evaluation)
-extglob-files/19	no match
-extglob-files/20	no_dash_glob
-extglob-files/21	noglob
-extglob-files/22	failglob
-extglob-match/0	@ matches exactly one
-extglob-match/1	@() with variable arms
-extglob-match/2	extglob in variable
-extglob-match/3	Matching literal '@(cc)'
-extglob-match/4	nested @()
-extglob-match/6	? matches 0 or 1
-extglob-match/7	+ matches 1 or more
-extglob-match/8	* matches 0 or more
-extglob-match/9	simple repetition with *(foo) and +(Foo)
-extglob-match/10	! matches none
-extglob-match/11	match is anchored
-extglob-match/12	repeated match is anchored
-extglob-match/13	repetition with glob
-extglob-match/14	No brace expansion in ==
-extglob-match/15	adjacent extglob
-extglob-match/16	nested extglob
-extglob-match/17	extglob empty string
-extglob-match/18	extglob empty pattern
-extglob-match/19	case with extglob
-extglob-match/20	[[ $x == !($str) ]]
 extglob-match/21	Turning extglob on changes the meaning of [[ !(str) ]] in bash
-extglob-match/22	With extglob on, !($str) on the left or right of == has different meanings
-extglob-match/23	extglob inside arg word
-extglob-match/26	extended glob of single unicode char
-extglob-match/27	Extended glob in ${x//pat/replace}
-extglob-match/28	Extended glob in ${x%PATTERN}
 fatal-errors/3	Unrecoverable: ${undef?message}
 fatal-errors/4	${undef} with nounset
 for-expr/4	Empty init and cond
@@ -703,17 +303,12 @@ for-expr/5	Infinite loop with ((;;))
 for-expr/6	Arith lexer mode
 func-parsing/8	= in function name
 func-parsing/11	Function name with !
-glob-bash/1	shopt -s failglob in command context
-glob-bash/2	shopt -s failglob in loop context
-glob-bash/3	shopt -s failglob in array literal context
-glob-bash/6	shopt -s failglob behavior on single line with semicolon
+glob-bash/4	shopt -s failglob exits properly in command context with set -e
 glob/26	Glob of unescaped [[] and []]
 glob/27	Glob of negated unescaped [[] and []]
 glob/31	Glob ordering respects LC_COLLATE (zsh respects this too)
 glob/32	\ in unquoted substitutions does not match a backslash
-glob/34	\ in unquoted substitutions is preserved with set -o noglob
 glob/35	\ in unquoted substitutions is preserved without glob matching
-glob/36	\ in unquoted substitutions escapes globchars
 glob/38	shopt -u globskipdots shows . and ..
 globignore/1	Ignore *.txt
 globignore/2	Ignore ?.txt
@@ -731,26 +326,12 @@ globignore/13	Quoting GLOBIGNORE
 globignore/15	When GLOBIGNORE is set, glob may become empty (nullglob too)
 globignore/16	When GLOBIGNORE is set, no_dash_glob isn't respected
 globignore/17	Extended glob expansion combined with GLOBIGNORE
-here-doc/4	Multiple here docs with different descriptors
 here-doc/5	Here doc with bad var delimiter
-here-doc/32	Multiple here docs in pipeline
-here-doc/33	Multiple here docs in pipeline on multiple lines
+here-doc/6	Here doc with bad comsub delimiter
 if_/4	if break corner case
-introspect/0	${FUNCNAME[@]} array
-introspect/1	FUNCNAME with source (scalar or array)
-introspect/2	BASH_SOURCE and BASH_LINENO scalar or array (e.g. for virtualenv)
-introspect/6	$((BASH_LINENO)) (scalar form in arith)
-introspect/7	${BASH_SOURCE[@]} with source and function name
-introspect/8	${BASH_SOURCE[@]} with line numbers
-introspect/9	${BASH_LINENO[@]} is a stack of line numbers for function calls
-introspect/10	Locations with temp frame
-introspect/11	Locations when sourcing
-introspect/12	Sourcing inside function grows the debug stack
 known-differences/0	`set` output format - ifupdown-ng
 known-differences/1	nested function declaration - xcb-util-renderutil
-let/0	let
 let/1	let with ()
-loop/2	for loop with invalid identifier
 loop/14	continue in subshell
 loop/15	continue in subshell aborts with errexit
 loop/16	bad arg to break
@@ -759,46 +340,22 @@ loop/19	break in condition of nested loop
 loop/22	break/continue within source
 loop/23	top-level break/continue/return (without strict_control_flow)
 loop/28	builtin,command break,continue,return,exit
-nameref/0	pass array by reference
-nameref/1	mutate array by reference
-nameref/2	pass assoc array by reference
-nameref/3	pass local array by reference, relying on DYNAMIC SCOPING
-nameref/4	flag -n and +n
-nameref/5	mutating through nameref: ref=
-nameref/6	flag -n combined ${!ref} -- bash INVERTS
+nameref/7	named ref with $# doesn't work
+nameref/8	named ref with $# and shopt -s strict_nameref
 nameref/9	named ref with 1 $1 etc.
+nameref/10	assign to invalid ref
 nameref/11	assign to invalid ref with strict_nameref
-nameref/13	assign to empty nameref and invalid nameref
-nameref/14	-n attribute before it has a value
 nameref/16	exported nameref
-nameref/17	readonly nameref doesn't prevent assigning through it
-nameref/18	readonly var can't be assigned through nameref
-nameref/19	unset nameref
-nameref/20	Chain of namerefs
+nameref/21	Mutually recursive namerefs detected on READ
 nameref/22	Mutually recursive namerefs detected on WRITE
-nameref/23	Dynamic scope with namerefs
-nameref/24	change reference itself
-nameref/25	a[2] in nameref
 nameref/26	a[expr] in nameref
 nameref/27	a[@] in nameref
-nameref/28	mutate through nameref: ref[0]=
 nameref/29	bad mutation through nameref: ref[0]= where ref is array[0]
-nameref/30	@ in nameref isn't supported, unlike in ${!ref}
-nameref/31	Unquoted assoc reference on RHS
 nix-idioms/0	var ref to array 'preHooks[@]'
 nix-idioms/1	Similar to above with set -u
 nix-idioms/3	${!ref} to undefined string var is fatal, INCONSISTENT with array
 nix-idioms/4	export with dynamic var name +=
-nocasematch-match/0	[[ equality matching
-nocasematch-match/1	[[ regex matching
-nocasematch-match/3	case matching
-nul-bytes/1	printf - literal NUL in format string
-nul-bytes/3	printf - NUL byte in value (OSH and zsh agree)
-nul-bytes/4	NUL bytes with echo $'\0' (OSH and zsh agree)
 nul-bytes/5	NUL bytes and IFS splitting
-nul-bytes/6	NUL bytes with test -n
-nul-bytes/7	NUL bytes with test -f
-nul-bytes/8	NUL bytes with ${#s} (OSH and zsh agree)
 nul-bytes/9	Compare \x00 byte versus \x01 byte - command sub
 nul-bytes/10	Compare \x00 byte versus \x01 byte - read builtin
 nul-bytes/11	Compare \x00 byte versus \x01 byte - read -n
@@ -806,49 +363,12 @@ nul-bytes/12	Compare \x00 byte versus \x01 byte - mapfile builtin
 nul-bytes/13	Strip ops # ## % %% with NUL bytes
 nul-bytes/14	Issue 2269 Reduction
 nul-bytes/15	Issue 2269 - Do NUL bytes match ? in ${a#?}
-paren-ambiguity/0	(( closed with ) ) after multiple lines is command - #2337
-paren-ambiguity/1	$(( closed with ) ) after multiple lines is command - #2337
-paren-ambiguity/4	(((grep example - 4+ instances in regtest/aports - #2337
-parse-errors/6	Incomplete for
-parse-errors/9	} is a parse error
-parse-errors/10	{ is its own word, needs a space
-parse-errors/12	Invalid for loop variable name
-parse-errors/23	array literal inside loop is a parse error
-parse-errors/24	array literal in case
 pipeline/6	Initial value of PIPESTATUS is empty string
-pipeline/10	|&
-pipeline/20	shopt -s lastpipe (always on in OSH)
-pipeline/21	shopt -s lastpipe (always on in OSH)
-print-source-code/0	typeset -f prints function source code
-print-source-code/1	typeset -f with function keyword (ksh style)
-print-source-code/2	typeset -f prints function source code - nested functions
-print-source-code/3	non-{ } function bodies can be serialized (rare)
 process-sub/1	Process sub from external process to stdin
-process-sub/3	Non-linear pipeline with >()
 prompt/0	sh -i
-prompt/1	\[\] are non-printing
-prompt/2	literal escapes
 prompt/3	special case for $
 prompt/4	PS1 evaluation order
-prompt/5	PS1 evaluation order 2
-prompt/6	\1004
-prompt/7	\001 octal literals are supported
 prompt/8	\555 is beyond max octal byte of \377 and wrapped to m
-prompt/9	\x55 hex literals not supported
-prompt/10	Single backslash
-prompt/11	Escaped backslash
-prompt/12	\0001 octal literals are not supported
-prompt/13	\u0001 unicode literals not supported
-prompt/14	constant string
-prompt/15	hostname
-prompt/16	username
-prompt/17	current working dir
-prompt/18	\W is basename of working dir
-prompt/19	\t for 24h time (HH:MM:SS)
-prompt/20	\T for 12h time (HH:MM:SS)
-prompt/21	\@ for 12h time (HH:MM AM/PM)
-prompt/22	\A for 24h time (HH:MM)
-prompt/23	\d for date
 prompt/24	\D{%H:%M} for strftime
 prompt/25	\D{} for locale specific strftime
 prompt/26	\s for shell, \v for major.minor version, and \V for full version
@@ -856,50 +376,28 @@ prompt/27	\j for number of jobs
 prompt/28	\l for TTY device basename
 prompt/29	\! for history number
 prompt/30	\# for command number
-prompt/31	@P with array
 prompt/32	default PS1
-quote/17	Line continuation
-quote/19	$? split over multiple lines
-quote/27	$'' octal escapes don't have leading 0
-quote/29	OSH allows invalid backslashes
-quote/31	$"" is a synonym for ""
-quote/33	$'' supports \cA escape for Ctrl-A - mask with 0x1f
-quote/34	\c' is an escape, unlike bash
-redirect-command/19	Prefix redirect for loop -- not allowed
 redirect-multi/0	File redirects with glob args (bash and zsh only)
 redirect-multi/3	File redirect without matching any file, with failglob
-redirect-multi/4	Redirect to $empty (in function body)
 redirect-multi/6	File redirect to $var with glob char
 redirect-multi/7	File redirect that globs to more than one file (bash and zsh only)
 redirect-multi/8	File redirect with extended glob
 redirect-multi/9	Extended glob that doesn't match anything
 redirect-multi/11	Redirect with brace expansion isn't allowed
 redirect-multi/12	File redirects have word splitting too!
-redirect/10	Named file descriptor
-redirect/22	>| to clobber
 redirect/24	>&word redirects stdout and stderr when word is not a number or -
 redirect/26	1>&2- to move file descriptor
 redirect/27	1>&2- (Bash bug: fail to restore closed fd)
 redirect/36	exec {fd}>&- (OSH regression: fails to close fd)
-redirect/39	Parsing of x={myvar} and related cases
 regex/8	Double quoting pat variable -- again bash doesn't like it.
 regex/17	Fatal error inside [[ =~ ]]
 regex/27	unquoted (a  b) as pattern, (a  b|c)
 regex/28	Multiple adjacent () groups
 regex/29	unquoted [a  b] as pattern, [a  b|c]
 regex/31	Operator chars ; & but not |
-regex/32	Quotes '' "" $'' $"" in pattern
-regex/34	Parse error with 2 words
 regex/36	Operators and space lose meaning inside ()
-serialize/0	printf %q newline
-serialize/2	printf %q quotes
-serialize/3	printf %q unprintable
-serialize/4	printf %q unicode
-serialize/5	printf %q invalid unicode
 serialize/6	set
 serialize/7	declare
-serialize/8	${var@Q}
-sh-func/10	Subshell function
 sh-options-bash/0	SHELLOPTS is updated when options are changed
 sh-options-bash/1	SHELLOPTS is readonly
 sh-options-bash/2	SHELLOPTS and BASHOPTS are non-empty
@@ -907,95 +405,29 @@ sh-options-bash/3	SHELLOPTS reflects flags like sh -x
 sh-options-bash/4	export SHELLOPTS does cross-process tracing
 sh-options-bash/5	export SHELLOPTS does cross-process tracing with bash
 sh-options-bash/7	If shopt --set xtrace is allowed, it should update SHELLOPTS, not BASHOPTS
-sh-options-bash/8	shopt -s progcomp hostcomplete are stubs (bash-completion)
-sh-options/0	$- with -c
-sh-options/2	$- and more options
-sh-options/3	$- with interactive shell
-sh-options/4	pass short options like sh -e
-sh-options/5	pass long options like sh -o errexit
-sh-options/6	pass shopt options like sh -O nullglob
-sh-options/8	vi and emacs are mutually exclusive
-sh-options/9	interactive shell starts with emacs mode on
-sh-options/12	-n for no execution (useful with --ast-output)
-sh-options/14	shopt -p -o prints 'set' options
-sh-options/15	shopt -o prints 'set' options
-sh-options/16	shopt -p prints 'shopt' options
-sh-options/17	shopt with no flags prints options
-sh-options/18	noclobber off
-sh-options/19	noclobber on
-sh-options/22	noclobber on &> >
 sh-options/24	set without args lists variables
 sh-options/25	set without args and array variables
 sh-options/26	set without args and assoc array variables (not in OSH)
-sh-options/27	shopt -q
-sh-options/30	shopt allows for backward compatibility like bash
-sh-options/31	shopt -p validates option names
-sh-options/32	shopt -p -o validates option names
-sh-options/33	stubbed out bash options
-sh-options/34	shopt -s nounset works in YSH, not in bash
-sh-options/35	Unimplemented options - print, query, set, unset
-sh-options/36	Unimplemented options - OSH shopt -s ignore_shopt_not_impl
-sh-options/37	shopt -p exit code (regression)
 sh-usage/2	sh +c is accepted
-sh-usage/4	sh - and sh -- stop flag processing
-sh-usage/14	osh --eval
 sh-usage/15	Set LC_ALL LC_CTYPE LC_COLLATE LANG - affects glob ?
 sh-usage/16	LC_CTYPE=invalid
-sh-usage/17	sh -c -- 'echo hi' does not run anything (#2637)
-sh-usage/21	weird flag parsing -oo errexit noglob
-sh-usage/22	'sh -c -z' does not try to run -z
-sh-usage/23	sh -c -x 'echo hi' - order is reversed
-shell-grammar/30	case item without ;; is not allowed
-shell-grammar/36	case: Using ; instead of ;;
-strict-options/3	errexit and top-level control flow
 strict-options/6	continue at top level is NOT an error
 strict-options/7	break at top level is NOT an error
-strict-options/10	Arrays are incorrectly compared, but strict_array prevents it
-strict-options/15	Control flow must be static in YSH (strict_control_flow)
 tilde/2	No ~ expansion in dynamic assignment
-tilde/4	tilde expansion of word after redirect
 tilde/6	${undef:-~}
 tilde/7	${x//~/~root}
-tilde/8	x=foo:~ has tilde expansion
-tilde/9	a[x]=foo:~ has tilde expansion
-tilde/10	tilde expansion an assignment keyword
 tilde/11	x=${undef-~:~}
-tilde/13	temp assignment x=~ env
-toysh-posix/7	no shebang
 toysh-posix/11	IFS - http://landley.net/notes.html#05-03-2020
 toysh-posix/12	IFS=x and '' and unquoted $@ - reduction of case above - copied into spec/word-split
-toysh-posix/18	IFS 4
-toysh-posix/21	Command Sub Syntax Error
 toysh/1	extglob $IFS 1
-toysh/2	extglob $IFS 2
 toysh/3	char class / extglob
 toysh/5	Brace Expansion
 toysh/6	{abc}<<< - http://landley.net/notes-2019.html#09-12-2019
-type-compat/2	declare -i with arithmetic inside strings (Nix, issue 864)
 type-compat/4	declare array vs. string: mixing -a +a and () ''
 type-compat/5	declare array vs. associative array
-unicode/1	Unicode escapes \u03bc \U000003bc in $'', echo -e, printf
-unicode/2	Max code point U+10ffff can escaped with $''  printf  echo -e
-unicode/3	$'' does NOT check that 0x110000 is too big at parse time
-unicode/4	$'' does not check for surrogate range at parse time
-unicode/5	printf / echo -e do NOT check max code point at runtime
-unicode/6	printf / echo -e do NOT check surrogates at runtime
-var-num/4	$0 with -i
 var-op-bash/3	Case folding - multi code point
-var-op-bash/5	Lower Case with constant string (VERY WEIRD)
-var-op-bash/6	Lower Case glob
-var-op-bash/14	undef and @P @Q @a
-var-op-bash/15	argv array and @P @Q @a
-var-op-bash/16	assoc array and @P @Q @a
 var-op-bash/19	${!A@a} and ${!A[@]@a}
-var-op-bash/20	undef vs. empty string in var ops
 var-op-bash/21	-o nounset with var ops
-var-op-bash/24	Array expansion with nullary var op @Q
-var-op-bash/25	Array expansion with nullary var op @P
-var-op-len/3	String length with incomplete utf-8
-var-op-len/4	String length with invalid utf-8 continuation bytes
-var-op-len/6	Length of undefined variable with nounset
-var-op-len/8	${#s} respects LC_ALL - length in bytes or code points
 var-op-patsub/1	Pattern replacement on unset variable
 var-op-patsub/11	Confusing unquoted slash matches bash (and ash)
 var-op-patsub/12	Synthesized ${x///} bug (similar to above)
@@ -1003,38 +435,24 @@ var-op-patsub/15	Replace backslash
 var-op-patsub/19	When LC_ALL=C, pattern ? doesn't match multibyte character
 var-op-patsub/23	patsub with [^]]
 var-op-patsub/26	Chromium from http://www.oilshell.org/blog/2016/11/07.html
+var-op-patsub/27	${x//~homedir/}
 var-op-slice/1	Cannot take length of substring slice
 var-op-slice/9	Slice undefined
-var-op-slice/11	Slice string with invalid UTF-8 results in empty string and warning
-var-op-slice/12	Slice string with invalid UTF-8 with strict_word_eval
 var-op-slice/20	${array[@]:} vs ${array[@]: }  - bash and zsh inconsistent
-var-op-strip/13	Prepend using replacement of #
-var-op-strip/14	Append using replacement of %
-var-op-strip/28	extglob in pattern
-var-op-test/3	Unquoted with array as default value
-var-op-test/4	Quoted with array as default value
-var-op-test/5	Assign default with array
-var-op-test/13	"${undefined[@]+foo}" and "${undefined[@]:+foo}", with set -u
-var-op-test/17	array and - and +
-var-op-test/18	$@ (empty) and - and +
-var-op-test/19	$@ ("") and - and +
 var-op-test/21	$* ("" "") and - and + (IFS=)
-var-op-test/22	"$*" ("" "") and - and + (IFS=)
-var-op-test/23	assoc array and - and +
 var-op-test/30	"\z" as arg
 var-op-test/31	"\e" as arg
-var-op-test/33	op-test for ${a[@]} and ${a[*]}
-var-op-test/35	op-test for ${!array} with array="a[@]" or array="a[*]"
 var-op-test/36	op-test for unquoted ${a[*]:-empty} with IFS=
 var-ref/2	${!undef:-}
 var-ref/4	${!a[@]-'default'} is legal but fails with more than one element
 var-ref/12	Indirect expansion, THEN suffix operators
-var-ref/17	var ref TO array var, with subscripts
 var-ref/18	var ref TO assoc array a[key]
 var-ref/19	var ref TO array with arbitrary subscripts
+var-ref/21	Indirect expansion TO fancy expansion features bash disallows
 var-ref/22	Bad var ref
 var-ref/23	Bad var ref 2
 var-ref/24	${!OPTIND} (used by bash completion
+var-ref/25	var ref doesn't need cycle detection
 var-ref/28	Array indirect expansion with suffix operators
 var-ref/29	Array indirect expansion with replacements
 var-ref/30	Array indirect expansion with @? conversion
@@ -1048,20 +466,14 @@ var-sub-quote/22	Multiple words: no outer quotes, inner double quotes
 var-sub-quote/25	Multiple words: outer double quotes, inner single quotes
 var-sub-quote/26	No outer quotes, Multiple internal quotes
 var-sub-quote/32	"${undef-'c d'}" and "${foo%'c d'}" are parsed differently
-var-sub-quote/33	$'' allowed within VarSub arguments
 var-sub-quote/37	comparison: :- operator with single quoted arg
 var-sub-quote/38	Right Brace as argument (similar to #702)
 var-sub-quote/39	Var substitution with newlines (#2492)
 var-sub-quote/40	Var substitution with \n in value
 vars-bash/0	$SHELL is set to what is in /etc/passwd
-vars-special/2	$PATH is set if unset at startup
+vars-special/3	$HOME is NOT set
 vars-special/4	Vars set interactively only: $HISTFILE
 vars-special/5	Some vars are set, even without startup file, or env: PATH, PWD
-vars-special/6	UID EUID PPID can't be changed
-vars-special/13	$BASHPID DOES change with subshell and command sub
-vars-special/18	$UID and $EUID
-vars-special/19	$OSTYPE is non-empty
-vars-special/20	$HOSTNAME
 vars-special/28	$LINENO in for (( loop
 vars-special/31	$_ with simple command and evaluation
 vars-special/32	$_ and ${_}
@@ -1072,32 +484,17 @@ vars-special/36	$_ is not reset with (( and [[
 vars-special/37	$_ with assignments, arrays, etc.
 vars-special/38	$_ with loop
 vars-special/39	$_ is not undefined on first use
-whitespace/0	Parsing shell words \r \v
 whitespace/1	\r in arith expression is allowed by some shells, but not most!
 whitespace/2	whitespace in string to integer conversion
-whitespace/3	\r at end of line is not special
 word-eval/5	Default values -- more cases
-word-split/9	$* with empty IFS
 word-split/21	default value can yield multiple words
 word-split/22	default value can yield multiple words with part joining
 word-split/23	default value with unquoted IFS char
-word-split/30	Empty IFS (regression for bug)
-word-split/33	IFS and joining arrays
-word-split/34	IFS and joining arrays by assignments
-word-split/36	IFS='' with $@ and $* (bug #627)
-word-split/37	IFS='' with $@ and $* and printf (bug #627)
-word-split/38	IFS='' with ${a[@]} and ${a[*]} (bug #627)
-word-split/39	IFS='' with ${!prefix@} and ${!prefix*} (bug #627)
-word-split/40	IFS='' with ${!a[@]} and ${!a[*]} (bug #627)
-word-split/44	Empty IFS bug #2141 (from pnut)
 word-split/46	4 x 3 table: (default IFS, IFS='', IFS=zx) x ( $* "$*" $@ "$@" )
 word-split/47	4 x 3 table - with for loop
-word-split/48	IFS=x and '' and $@ - same bug as spec/toysh-posix case #12
 word-split/49	IFS=x and '' and $@ (#2)
-word-split/50	IFS=x and '' and $@ (#3)
 word-split/53	Regression: ${!v} should be split
 word-split/54	Regression: "${v:-AxBxC}"x should not be split
-xtrace/2	xtrace with unprintable chars
 zsh-idioms/0	git-completion snippet
 zsh-idioms/1	asdf snippet
 zsh-idioms/2	zsh var sub is rejected at runtime

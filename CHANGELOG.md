@@ -2,6 +2,36 @@
 
 All notable changes to grfsh are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [semantic versioning](https://semver.org). See the [stability promise](https://grf.sh/docs/stability/) for what that covers.
 
+## [1.1.0] - 2026-10-17
+
+A large compatibility and reliability release. grfsh now passes 2253 of the 2754 Oils bash spec cases (82%, bash 5.3 passes 89%), up from 1652 (60%) in 1.0.2.
+
+### Added
+
+- `select` menus, `coproc`, extended globs (`@( )`, `?( )`, `*( )`, `+( )`, `!( )`), name references (`declare -n`, `local -n`), `|&`, named file descriptors (`exec {fd}>file`), `$"..."` strings and `[[ -o option ]]`.
+- Builtins `let`, `builtin`, `caller`, `disown`, `times`, `enable`, `compgen` and `fc`, and options for existing ones: `type -t/-p/-P/-a/-f`, `command -V/-p`, `cd -P/-L`, `pwd -P/-L`, `jobs -p/-l/-r/-s`, `wait -n/-f/-p`, `trap -p`, `mapfile -d/-O/-C`, `read -N/-u/-i`, `printf %(fmt)T` and `printf -v` into array elements, symbolic `umask`.
+- Shell options `set -a`, `set -f`, `set -C` with `>|`, `set -E`, `set -T`, `set -v`, `set -n`, and `shopt` with all bash option names, including `nocasematch`, `failglob`, `lastpipe`, `inherit_errexit` and `expand_aliases`.
+- `trap ... DEBUG` and `trap ... RETURN`, `export -f`, `export -n`, and the variables `UID`, `EUID`, `HOSTNAME`, `OSTYPE`, `HOSTTYPE`, `MACHTYPE`, `BASHPID`, `EPOCHSECONDS`, `EPOCHREALTIME`, `SRANDOM`, `GROUPS`, `FUNCNAME`, `BASH_SOURCE`, `BASH_LINENO`, `SHLVL`, `COLUMNS`, `LINES` and `GRFSH_VERSION`. `BASH_VERSION` stays unset on purpose, since grfsh is not bash.
+- bash style command line options: clusters such as `-lc`, `-ilc` and `-euxo pipefail`, `-o`/`+o`, `-O`/`+O`, `-s`, `-n`, `--norc`, `--noprofile`, `--rcfile` and `--`.
+- History expansion with `^old^new`, word designators and modifiers; `HISTSIZE`, `HISTFILESIZE` and `HISTFILE`; Alt-. for the last argument; Ctrl-E, End and Alt-F accept autosuggestions.
+- `get -0`, a `-f` flag for `write-file`, real regular expressions for `where =~`, and `--check` that follows sourced files.
+- Spec, differential and fuzzing test suites that run in CI.
+
+### Fixed
+
+- Login shells started with `-l -c`, `-lc` or `-ilc`, as editors and GUI apps do to read the environment, now read `~/.grfsh_profile` and `/etc/paths`. A default `PATH` is used when `PATH` is unset.
+- History was capped at 100 entries. It now keeps 50000, writes each command as it runs and merges history from several open shells.
+- Bytes that are not UTF-8 are kept intact everywhere: `printf '\xff'`, `echo -e '\033[31m'`, `read`, command substitution, file names, arguments and the environment. Scripts with Latin-1 text or a binary payload run, and non-UTF-8 arguments no longer crash grfsh.
+- A syntax error no longer runs the body of the broken command, blank lines inside heredocs are kept, and long scripts parse in linear time.
+- `a=1 b=$a` assigns left to right, `export NAME` before a value exports it later, `IFS` defaults to space, tab and newline, `"$*"` joins with the first character of `IFS`, and `"$@"` in an assignment keeps all arguments.
+- `wait $pid`, interrupting `wait` with Ctrl-C, traps during `wait`, EXIT traps in subshells and on signals, and `set -e` no longer leaking into `$( )`.
+- Writing to a closed pipe stops at once instead of spinning, background processes are reaped inside loops instead of piling up, and file descriptors from `exec 3>file` reach other programs.
+- "command not found" honours `2>/dev/null`, executable files without a shebang run as scripts, and `source` searches `PATH`.
+- Ctrl-C no longer swallows the next command, the git prompt never delays commands, Ctrl-D warns about stopped jobs, Tab lists candidates, and the terminal is restored after a program dies in raw mode.
+- `a+=(x)`, `${#a[@]}` and `${x//pattern/replacement}` are fast on large data, and deep nesting reports an error instead of crashing.
+- `where =~` matched substrings instead of regular expressions, `write-file` with no input emptied the file, `--serve` commands could read the server's input, `git-status` paths were relative to the repository root, and table output passed terminal escape codes through.
+- The `ls` and `grep` color aliases apply only in interactive shells, and symlinked startup files are checked where they point.
+
 ## [1.0.2] - 2026-10-17
 
 ### Fixed

@@ -23,7 +23,7 @@ compgen -v fo
 compgen -a f
 compgen -b ec
 compgen -k th
-compgen -A keyword | wc -l
+compgen -A keyword | wc -l | tr -d " "
 compgen -W "alpha beta alto" al
 compgen -W "x y"
 echo "status $?"
