@@ -5,6 +5,7 @@ mod delimited;
 mod filters;
 mod ignore;
 pub(crate) mod json;
+mod regex;
 mod render;
 mod search;
 mod sources;
@@ -141,9 +142,15 @@ pub(crate) fn run(shell: &mut Shell, argv: &[String]) -> i32 {
         }
         Err(message) => {
             shell::error(format!("{name}: {message}"));
-            1
+            if is_usage_error(&message) { 2 } else { 1 }
         }
     }
+}
+
+fn is_usage_error(message: &str) -> bool {
+    ["usage:", "unknown ", "unexpected argument"]
+        .iter()
+        .any(|prefix| message.starts_with(prefix))
 }
 
 fn unescape(text: &str) -> String {
@@ -276,6 +283,7 @@ fn read_table(command: &str) -> Result<Table, String> {
 }
 
 fn parse_auto(text: &str) -> Result<Table, String> {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     if let Some(decoded) = wire::decode(text) {
         return decoded;
     }

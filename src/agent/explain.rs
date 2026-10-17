@@ -218,9 +218,42 @@ struct Explainer<'a> {
     shell: &'a mut Shell,
     lines: Vec<String>,
     functions: HashMap<String, usize>,
+    placeholders: Vec<String>,
+}
+
+fn substitutions(word: &Word) -> Vec<String> {
+    word.parts
+        .iter()
+        .filter_map(|part| match part {
+            WordPart::CommandSubstitution { source, .. } => Some(format!("$({})", source.trim())),
+            WordPart::ProcessSubstitution { source, output } => {
+                Some(format!("{}({source})", if *output { '>' } else { '<' }))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 impl Explainer<'_> {
+    fn remember(&mut self, word: &Word) {
+        for placeholder in substitutions(word) {
+            if !self.placeholders.contains(&placeholder) {
+                self.placeholders.push(placeholder);
+            }
+        }
+    }
+
+    fn show(&self, text: &str) -> String {
+        if self
+            .placeholders
+            .iter()
+            .any(|placeholder| text.contains(placeholder.as_str()))
+        {
+            return format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""));
+        }
+        quote(text)
+    }
+
     fn emit(&mut self, line: usize, text: String) {
         self.lines.push(format!("{line:>4}  {text}"));
     }
@@ -272,14 +305,20 @@ impl Explainer<'_> {
                 items,
                 body,
             } => {
+                for word in items.iter().flatten() {
+                    self.remember(word);
+                }
                 let values = match items {
                     Some(words) => expand::words(self.shell, words),
                     None => Ok(self.shell.positional.clone()),
                 };
                 match values {
                     Ok(values) => {
-                        let shown: Vec<String> =
-                            values.iter().take(20).map(|value| quote(value)).collect();
+                        let shown: Vec<String> = values
+                            .iter()
+                            .take(20)
+                            .map(|value| self.show(value))
+                            .collect();
                         let more = values.len().saturating_sub(20);
                         let suffix = if more > 0 {
                             format!(" and {more} more")
@@ -294,7 +333,7 @@ impl Explainer<'_> {
                             self.shell.set_variable(variable, first);
                             self.note(format!(
                                 "the body below is shown with {variable}={}",
-                                quote(first)
+                                self.show(first)
                             ));
                         }
                     }
@@ -303,8 +342,12 @@ impl Explainer<'_> {
                 self.list(body);
             }
             CommandKind::Case { subject, arms } => {
+                self.remember(subject);
                 match expand::words(self.shell, std::slice::from_ref(subject)) {
-                    Ok(value) => self.emit(line, format!("case {}", quote(&value.join(" ")))),
+                    Ok(value) => {
+                        let shown = self.show(&value.join(" "));
+                        self.emit(line, format!("case {shown}"));
+                    }
                     Err(error) => self.emit(line, format!("case: {error}")),
                 }
                 for arm in arms {
@@ -383,6 +426,15 @@ impl Explainer<'_> {
     }
 
     fn simple(&mut self, simple: &SimpleCommand, command: &Command, line: usize) {
+        for assignment in &simple.assignments {
+            match &assignment.value {
+                AssignedValue::Scalar(word) => self.remember(word),
+                AssignedValue::Array(words) => words.iter().for_each(|word| self.remember(word)),
+            }
+        }
+        for word in &simple.words {
+            self.remember(word);
+        }
         if simple.words.is_empty() {
             let shown: Vec<String> = simple
                 .assignments
@@ -403,7 +455,7 @@ impl Explainer<'_> {
                         .shell
                         .get_variable(&assignment.name)
                         .unwrap_or_default();
-                    format!("{}={}", assignment.name, quote(&value))
+                    format!("{}={}", assignment.name, self.show(&value))
                 })
                 .collect();
             self.emit(line, format!("sets {}", values.join(" ")));
@@ -429,7 +481,7 @@ impl Explainer<'_> {
             .iter()
             .map(|assignment| format!("{}=... ", assignment.name))
             .collect();
-        let shown: Vec<String> = argv.iter().map(|word| quote(word)).collect();
+        let shown: Vec<String> = argv.iter().map(|word| self.show(word)).collect();
         self.emit(line, format!("{prefix}{}", shown.join(" ")));
 
         for word in &simple.words {
@@ -475,6 +527,11 @@ impl Explainer<'_> {
             match self.shell.resolve(&name) {
                 Some(path) if path != name => self.note(format!("runs {path}")),
                 Some(_) => {}
+                None if self.shell.aliases.contains_key(&name) => {
+                    self.note(format!(
+                        "warning: the alias {name} is defined on this line, but aliases only take effect from the next line, so this looks for a command named {name}"
+                    ));
+                }
                 None => self.note(format!(
                     "warning: {name} is not a command, function or builtin"
                 )),
@@ -485,20 +542,32 @@ impl Explainer<'_> {
 }
 
 pub(crate) fn explain(shell: &mut Shell, source: &str, out: &mut dyn Write) -> i32 {
-    let list = match parser::parse_from_line(source, &shell.aliases, 1) {
-        Ok(list) => list,
-        Err(error) => {
-            let _ = writeln!(out, "syntax error: {error}");
-            return 2;
-        }
-    };
+    if let Err(error) = parser::parse_from_line(source, &shell.aliases, 1) {
+        let _ = writeln!(out, "syntax error: {error}");
+        return 2;
+    }
     shell.explaining = true;
     let mut explainer = Explainer {
         shell,
         lines: Vec::new(),
         functions: HashMap::new(),
+        placeholders: Vec::new(),
     };
-    explainer.list(&list);
+    let mut buffer = String::new();
+    let mut chunk_start = 1;
+    for (index, line) in source.lines().enumerate() {
+        if buffer.is_empty() {
+            chunk_start = index + 1;
+        }
+        buffer.push_str(line);
+        buffer.push('\n');
+        match parser::parse_from_line(&buffer, &explainer.shell.aliases, chunk_start) {
+            Err(error) if error.incomplete => continue,
+            Err(error) => explainer.emit(chunk_start, format!("syntax error: {error}")),
+            Ok(list) => explainer.list(&list),
+        }
+        buffer.clear();
+    }
     for line in &explainer.lines {
         let _ = writeln!(out, "{line}");
     }

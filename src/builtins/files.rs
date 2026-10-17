@@ -6,7 +6,7 @@ use crate::shell;
 use crate::sys;
 
 const REPLACE_USAGE: &str = "replace: usage: replace [--all] [-n] [-v] file old new, replace [--all] [-n] [-v] file < blocks, or search ... | replace [-n] old new";
-const WRITE_USAGE: &str = "write-file: usage: write-file [-p] [-a] [-v] file < text";
+const WRITE_USAGE: &str = "write-file: usage: write-file [-p] [-a] [-v] [-f] file < text";
 
 fn target(path: &str) -> PathBuf {
     let path = crate::bytes::to_path(path);
@@ -57,7 +57,7 @@ pub(crate) fn write_atomically(path: &Path, contents: &[u8]) -> std::io::Result<
     written
 }
 
-fn read_stdin(command: &str) -> Result<String, String> {
+fn read_stdin_bytes(command: &str) -> Result<Vec<u8>, String> {
     if sys::isatty(0) {
         return Err(format!("{command}: expects text on standard input"));
     }
@@ -65,11 +65,16 @@ fn read_stdin(command: &str) -> Result<String, String> {
     std::io::stdin()
         .lock()
         .read_to_end(&mut bytes)
-        .map_err(|error| format!("{command}: {error}"))?;
+        .map_err(|error| format!("{command}: {}", sys::error_message(&error)))?;
+    Ok(bytes)
+}
+
+fn read_stdin(command: &str) -> Result<String, String> {
+    let bytes = read_stdin_bytes(command)?;
     Ok(crate::bytes::decode(&bytes))
 }
 
-pub(crate) fn parse_blocks(text: &str) -> Result<Vec<(String, String)>, String> {
+pub(crate) fn parse_blocks(text: &str) -> Result<Vec<Block>, String> {
     let mut blocks = Vec::new();
     let mut lines = text.lines();
     while let Some(line) = lines.next() {
@@ -100,7 +105,11 @@ pub(crate) fn parse_blocks(text: &str) -> Result<Vec<(String, String)>, String> 
         if !closed {
             return Err("replace: a block is missing its ======= or >>>>>>> line".into());
         }
-        blocks.push((old.join("\n"), new.join("\n")));
+        blocks.push(Block {
+            old: old.join("\n"),
+            new: new.join("\n"),
+            deletes_lines: new.is_empty(),
+        });
     }
     if blocks.is_empty() {
         return Err("replace: no <<<<<<< ======= >>>>>>> blocks on standard input".into());
@@ -130,34 +139,106 @@ fn missing_hint(contents: &str, old: &str) -> String {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Block {
+    pub old: String,
+    pub new: String,
+    pub deletes_lines: bool,
+}
+
+impl Block {
+    pub(crate) fn text(old: &str, new: &str) -> Block {
+        Block {
+            old: old.to_string(),
+            new: new.to_string(),
+            deletes_lines: false,
+        }
+    }
+
+    fn with_line_endings(&self, crlf: bool) -> Block {
+        if !crlf || !self.old.contains('\n') || self.old.contains('\r') {
+            return self.clone();
+        }
+        Block {
+            old: self.old.replace('\n', "\r\n"),
+            new: self.new.replace('\n', "\r\n"),
+            deletes_lines: self.deletes_lines,
+        }
+    }
+}
+
+fn line_ending_after(text: &str, end: usize) -> Option<usize> {
+    let rest = &text[end..];
+    if rest.is_empty() {
+        Some(0)
+    } else if rest.starts_with("\r\n") {
+        Some(2)
+    } else if rest.starts_with('\n') {
+        Some(1)
+    } else {
+        None
+    }
+}
+
+fn occurrences(text: &str, block: &Block) -> Vec<(usize, usize)> {
+    text.match_indices(block.old.as_str())
+        .filter_map(|(offset, found)| {
+            let end = offset + found.len();
+            if !block.deletes_lines {
+                return Some((offset, end));
+            }
+            let before = &text[..offset];
+            if offset > 0 && !before.ends_with('\n') {
+                return None;
+            }
+            match line_ending_after(text, end)? {
+                0 if before.ends_with("\r\n") => Some((offset - 2, end)),
+                0 if offset > 0 => Some((offset - 1, end)),
+                ending => Some((offset, end + ending)),
+            }
+        })
+        .collect()
+}
+
+fn splice(text: &str, ranges: &[(usize, usize)], new: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut copied = 0;
+    for &(start, end) in ranges {
+        out.push_str(&text[copied..start]);
+        out.push_str(new);
+        copied = end;
+    }
+    out.push_str(&text[copied..]);
+    out
+}
+
 pub(crate) fn apply_replacements(
     contents: &str,
-    blocks: &[(String, String)],
+    blocks: &[Block],
     all: bool,
 ) -> Result<(String, usize), String> {
     let mut text = contents.to_string();
     let mut total = 0;
-    for (old, new) in blocks {
-        if old.is_empty() {
+    let crlf = contents.contains("\r\n");
+    for block in blocks {
+        if block.old.is_empty() {
             return Err("the text to replace is empty".into());
         }
-        let found: Vec<usize> = text
-            .match_indices(old.as_str())
-            .map(|(offset, _)| offset)
-            .collect();
+        let block = block.with_line_endings(crlf);
+        let found = occurrences(&text, &block);
         match found.len() {
             0 => {
-                let preview = old.lines().next().unwrap_or_default();
+                let preview = block.old.lines().next().unwrap_or_default();
                 return Err(format!(
                     "'{preview}' was not found{}",
-                    missing_hint(&text, old)
+                    missing_hint(&text, &block.old)
                 ));
             }
             1 => {}
             count if !all => {
                 let lines: Vec<String> = found
                     .iter()
-                    .map(|offset| line_of(&text, *offset).to_string())
+                    .map(|(offset, _)| line_of(&text, *offset).to_string())
                     .collect();
                 return Err(format!(
                     "the text appears {count} times, at lines {}; include more surrounding text or use --all",
@@ -167,7 +248,7 @@ pub(crate) fn apply_replacements(
             _ => {}
         }
         total += found.len();
-        text = text.replace(old.as_str(), new);
+        text = splice(&text, &found, &block.new);
     }
     Ok((text, total))
 }
@@ -323,7 +404,7 @@ pub(super) fn replace(args: &[String], out: &mut dyn Write) -> i32 {
         }
     }
     let blocks = match positional.as_slice() {
-        [_, old, new] => vec![(old.clone(), new.clone())],
+        [_, old, new] => vec![Block::text(old, new)],
         [old, new] if !sys::isatty(0) => return replace_piped(old, new, dry_run, out),
         [_] => match read_stdin("replace").and_then(|text| parse_blocks(&text)) {
             Ok(blocks) => blocks,
@@ -371,12 +452,21 @@ pub(super) fn write_file(args: &[String], out: &mut dyn Write) -> i32 {
     let mut parents = false;
     let mut append = false;
     let mut verbose = false;
+    let mut force = false;
     let mut files = Vec::new();
-    for argument in args {
+    let mut arguments = args.iter();
+    while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "-p" | "--parents" => parents = true,
             "-a" | "--append" => append = true,
             "-v" | "--verbose" => verbose = true,
+            "-f" | "--force" | "--allow-empty" => force = true,
+            "--" => files.extend(arguments.by_ref()),
+            flag if flag.starts_with('-') && flag.len() > 1 => {
+                shell::error(format!("write-file: unknown flag '{flag}'"));
+                shell::error(WRITE_USAGE);
+                return 2;
+            }
             _ => files.push(argument),
         }
     }
@@ -384,13 +474,19 @@ pub(super) fn write_file(args: &[String], out: &mut dyn Write) -> i32 {
         shell::error(WRITE_USAGE);
         return 2;
     };
-    let text = match read_stdin("write-file") {
+    let text = match read_stdin_bytes("write-file") {
         Ok(text) => text,
         Err(message) => {
             shell::error(message);
             return 2;
         }
     };
+    if text.is_empty() && !force && !append {
+        shell::error(format!(
+            "write-file: {file}: no input, so nothing was written (use -f to write an empty file)"
+        ));
+        return 1;
+    }
     let path = target(file);
     if parents
         && let Some(parent) = path
@@ -410,9 +506,9 @@ pub(super) fn write_file(args: &[String], out: &mut dyn Write) -> i32 {
             .append(true)
             .create(true)
             .open(&path)
-            .and_then(|mut handle| handle.write_all(&crate::bytes::encode(&text)))
+            .and_then(|mut handle| handle.write_all(&text))
     } else {
-        write_atomically(&path, &crate::bytes::encode(&text))
+        write_atomically(&path, &text)
     };
     if let Err(error) = result {
         shell::error(format!(
@@ -426,7 +522,7 @@ pub(super) fn write_file(args: &[String], out: &mut dyn Write) -> i32 {
             out,
             "{file}: {} bytes, {} lines",
             text.len(),
-            text.lines().count()
+            text.split_inclusive(|byte| *byte == b'\n').count()
         );
     }
     0
@@ -438,7 +534,7 @@ mod tests {
 
     #[test]
     fn single_replacement_must_be_unique() {
-        let blocks = vec![("b".to_string(), "B".to_string())];
+        let blocks = vec![Block::text("b", "B")];
         assert_eq!(
             apply_replacements("abc", &blocks, false),
             Ok(("aBc".into(), 1))
@@ -453,9 +549,36 @@ mod tests {
 
     #[test]
     fn missing_text_points_at_a_near_match() {
-        let blocks = vec![("fn main() {\n    run();".to_string(), String::new())];
+        let blocks = vec![Block::text("fn main() {\n    run();", "")];
         let error = apply_replacements("x\nfn main() {\n  run();\n", &blocks, false).unwrap_err();
         assert!(error.contains("first line appears at line 2"));
+    }
+
+    #[test]
+    fn crlf_files_match_lf_text_and_keep_their_endings() {
+        let blocks = vec![Block::text("one\ntwo", "uno\ndos")];
+        assert_eq!(
+            apply_replacements("one\r\ntwo\r\nthree\r\n", &blocks, false),
+            Ok(("uno\r\ndos\r\nthree\r\n".into(), 1))
+        );
+    }
+
+    #[test]
+    fn blocks_with_an_empty_new_side_delete_lines() {
+        let blocks = parse_blocks("<<<<<<<\nb\n=======\n>>>>>>>\n").unwrap();
+        assert_eq!(
+            apply_replacements("a\nb\nc\n", &blocks, false),
+            Ok(("a\nc\n".into(), 1))
+        );
+        assert_eq!(
+            apply_replacements("a\nb", &blocks, false),
+            Ok(("a".into(), 1))
+        );
+        assert_eq!(
+            apply_replacements("a\r\nb\r\nc\r\n", &blocks, false),
+            Ok(("a\r\nc\r\n".into(), 1))
+        );
+        assert!(apply_replacements("ab\n", &blocks, false).is_err());
     }
 
     #[test]
@@ -481,8 +604,12 @@ mod tests {
         assert_eq!(
             parse_blocks(text),
             Ok(vec![
-                ("a\nb".into(), "c".into()),
-                ("x".into(), String::new())
+                Block::text("a\nb", "c"),
+                Block {
+                    old: "x".into(),
+                    new: String::new(),
+                    deletes_lines: true
+                }
             ])
         );
         assert!(parse_blocks("<<<<<<<\na\n").is_err());

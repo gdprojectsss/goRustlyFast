@@ -15,8 +15,13 @@ fn walk(
     show_hidden: bool,
     rows: &mut Vec<(String, Vec<Value>)>,
 ) -> Result<(), String> {
-    let entries = std::fs::read_dir(directory)
-        .map_err(|error| format!("{}: {error}", directory.display()))?;
+    let entries = std::fs::read_dir(directory).map_err(|error| {
+        format!(
+            "{}: {}",
+            directory.display(),
+            crate::sys::error_message(&error)
+        )
+    })?;
     for entry in entries.flatten() {
         let name = crate::bytes::from_os(&entry.file_name());
         if name.starts_with('.') && !show_hidden {
@@ -65,8 +70,8 @@ pub(super) fn files(args: &[String]) -> Result<Table, String> {
         "modified".into(),
     ]);
     for path in &paths {
-        let metadata =
-            std::fs::symlink_metadata(path).map_err(|error| format!("{path}: {error}"))?;
+        let metadata = std::fs::symlink_metadata(path)
+            .map_err(|error| format!("{path}: {}", crate::sys::error_message(&error)))?;
         if !metadata.is_dir() {
             table.push(file_row(path.clone(), &metadata));
             continue;
@@ -120,7 +125,7 @@ pub(super) fn procs(args: &[String]) -> Result<Table, String> {
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output()
-        .map_err(|error| format!("could not run ps: {error}"))?;
+        .map_err(|error| format!("could not run ps: {}", crate::sys::error_message(&error)))?;
     Ok(parse_ps(&String::from_utf8_lossy(&output.stdout)))
 }
 
@@ -162,7 +167,9 @@ pub(super) fn load(args: &[String]) -> Result<Table, String> {
     let [path] = args else {
         return Err("usage: load <file.csv|file.tsv|file.json|file>".into());
     };
-    let text = std::fs::read_to_string(path).map_err(|error| format!("{path}: {error}"))?;
+    let bytes = std::fs::read(path)
+        .map_err(|error| format!("{path}: {}", crate::sys::error_message(&error)))?;
+    let text = String::from_utf8_lossy(&bytes);
     let extension = Path::new(path)
         .extension()
         .map(|extension| extension.to_string_lossy().to_ascii_lowercase())
@@ -182,6 +189,7 @@ pub(super) fn from(args: &[String], text: &str) -> Result<Table, String> {
 }
 
 fn parse_format(format: &str, text: &str) -> Result<Table, String> {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     match format {
         "csv" => Ok(Table::from_records(delimited::parse(text, ',')?)),
         "tsv" => Ok(Table::from_records(delimited::parse(text, '\t')?)),
@@ -254,5 +262,13 @@ mod tests {
         );
         assert_eq!(to(&["tsv".into()], &table).unwrap(), "name\tn\nx\t1\n");
         assert!(from(&["yaml".into()], "").is_err());
+    }
+
+    #[test]
+    fn byte_order_marks_and_extra_fields() {
+        let table = from(&["csv".into()], "\u{feff}a,b\n1,2,3\n4,5\n").unwrap();
+        assert_eq!(table.columns, ["a", "b", "column3"]);
+        assert_eq!(table.rows[0][2], Value::Int(3));
+        assert_eq!(table.rows[1][2], Value::Nothing);
     }
 }

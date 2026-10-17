@@ -600,6 +600,71 @@ fn csv_filter_sort_and_convert() {
 }
 
 #[test]
+fn where_regex_search_shorthands_and_load_details() {
+    let directory = std::env::temp_dir().join(format!("grfsh_tables_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(directory.join("a.rs"), "let year = 2024;\nlet name = x;\n").unwrap();
+    std::fs::write(directory.join("b.txt"), "plain\n").unwrap();
+    std::fs::write(directory.join("data.csv"), "\u{feff}a,b\n1,2,3\n").unwrap();
+    std::fs::write(directory.join("rows.jsonl"), "{\"a\":1}\n{\"a\":\n").unwrap();
+    let dir = directory.display();
+    let (out, _, _) = run_command(&format!("files {dir} | where name =~ '\\.rs$' | get name"));
+    assert_eq!(out, "a.rs\n");
+    let (out, _, _) = run_command(&format!("search '\\d{{4}}' {dir}"));
+    assert_eq!(out, format!("{dir}/a.rs:1:let year = 2024;\n"));
+    let (_, err, status) = run_command(&format!("search '(' {dir}"));
+    assert_eq!(status, 1);
+    assert!(err.contains("invalid regular expression"), "{err}");
+    let (out, _, _) = run_command(&format!("load {dir}/data.csv | to json"));
+    assert_eq!(out, "[{\"a\":1,\"b\":2,\"column3\":3}]\n");
+    let (_, err, _) = run_command(&format!("load {dir}/rows.jsonl"));
+    assert!(err.contains("line 2: invalid JSON"), "{err}");
+    let (_, err, status) = run_command(&format!("files {dir} | where size -gt abc"));
+    assert_eq!(status, 1);
+    assert!(err.contains("'abc' is not a valid size"), "{err}");
+    let (_, err, _) = run_command(&format!("load {dir}/missing.csv"));
+    assert!(err.contains("No such file or directory"), "{err}");
+    assert!(!err.contains("os error"), "{err}");
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn tables_escape_control_characters_and_reject_unknown_flags() {
+    let directory = std::env::temp_dir().join(format!("grfsh_escapes_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(directory.join("\u{1b}]0;pwned\u{7}evil"), "").unwrap();
+    std::fs::write(directory.join("two\nlines"), "").unwrap();
+    let dir = directory.display();
+    let (out, _, _) = run_command(&format!("files {dir} | select name"));
+    assert!(!out.contains('\u{1b}') && !out.contains('\u{7}'), "{out:?}");
+    assert!(out.contains("\\e]0;pwned\\x07evil"), "{out}");
+    assert!(out.contains("two\\nlines"), "{out}");
+    let (out, _, _) = run_command(&format!("files {dir} | get -0 name"));
+    assert_eq!(out, "\u{1b}]0;pwned\u{7}evil\0two\nlines\0");
+    for command in ["git-status -x", "procs -x", "ports -a", "files --nope"] {
+        let (_, err, status) = run_command(command);
+        assert_eq!(status, 2, "{command}: {err}");
+    }
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn git_status_paths_are_relative_to_the_current_directory() {
+    let directory = std::env::temp_dir().join(format!("grfsh_git_rel_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(directory.join("sub")).unwrap();
+    let script = format!(
+        "cd {dir} && git init -q . && echo a > top.txt && echo b > sub/inner.txt && cd sub && git-status | sort-by path | get path",
+        dir = directory.display()
+    );
+    let (out, err, _) = run_command(&script);
+    assert_eq!(out, "../top.txt\ninner.txt\n", "{err}");
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
 fn files_where_size_uses_units() {
     let directory = "/tmp/grfsh_fixture_sizes";
     let _ = std::fs::remove_dir_all(directory);
@@ -963,14 +1028,29 @@ fn hooks_run_on_directory_change() {
 fn check_reports_problems_without_running() {
     let path = write_fixture(
         "check.sh",
-        "touch /tmp/grfsh_check_should_not_exist\nlet total=1\nmystery-tool --go\n",
+        "touch /tmp/grfsh_check_should_not_exist\nenable -n echo\nmystery-tool --go\n",
     );
     let _ = std::fs::remove_file("/tmp/grfsh_check_should_not_exist");
     let (out, status) = run_args(&["--check", &path]);
-    assert!(out.contains(":2: error: 'let' is not supported"));
+    assert!(out.contains(":2: error: 'enable' is not supported"));
     assert!(out.contains(":3: warning: 'mystery-tool'"));
     assert_eq!(status, 1);
     assert!(!std::path::Path::new("/tmp/grfsh_check_should_not_exist").exists());
+}
+
+#[test]
+fn check_follows_sourced_files_and_stops_at_exit() {
+    let directory = std::env::temp_dir().join(format!("grfsh_check_dir_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(directory.join("lib.sh"), "helper() { echo; }\n").unwrap();
+    let script = directory.join("main.sh");
+    let mut contents = b"# caf\xe9\n. \"$(dirname \"$0\")/lib.sh\"\nhelper\nexit 0\n".to_vec();
+    contents.extend_from_slice(b"\x00\xffbinary payload ((\n");
+    std::fs::write(&script, contents).unwrap();
+    let (out, status) = run_args(&["--check", script.to_str().unwrap()]);
+    assert_eq!(out, format!("{}: ok\n", script.display()));
+    assert_eq!(status, 0);
+    let _ = std::fs::remove_dir_all(&directory);
 }
 
 #[test]

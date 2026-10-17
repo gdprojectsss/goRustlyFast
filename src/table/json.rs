@@ -24,8 +24,9 @@ pub(crate) fn parse(text: &str) -> Result<Json, String> {
 
 pub(crate) fn parse_lines(text: &str) -> Result<Vec<Json>, String> {
     text.lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(parse)
+        .enumerate()
+        .filter(|(_, line)| !line.trim().is_empty())
+        .map(|(index, line)| parse(line).map_err(|error| format!("line {}: {error}", index + 1)))
         .collect()
 }
 
@@ -296,5 +297,10 @@ mod tests {
     #[test]
     fn json_lines() {
         assert_eq!(parse_lines("{\"a\":1}\n\n{\"a\":2}\n").unwrap().len(), 2);
+        assert!(
+            parse_lines("{\"a\":1}\n\n{\"a\":\n")
+                .unwrap_err()
+                .starts_with("line 3: invalid JSON")
+        );
     }
 }

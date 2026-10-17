@@ -62,9 +62,45 @@ pub(crate) fn trim(text: &str, limit: usize) -> Trimmed {
     }
 }
 
+const LOG_LIFETIME: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+fn directory_path() -> PathBuf {
+    std::env::temp_dir().join(format!("grfsh-output-{}", unsafe { libc::getuid() }))
+}
+
+pub(crate) fn remove_old_logs() {
+    let directory = directory_path();
+    let Ok(metadata) = std::fs::symlink_metadata(&directory) else {
+        return;
+    };
+    let owned = std::os::unix::fs::MetadataExt::uid(&metadata) == unsafe { libc::getuid() };
+    if !metadata.is_dir() || !owned {
+        return;
+    }
+    remove_files_older_than(&directory, LOG_LIFETIME);
+}
+
+fn remove_files_older_than(directory: &std::path::Path, lifetime: std::time::Duration) {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        let old = metadata
+            .modified()
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age > lifetime);
+        if metadata.is_file() && old {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
 pub(crate) fn output_directory() -> Option<PathBuf> {
-    let directory =
-        std::env::temp_dir().join(format!("grfsh-output-{}", unsafe { libc::getuid() }));
+    let directory = directory_path();
     std::fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
@@ -94,6 +130,20 @@ pub(crate) fn save_full_output(text: &str, label: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn old_logs_are_removed() {
+        let directory = std::env::temp_dir().join(format!("grfsh_logs_{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let log = directory.join("old.log");
+        std::fs::write(&log, "x").unwrap();
+        remove_files_older_than(&directory, std::time::Duration::from_secs(3600));
+        assert!(log.exists());
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        remove_files_older_than(&directory, std::time::Duration::from_millis(1));
+        assert!(!log.exists());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
 
     #[test]
     fn short_output_is_unchanged() {

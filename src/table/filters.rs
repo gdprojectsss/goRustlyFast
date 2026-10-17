@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 
 use super::data::Table;
+use super::regex::Regex;
 use super::value::Value;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -11,9 +12,13 @@ enum Comparison {
     LessOrEqual,
     Greater,
     GreaterOrEqual,
+    Matches,
+    NotMatches,
     Contains,
     NotContains,
 }
+
+const USAGE: &str = "usage: where <column> <operator> <value> [and|or ...]";
 
 fn comparison(operator: &str) -> Option<Comparison> {
     Some(match operator {
@@ -23,32 +28,39 @@ fn comparison(operator: &str) -> Option<Comparison> {
         "<=" | "le" | "-le" => Comparison::LessOrEqual,
         ">" | "gt" | "-gt" => Comparison::Greater,
         ">=" | "ge" | "-ge" => Comparison::GreaterOrEqual,
-        "=~" | "has" | "contains" => Comparison::Contains,
-        "!~" | "lacks" => Comparison::NotContains,
+        "=~" => Comparison::Matches,
+        "!~" => Comparison::NotMatches,
+        "has" | "contains" => Comparison::Contains,
+        "lacks" => Comparison::NotContains,
         _ => return None,
     })
 }
 
-fn holds(comparison: Comparison, cell: &Value, expected: &Value, needle: &str) -> bool {
-    let contains = || cell.raw().to_lowercase().contains(&needle.to_lowercase());
-    match comparison {
+fn holds(clause: &Clause, cell: &Value) -> bool {
+    let contains = || {
+        cell.raw()
+            .to_lowercase()
+            .contains(&clause.needle.to_lowercase())
+    };
+    let matches = || {
+        clause
+            .regex
+            .as_ref()
+            .is_some_and(|regex| regex.is_match(&cell.raw()))
+    };
+    let ordering = || cell.compare(&clause.expected);
+    match clause.comparison {
+        Comparison::Matches => matches(),
+        Comparison::NotMatches => !matches(),
         Comparison::Contains => contains(),
         Comparison::NotContains => !contains(),
-        Comparison::Equal => cell.compare(expected) == Some(Ordering::Equal),
-        Comparison::NotEqual => cell.compare(expected) != Some(Ordering::Equal),
-        Comparison::Less => cell.compare(expected) == Some(Ordering::Less),
-        Comparison::LessOrEqual => {
-            matches!(
-                cell.compare(expected),
-                Some(Ordering::Less | Ordering::Equal)
-            )
-        }
-        Comparison::Greater => cell.compare(expected) == Some(Ordering::Greater),
+        Comparison::Equal => ordering() == Some(Ordering::Equal),
+        Comparison::NotEqual => ordering() != Some(Ordering::Equal),
+        Comparison::Less => ordering() == Some(Ordering::Less),
+        Comparison::LessOrEqual => matches!(ordering(), Some(Ordering::Less | Ordering::Equal)),
+        Comparison::Greater => ordering() == Some(Ordering::Greater),
         Comparison::GreaterOrEqual => {
-            matches!(
-                cell.compare(expected),
-                Some(Ordering::Greater | Ordering::Equal)
-            )
+            matches!(ordering(), Some(Ordering::Greater | Ordering::Equal))
         }
     }
 }
@@ -58,46 +70,124 @@ struct Clause {
     comparison: Comparison,
     expected: Value,
     needle: String,
+    regex: Option<Regex>,
+}
+
+fn kind_name(value: &Value) -> &'static str {
+    match value {
+        Value::Size(_) => "size (such as 512, 10kb or 2mb)",
+        Value::Date(_) => "date or age (such as 2024-05-01 or 2d)",
+        Value::Bool(_) => "true or false value",
+        _ => "number",
+    }
+}
+
+fn typed_value(table: &Table, index: usize, column: &str, text: &str) -> Result<Value, String> {
+    let mut cells = table
+        .rows
+        .iter()
+        .map(|row| &row[index])
+        .filter(|value| **value != Value::Nothing);
+    let Some(hint) = cells.clone().next() else {
+        return Ok(Value::infer(text));
+    };
+    let expected = hint.literal_like(text);
+    let textual = matches!(expected, Value::Text(_));
+    if textual && !cells.any(|value| matches!(value, Value::Text(_))) {
+        return Err(format!(
+            "'{text}' is not a valid {} for column '{column}'",
+            kind_name(hint)
+        ));
+    }
+    Ok(expected)
 }
 
 fn clause(table: &Table, words: &[String]) -> Result<Clause, String> {
     let [column, operator, rest @ ..] = words else {
-        return Err("usage: where <column> <operator> <value> [and|or ...]".into());
+        return Err(USAGE.into());
     };
     if rest.is_empty() {
-        return Err("usage: where <column> <operator> <value> [and|or ...]".into());
+        return Err(USAGE.into());
     }
     let comparison = comparison(operator).ok_or_else(|| {
-        format!("unknown operator '{operator}' (use == != < <= > >= =~ !~ or eq ne lt le gt ge)")
+        format!(
+            "unknown operator '{operator}' (use == != < <= > >= =~ !~ has lacks or eq ne lt le gt ge)"
+        )
     })?;
     let index = table.column(column)?;
     let needle = rest.join(" ");
-    let hint = table
-        .rows
-        .iter()
-        .map(|row| &row[index])
-        .find(|value| **value != Value::Nothing)
-        .cloned()
-        .unwrap_or(Value::Text(String::new()));
+    let (expected, regex) = match comparison {
+        Comparison::Matches | Comparison::NotMatches => {
+            (Value::Nothing, Some(Regex::new(&needle, false)?))
+        }
+        Comparison::Contains | Comparison::NotContains => (Value::Text(needle.clone()), None),
+        _ => (typed_value(table, index, column, &needle)?, None),
+    };
     Ok(Clause {
         index,
         comparison,
-        expected: hint.literal_like(&needle),
+        expected,
         needle,
+        regex,
     })
+}
+
+fn split_quoted(text: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut started = false;
+    let mut quote: Option<char> = None;
+    for character in text.chars() {
+        match (quote, character) {
+            (Some(open), close) if open == close => quote = None,
+            (Some(_), other) => word.push(other),
+            (None, '\'' | '"') => {
+                quote = Some(character);
+                started = true;
+            }
+            (None, space) if space.is_whitespace() => {
+                if started {
+                    words.push(std::mem::take(&mut word));
+                    started = false;
+                }
+            }
+            (None, other) => {
+                word.push(other);
+                started = true;
+            }
+        }
+    }
+    if started {
+        words.push(word);
+    }
+    words
+}
+
+fn starts_clause(table: &Table, words: &[String]) -> bool {
+    match words {
+        [] => true,
+        [column, operator, ..] => table.column(column).is_ok() && comparison(operator).is_some(),
+        _ => false,
+    }
 }
 
 pub(super) fn filter_rows(args: &[String], mut table: Table) -> Result<Table, String> {
     let words: Vec<String> = match args {
-        [single] => single.split_whitespace().map(String::from).collect(),
+        [single] => split_quoted(single),
         many => many.to_vec(),
     };
     let mut alternatives: Vec<Vec<Clause>> = vec![Vec::new()];
     let mut pending: Vec<String> = Vec::new();
-    for word in words.into_iter().chain(std::iter::once("and".to_string())) {
-        if word != "and" && word != "or" {
-            pending.push(word);
+    for (position, word) in words.iter().enumerate() {
+        let connector = (word == "and" || word == "or")
+            && pending.len() >= 3
+            && starts_clause(&table, &words[position + 1..]);
+        if !connector {
+            pending.push(word.clone());
             continue;
+        }
+        if position + 1 == words.len() {
+            return Err(USAGE.into());
         }
         let parsed = clause(&table, &std::mem::take(&mut pending))?;
         if let Some(current) = alternatives.last_mut() {
@@ -107,16 +197,15 @@ pub(super) fn filter_rows(args: &[String], mut table: Table) -> Result<Table, St
             alternatives.push(Vec::new());
         }
     }
+    let parsed = clause(&table, &pending)?;
+    if let Some(current) = alternatives.last_mut() {
+        current.push(parsed);
+    }
     table.rows.retain(|row| {
         alternatives.iter().any(|clauses| {
-            clauses.iter().all(|clause| {
-                holds(
-                    clause.comparison,
-                    &row[clause.index],
-                    &clause.expected,
-                    &clause.needle,
-                )
-            })
+            clauses
+                .iter()
+                .all(|clause| holds(clause, &row[clause.index]))
         })
     });
     Ok(table)
@@ -227,14 +316,20 @@ pub(super) fn count(args: &[String], table: &Table) -> Result<String, String> {
 }
 
 pub(super) fn get(args: &[String], table: &Table) -> Result<String, String> {
-    let [column] = args else {
-        return Err("usage: get <column>".into());
+    let (separator, column) = match args {
+        [column] if !column.starts_with('-') => ('\n', column),
+        [flag, column] | [column, flag] if flag == "-0" || flag == "--null" => ('\0', column),
+        _ => return Err("usage: get [-0] <column>".into()),
     };
     let index = table.column(column)?;
     Ok(table
         .rows
         .iter()
-        .map(|row| row[index].raw() + "\n")
+        .map(|row| {
+            let mut value = row[index].raw();
+            value.push(separator);
+            value
+        })
         .collect())
 }
 
@@ -282,10 +377,17 @@ mod tests {
     fn where_text_operators() {
         let dirs = filter_rows(&arguments("kind == dir"), sample()).unwrap();
         assert_eq!(names(&dirs), ["src"]);
-        let matching = filter_rows(&arguments("name =~ .MD"), sample()).unwrap();
+        let matching = filter_rows(&arguments("name =~ \\.md$"), sample()).unwrap();
         assert_eq!(names(&matching), ["notes.md"]);
+        let cased = filter_rows(&arguments("name =~ .MD"), sample()).unwrap();
+        assert!(cased.rows.is_empty());
+        let words = filter_rows(&arguments("name =~ ^\\w+\\.\\w{3}$"), sample()).unwrap();
+        assert_eq!(names(&words), ["big.iso"]);
         let others = filter_rows(&arguments("name !~ o"), sample()).unwrap();
         assert_eq!(names(&others), ["src"]);
+        let substring = filter_rows(&arguments("name has .MD"), sample()).unwrap();
+        assert_eq!(names(&substring), ["notes.md"]);
+        assert!(filter_rows(&arguments("name =~ (unclosed"), sample()).is_err());
     }
 
     #[test]
@@ -297,6 +399,26 @@ mod tests {
                 .unwrap_err()
                 .contains("columns: name, size, kind")
         );
+        assert_eq!(
+            filter_rows(&arguments("size -gt abc"), sample()).unwrap_err(),
+            "'abc' is not a valid size (such as 512, 10kb or 2mb) for column 'size'"
+        );
+    }
+
+    #[test]
+    fn where_keeps_and_inside_values() {
+        let mut table = Table::new(arguments("name genre"));
+        table.push(vec![
+            Value::Text("rock and roll".into()),
+            Value::Text("a".into()),
+        ]);
+        table.push(vec![Value::Text("rock".into()), Value::Text("b".into())]);
+        let single = filter_rows(&["name == rock and roll".to_string()], table.clone()).unwrap();
+        assert_eq!(names(&single), ["rock and roll"]);
+        let quoted = filter_rows(&["name == 'rock and roll'".to_string()], table.clone()).unwrap();
+        assert_eq!(names(&quoted), ["rock and roll"]);
+        let both = filter_rows(&arguments("name == rock and genre == b"), table).unwrap();
+        assert_eq!(names(&both), ["rock"]);
     }
 
     #[test]
@@ -343,5 +465,10 @@ mod tests {
             get(&arguments("name"), &sample()).unwrap(),
             "big.iso\nnotes.md\nsrc\n"
         );
+        assert_eq!(
+            get(&arguments("-0 name"), &sample()).unwrap(),
+            "big.iso\0notes.md\0src\0"
+        );
+        assert!(get(&arguments("-x name"), &sample()).is_err());
     }
 }

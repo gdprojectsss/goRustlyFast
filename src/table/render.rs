@@ -16,6 +16,29 @@ pub(crate) enum Style {
     Plain,
 }
 
+pub(crate) fn visible(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for character in text.chars() {
+        match character {
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            '\x1b' => out.push_str("\\e"),
+            control if control.is_control() => {
+                out.push_str(&format!("\\x{:02x}", u32::from(control)));
+            }
+            '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' => {
+                out.push_str(&format!("\\u{{{:04x}}}", u32::from(character)));
+            }
+            '\u{10ff80}'..='\u{10ffff}' => {
+                out.push_str(&format!("\\x{:02x}", u32::from(character) - 0x10ff00));
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
 fn width_of(text: &str) -> usize {
     display_width(text)
 }
@@ -71,7 +94,7 @@ pub(crate) fn render(table: &Table, style: Style, limit: Option<usize>, now: i64
                     Style::Pretty => value.display(now),
                     Style::Plain => value.plain(),
                 })
-                .map(|text| text.replace(['\n', '\t'], " "))
+                .map(|text| visible(&text))
                 .collect()
         })
         .collect();
@@ -92,7 +115,8 @@ pub(crate) fn render(table: &Table, style: Style, limit: Option<usize>, now: i64
         })
         .collect();
 
-    let mut widths: Vec<usize> = table.columns.iter().map(|name| width_of(name)).collect();
+    let columns: Vec<String> = table.columns.iter().map(|name| visible(name)).collect();
+    let mut widths: Vec<usize> = columns.iter().map(|name| width_of(name)).collect();
     for row in &cells {
         for (width, cell) in widths.iter_mut().zip(row) {
             *width = (*width).max(width_of(cell));
@@ -107,7 +131,7 @@ pub(crate) fn render(table: &Table, style: Style, limit: Option<usize>, now: i64
     let mut out = String::new();
 
     let mut line = String::new();
-    for (index, name) in table.columns.iter().enumerate() {
+    for (index, name) in columns.iter().enumerate() {
         if index > 0 {
             line.push_str(&" ".repeat(GAP));
         }
@@ -153,12 +177,13 @@ pub(crate) fn render(table: &Table, style: Style, limit: Option<usize>, now: i64
 }
 
 pub(crate) fn markdown(table: &Table) -> String {
-    let escape = |text: String| text.replace('|', "\\|").replace('\n', " ");
+    let escape = |text: &str| visible(text).replace('|', "\\|");
     let mut out = String::new();
-    out.push_str(&format!("| {} |\n", table.columns.join(" | ")));
+    let columns: Vec<String> = table.columns.iter().map(|name| escape(name)).collect();
+    out.push_str(&format!("| {} |\n", columns.join(" | ")));
     out.push_str(&format!("|{}\n", " --- |".repeat(table.columns.len())));
     for row in &table.rows {
-        let cells: Vec<String> = row.iter().map(|value| escape(value.plain())).collect();
+        let cells: Vec<String> = row.iter().map(|value| escape(&value.plain())).collect();
         out.push_str(&format!("| {} |\n", cells.join(" | ")));
     }
     out
@@ -166,7 +191,8 @@ pub(crate) fn markdown(table: &Table) -> String {
 
 pub(crate) fn html(table: &Table) -> String {
     let escape = |text: &str| {
-        text.replace('&', "&amp;")
+        visible(text)
+            .replace('&', "&amp;")
             .replace('<', "&lt;")
             .replace('>', "&gt;")
             .replace('"', "&quot;")
@@ -238,6 +264,20 @@ mod tests {
         let text = render(&table, Style::Plain, None, 0);
         let widths: Vec<usize> = text.lines().map(display_width).collect();
         assert_eq!(widths, [7, 7, 7]);
+    }
+
+    #[test]
+    fn control_characters_are_shown_not_sent() {
+        let mut table = Table::new(vec!["na\x1bme".into()]);
+        table.push(vec![Value::Text("\x1b]0;pwned\x07evil".into())]);
+        table.push(vec![Value::Text("two\nlines\u{202e}".into())]);
+        let text = render(&table, Style::Pretty, None, 0);
+        assert!(!text.contains("]0;\x1b") && !text.contains('\x07'));
+        assert!(text.contains("\\e]0;pwned\\x07evil"));
+        assert!(text.contains("two\\nlines\\u{202e}"));
+        assert!(text.contains("na\\eme"));
+        assert!(markdown(&table).contains("| \\e]0;pwned\\x07evil |"));
+        assert!(!html(&table).contains('\x1b'));
     }
 
     #[test]
