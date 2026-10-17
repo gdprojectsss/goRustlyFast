@@ -22,7 +22,8 @@
   <a href="#pentru-agenti"><b>Pentru agenti</b></a> |
   <a href="#de-ce-grfsh"><b>De ce grfsh</b></a> |
   <a href="#roadmap"><b>Roadmap</b></a> |
-  <a href="README.md"><b>English</b></a>
+  <a href="README.md"><b>English</b></a> |
+  <a href="README.zh-CN.md"><b>简体中文</b></a>
 </p>
 
 <img alt="sesiune grfsh in terminal" src=".github/assets/demo.svg" width="880">

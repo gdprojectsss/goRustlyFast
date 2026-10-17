@@ -26,7 +26,8 @@
   <a href="#performance"><b>Performance</b></a> |
   <a href="#how-it-works"><b>How it works</b></a> |
   <a href="#roadmap"><b>Roadmap</b></a> |
-  <a href="README.ro.md"><b>Romana</b></a>
+  <a href="README.ro.md"><b>Romana</b></a> |
+  <a href="README.zh-CN.md"><b>简体中文</b></a>
 </p>
 
 <img alt="grfsh terminal session" src=".github/assets/demo.svg" width="880">
