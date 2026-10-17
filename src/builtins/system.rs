@@ -53,9 +53,9 @@ pub(super) fn umask(args: &[String], out: &mut dyn Write) -> i32 {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
 type Resource = libc::__rlimit_resource_t;
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
 type Resource = libc::c_int;
 
 struct Limit {

@@ -43,7 +43,7 @@ fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
 }
 
 fn local_offset(timestamp: i64) -> i64 {
-    let time = timestamp as libc::time_t;
+    let time = timestamp as _;
     let mut broken_down: libc::tm = unsafe { std::mem::zeroed() };
     let result = unsafe { libc::localtime_r(&time, &mut broken_down) };
     if result.is_null() {
