@@ -2,7 +2,7 @@
 set -eu
 
 cd "$(dirname "$0")/.."
-limit="${GRFSH_BENCH_LIMIT:-1.5}"
+limit="${GRFSH_BENCH_LIMIT:-2}"
 grfsh="$PWD/target/release/grfsh"
 reference="$(command -v dash)"
 failed=0

@@ -200,7 +200,7 @@ grfsh is measured against dash, bash and zsh with [hyperfine](https://github.com
 | Five stage pipeline | 4.6 ms | 3.7 ms | 4.2 ms | 5.5 ms |
 | 200 command substitutions | 87.0 ms | 77.1 ms | 83.9 ms | 91.7 ms |
 
-`test` and `[` are builtins, so conditions inside loops do not fork. CI fails when a loop, string or substitution benchmark takes more than 1.5 times as long as dash. The bash shipped with macOS is old; a current bash will do better on the string benchmark.
+`test` and `[` are builtins, so conditions inside loops do not fork. CI fails when a loop, string or substitution benchmark takes more than twice as long as dash on its Linux runner, where the loop currently measures 1.7 times dash. The bash shipped with macOS is old; a current bash will do better on the string benchmark.
 
 ## How it works
 

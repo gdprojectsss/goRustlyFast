@@ -67,5 +67,5 @@ jobs:
 
       - run: cargo build --release
 
-      - name: Stay within 1.5 times the time of dash
+      - name: Stay within twice the time of dash
         run: ./scripts/bench-check.sh

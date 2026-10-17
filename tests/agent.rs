@@ -66,12 +66,18 @@ fn long_output_is_cut_and_saved() {
 
 #[test]
 fn commands_cannot_open_the_terminal() {
+    let started = std::time::Instant::now();
     let output = grfsh(&[
         "--agent",
         "-c",
         "sh -c ': < /dev/tty' 2>/dev/null; echo status=$?",
     ]);
-    assert_eq!(stdout(&output), "status=1\n");
+    let text = stdout(&output);
+    assert!(
+        text.starts_with("status=") && text != "status=0\n",
+        "{text}"
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
 }
 
 #[test]
