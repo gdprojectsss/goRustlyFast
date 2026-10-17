@@ -1,13 +1,15 @@
 mod arith;
 mod brace;
 pub mod glob;
+mod prompt;
 
+use std::borrow::Cow;
 use std::rc::Rc;
 
 use crate::shell::Shell;
 use crate::syntax::ast::{FallbackKind, ParameterOperation, Subscript, Word, WordPart};
 use crate::sys;
-use crate::variables::Key;
+use crate::variables::{Key, array_assignment, quote_key, quote_value, quote_word};
 
 thread_local! {
     static DEFAULT_SEPARATORS: Rc<str> = Rc::from(DEFAULT_IFS);
@@ -24,8 +26,10 @@ pub fn words(shell: &mut Shell, words: &[Word]) -> Result<Vec<String>, String> {
     let mut out = Vec::new();
     let ifs = separators(shell);
     for word in words {
-        let braced = brace::expand(word);
+        let braced = brace::expand(word)?;
         for expanded in braced.as_deref().unwrap_or(std::slice::from_ref(word)) {
+            let expanded = argument_tildes(expanded);
+            let expanded = expanded.as_ref();
             let mut fields = Fields::new(true);
             fields.glob_options = glob::GlobOptions {
                 dotglob: shell.options.dotglob,
@@ -98,32 +102,40 @@ fn expand_into(shell: &mut Shell, word: &Word, fields: &mut Fields) -> Result<()
                     }
                     None => value,
                 };
-                push_value(fields, value, *quoted, joined);
+                push_value(fields, value, *quoted, &separator(shell, joined));
             }
             WordPart::Length { name, subscript } => {
-                let length = match lookup(shell, name, subscript.as_ref())? {
-                    Expanded::Missing => 0,
-                    Expanded::One(text) => text.chars().count(),
-                    Expanded::Many(values) if subscript.is_some() || name == "@" || name == "*" => {
-                        values.len()
-                    }
-                    Expanded::Many(values) => values.first().map_or(0, |text| text.chars().count()),
-                };
+                let length = length(shell, name, subscript.as_ref())?;
                 fields.quoted(&length.to_string());
             }
-            WordPart::Indices { name, quoted } => {
-                let keys = match shell.arrays.get(name) {
+            WordPart::Indices {
+                name,
+                quoted,
+                joined,
+            } => {
+                let name = shell.resolve_name(name);
+                let keys = match shell.arrays.get(&name) {
                     Some(array) => array.keys(),
-                    None if shell.get_variable(name).is_some() => vec!["0".into()],
+                    None if shell.get_variable(&name).is_some() => vec!["0".into()],
                     None => Vec::new(),
                 };
-                push_value(fields, Expanded::Many(keys), *quoted, false);
+                push_value(
+                    fields,
+                    Expanded::Many(keys),
+                    *quoted,
+                    &separator(shell, *joined),
+                );
             }
             WordPart::Indirect {
                 name,
                 operator,
                 quoted,
             } => {
+                if shell.is_reference(name) && operator.is_none() {
+                    let target = shell.variables.get(name).cloned().unwrap_or_default();
+                    push_value(fields, Expanded::One(target), *quoted, &None);
+                    continue;
+                }
                 let target = shell.get_variable(name).unwrap_or_default();
                 let (target, subscript) = indirect_target(&target)?;
                 let joined = target == "*" || matches!(subscript, Some(Subscript::Joined));
@@ -132,7 +144,7 @@ fn expand_into(shell: &mut Shell, word: &Word, fields: &mut Fields) -> Result<()
                     Some(operator) => apply(shell, &target, subscript.as_ref(), value, operator)?,
                     None => value,
                 };
-                push_value(fields, value, *quoted, joined);
+                push_value(fields, value, *quoted, &separator(shell, joined));
             }
             WordPart::Names {
                 prefix,
@@ -149,7 +161,12 @@ fn expand_into(shell: &mut Shell, word: &Word, fields: &mut Fields) -> Result<()
                     .collect();
                 names.sort();
                 names.dedup();
-                push_value(fields, Expanded::Many(names), *quoted, *joined);
+                push_value(
+                    fields,
+                    Expanded::Many(names),
+                    *quoted,
+                    &separator(shell, *joined),
+                );
             }
             WordPart::CommandSubstitution { source, quoted } => {
                 let out = shell.capture(source);
@@ -173,7 +190,137 @@ fn expand_into(shell: &mut Shell, word: &Word, fields: &mut Fields) -> Result<()
 }
 
 pub fn brace_expand(word: &Word) -> Vec<Word> {
-    brace::expand(word).unwrap_or_else(|| vec![word.clone()])
+    brace::expand(word)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| vec![word.clone()])
+}
+
+fn separator(shell: &Shell, joined: bool) -> Option<String> {
+    joined.then(|| shell.join_separator())
+}
+
+fn byte_locale(shell: &Shell) -> bool {
+    let locale = ["LC_ALL", "LC_CTYPE", "LANG"]
+        .iter()
+        .find_map(|name| shell.get_variable(name).filter(|value| !value.is_empty()));
+    matches!(locale.as_deref(), Some("C" | "POSIX"))
+}
+
+fn text_length(shell: &Shell, text: &str) -> usize {
+    if byte_locale(shell) {
+        text.len()
+    } else {
+        text.chars().count()
+    }
+}
+
+fn length(shell: &mut Shell, name: &str, subscript: Option<&Subscript>) -> Result<usize, String> {
+    let all = matches!(subscript, Some(Subscript::All | Subscript::Joined));
+    if subscript.is_none() && (name == "@" || name == "*") {
+        return Ok(shell.positional.len());
+    }
+    if all {
+        if let Some(values) = shell.special_array(name) {
+            return Ok(values.len());
+        }
+        let name = shell.resolve_name(name);
+        return Ok(match shell.arrays.get(&name) {
+            Some(array) => array.len(),
+            None => usize::from(shell.get_variable(&name).is_some()),
+        });
+    }
+    Ok(match lookup(shell, name, subscript)? {
+        Expanded::Missing if shell.options.nounset => {
+            return Err(format!("{name}: unbound variable"));
+        }
+        Expanded::Missing => 0,
+        Expanded::One(text) => text_length(shell, &text),
+        Expanded::Many(values) => values.first().map_or(0, |text| text_length(shell, text)),
+    })
+}
+
+pub fn assignment_tildes(word: &Word) -> Cow<'_, Word> {
+    split_tildes(word, 0)
+}
+
+fn argument_tildes(word: &Word) -> Cow<'_, Word> {
+    let Some(WordPart::Literal(first)) = word.parts.first() else {
+        return Cow::Borrowed(word);
+    };
+    if !word
+        .parts
+        .iter()
+        .any(|part| matches!(part, WordPart::Literal(text) if text.contains('~')))
+    {
+        return Cow::Borrowed(word);
+    }
+    let name_end = first
+        .find(|character: char| !(character == '_' || character.is_ascii_alphanumeric()))
+        .unwrap_or(first.len());
+    if !crate::syntax::parser::is_name(&first[..name_end]) {
+        return Cow::Borrowed(word);
+    }
+    let rest = &first[name_end..];
+    let rest = match rest.strip_prefix('[') {
+        Some(inside) => match inside.find(']') {
+            Some(close) => &inside[close + 1..],
+            None => return Cow::Borrowed(word),
+        },
+        None => rest,
+    };
+    let rest = rest.strip_prefix('+').unwrap_or(rest);
+    if !rest.starts_with('=') {
+        return Cow::Borrowed(word);
+    }
+    split_tildes(word, first.len() - rest.len() + 1)
+}
+
+fn is_tilde_user(user: &str) -> bool {
+    matches!(user, "" | "+" | "-")
+        || user
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "._-".contains(character))
+}
+
+fn split_tildes(word: &Word, value_start: usize) -> Cow<'_, Word> {
+    let mut parts = Vec::with_capacity(word.parts.len());
+    let mut changed = false;
+    for (part_index, part) in word.parts.iter().enumerate() {
+        let WordPart::Literal(text) = part else {
+            parts.push(part.clone());
+            continue;
+        };
+        let start = if part_index == 0 { value_start } else { 0 };
+        let mut copied = 0;
+        for (index, character) in text.char_indices() {
+            let at_boundary = (part_index == 0 && index == value_start)
+                || (index > start && text[..index].ends_with(':'));
+            if character != '~' || index < copied || !at_boundary {
+                continue;
+            }
+            let rest = &text[index + 1..];
+            let end = rest.find(['/', ':']).unwrap_or(rest.len());
+            let user = &rest[..end];
+            if !is_tilde_user(user) {
+                continue;
+            }
+            if index > copied {
+                parts.push(WordPart::Literal(text[copied..index].to_string()));
+            }
+            parts.push(WordPart::Tilde(user.to_string()));
+            copied = index + 1 + end;
+            changed = true;
+        }
+        if copied < text.len() {
+            parts.push(WordPart::Literal(text[copied..].to_string()));
+        }
+    }
+    if changed {
+        Cow::Owned(Word { parts })
+    } else {
+        Cow::Borrowed(word)
+    }
 }
 
 pub fn evaluate_arithmetic(shell: &mut Shell, text: &str) -> Result<i64, String> {
@@ -212,22 +359,39 @@ impl Expanded {
     }
 }
 
-fn push_value(fields: &mut Fields, value: Expanded, quoted: bool, joined: bool) {
+fn push_value(fields: &mut Fields, value: Expanded, quoted: bool, separator: &Option<String>) {
     match value {
-        Expanded::Missing if quoted && !joined => fields.quoted(""),
+        Expanded::Missing if quoted && separator.is_none() => fields.quoted(""),
         Expanded::Missing => {}
         Expanded::One(text) if quoted => fields.quoted(&text),
         Expanded::One(text) => fields.split(&text),
-        Expanded::Many(values) if quoted && joined => fields.quoted(&values.join(" ")),
-        Expanded::Many(values) if quoted => {
+        Expanded::Many(values) if quoted || !fields.split => {
+            let joined = match separator {
+                Some(separator) => Some(values.join(separator)),
+                None if !fields.split => Some(values.join(" ")),
+                None => None,
+            };
+            match joined {
+                Some(text) if quoted => fields.quoted(&text),
+                Some(text) => fields.split(&text),
+                None => {
+                    for (index, value) in values.iter().enumerate() {
+                        if index > 0 {
+                            fields.break_field();
+                        }
+                        fields.quoted(value);
+                    }
+                }
+            }
+        }
+        Expanded::Many(values) => {
             for (index, value) in values.iter().enumerate() {
                 if index > 0 {
                     fields.break_field();
                 }
-                fields.quoted(value);
+                fields.split(value);
             }
         }
-        Expanded::Many(values) => fields.split(&values.join(" ")),
     }
 }
 
@@ -237,6 +401,21 @@ fn lookup(
     subscript: Option<&Subscript>,
 ) -> Result<Expanded, String> {
     let positional = name == "@" || name == "*";
+    let resolved;
+    let name = if shell.is_reference(name) {
+        resolved = shell.resolve_name(name);
+        match (crate::shell::split_subscript(&resolved), subscript) {
+            (Some(_), None) => {
+                return Ok(shell
+                    .get_variable(name)
+                    .map_or(Expanded::Missing, Expanded::One));
+            }
+            (Some((base, _)), Some(_)) => base,
+            (None, _) => resolved.as_str(),
+        }
+    } else {
+        name
+    };
     match subscript {
         None if positional => Ok(Expanded::Many(shell.positional.clone())),
         None => Ok(shell
@@ -299,14 +478,17 @@ fn indirect_target(target: &str) -> Result<(String, Option<Subscript>), String> 
 
 fn transform(shell: &Shell, name: &str, letter: char, text: &str) -> String {
     match letter {
-        'Q' => {
-            if text.is_empty() {
-                "''".into()
+        'Q' | 'K' | 'k' => quote_word(text),
+        'E' => crate::syntax::lexer::ansi_c(text),
+        'P' => prompt::decode(shell, text),
+        'A' => {
+            let letters = crate::builtins::attribute_letters(shell, name);
+            if letters.is_empty() {
+                format!("{name}={}", quote_word(text))
             } else {
-                format!("'{}'", text.replace('\'', "'\\''"))
+                format!("declare -{letters} {name}={}", quote_word(text))
             }
         }
-        'E' => crate::syntax::lexer::ansi_c(text),
         'U' => text.to_uppercase(),
         'L' => text.to_lowercase(),
         'u' => {
@@ -350,6 +532,16 @@ fn apply(
         ParameterOperation::Fallback { kind, colon, word } => {
             let unset = match &value {
                 Expanded::Missing => true,
+                Expanded::Many(values) if values.is_empty() => true,
+                Expanded::Many(values) if *colon => {
+                    let joined = matches!(subscript, Some(Subscript::Joined)) || name == "*";
+                    let separator = if joined {
+                        shell.join_separator()
+                    } else {
+                        " ".into()
+                    };
+                    values.join(&separator).is_empty()
+                }
                 other => *colon && other.is_empty_or_missing(),
             };
             match kind {
@@ -358,6 +550,9 @@ fn apply(
                     let assigned = single(shell, word)?;
                     assign_fallback(shell, name, subscript, &assigned)?;
                     Ok(Expanded::One(assigned))
+                }
+                FallbackKind::Alternative if unset && matches!(value, Expanded::Many(_)) => {
+                    Ok(Expanded::Many(Vec::new()))
                 }
                 FallbackKind::Alternative if unset => Ok(Expanded::Missing),
                 FallbackKind::Alternative => Ok(Expanded::One(single(shell, word)?)),
@@ -391,25 +586,37 @@ fn apply(
             let replacement = single(shell, replacement)?;
             Ok(value.map(|text| glob::replace(text, &pattern, &replacement, *all, *anchor)))
         }
-        ParameterOperation::ChangeCase { upper, all } => Ok(value.map(|text| {
-            let convert = |text: &str| {
-                if *upper {
-                    text.to_uppercase()
-                } else {
-                    text.to_lowercase()
-                }
+        ParameterOperation::ChangeCase {
+            upper,
+            toggle,
+            all,
+            pattern,
+        } => {
+            let pattern = if pattern.parts.is_empty() {
+                None
+            } else {
+                Some(self::pattern(shell, pattern)?)
             };
-            if *all {
-                return convert(text);
-            }
-            let mut chars = text.chars();
-            match chars.next() {
-                Some(first) => convert(&first.to_string()) + chars.as_str(),
-                None => String::new(),
-            }
-        })),
+            let change = CaseChange {
+                upper: *upper,
+                toggle: *toggle,
+                all: *all,
+                pattern,
+            };
+            Ok(value.map(|text| change.apply(text)))
+        }
         ParameterOperation::Transform(letter) => {
-            Ok(value.map(|text| transform(shell, name, *letter, text)))
+            if value == Expanded::Missing {
+                return Ok(match letter {
+                    'A' | 'a' => described_missing(shell, name, *letter),
+                    _ => Expanded::Missing,
+                });
+            }
+            if let Some(expanded) = transform_array(shell, name, subscript, *letter) {
+                return Ok(expanded);
+            }
+            let name = shell.resolve_name(name);
+            Ok(value.map(|text| transform(shell, &name, *letter, text)))
         }
         ParameterOperation::Substring { offset, length } => {
             let offset = arithmetic(shell, offset)?;
@@ -417,6 +624,7 @@ fn apply(
                 Some(word) => Some(arithmetic(shell, word)?),
                 None => None,
             };
+            let bytes = byte_locale(shell);
             Ok(match value {
                 Expanded::Many(values) if (name == "@" || name == "*") && subscript.is_none() => {
                     let with_name: Vec<String> =
@@ -424,12 +632,120 @@ fn apply(
                     Expanded::Many(slice(&with_name, offset, length))
                 }
                 Expanded::Many(values) => Expanded::Many(slice(&values, offset, length)),
+                other if bytes => other.map(|text| {
+                    String::from_utf8_lossy(&slice(text.as_bytes(), offset, length)).into_owned()
+                }),
                 other => other.map(|text| {
                     let chars: Vec<char> = text.chars().collect();
                     slice(&chars, offset, length).into_iter().collect()
                 }),
             })
         }
+    }
+}
+
+struct CaseChange {
+    upper: bool,
+    toggle: bool,
+    all: bool,
+    pattern: Option<String>,
+}
+
+impl CaseChange {
+    fn convert(&self, character: char) -> String {
+        let upper = if self.toggle {
+            character.is_lowercase()
+        } else {
+            self.upper
+        };
+        if upper {
+            character.to_uppercase().collect()
+        } else {
+            character.to_lowercase().collect()
+        }
+    }
+
+    fn selected(&self, character: char) -> bool {
+        self.pattern.as_ref().is_none_or(|pattern| {
+            let mut buffer = [0u8; 4];
+            glob::matches_pattern(pattern, character.encode_utf8(&mut buffer))
+        })
+    }
+
+    fn apply(&self, text: &str) -> String {
+        let mut out = String::with_capacity(text.len());
+        for (index, character) in text.chars().enumerate() {
+            if (self.all || index == 0) && self.selected(character) {
+                out.push_str(&self.convert(character));
+            } else {
+                out.push(character);
+            }
+        }
+        out
+    }
+}
+
+fn described_missing(shell: &Shell, name: &str, letter: char) -> Expanded {
+    let name = shell.resolve_name(name);
+    let exists = shell.arrays.contains_key(&name) || shell.attributes.contains_key(&name);
+    if !exists {
+        return Expanded::Missing;
+    }
+    let letters = crate::builtins::attribute_letters(shell, &name);
+    match letter {
+        'a' => Expanded::One(letters),
+        _ if letters.is_empty() => Expanded::Missing,
+        _ => Expanded::One(format!("declare -{letters} {name}")),
+    }
+}
+
+fn transform_array(
+    shell: &Shell,
+    name: &str,
+    subscript: Option<&Subscript>,
+    letter: char,
+) -> Option<Expanded> {
+    if !matches!(subscript, Some(Subscript::All | Subscript::Joined)) {
+        return None;
+    }
+    let name = shell.resolve_name(name);
+    let array = shell.arrays.get(&name)?;
+    match letter {
+        'A' => {
+            let letters = crate::builtins::attribute_letters(shell, &name);
+            Some(Expanded::One(format!(
+                "declare -{letters} {name}={}",
+                array_assignment(array)
+            )))
+        }
+        'K' => {
+            let pairs: Vec<String> = array
+                .entries()
+                .into_iter()
+                .map(|(key, value)| {
+                    let key = if array.is_associative() {
+                        quote_key(&key)
+                    } else {
+                        key
+                    };
+                    format!("{key} {}", quote_value(&value))
+                })
+                .collect();
+            let trailing = if array.is_associative() && !pairs.is_empty() {
+                " "
+            } else {
+                ""
+            };
+            Some(Expanded::One(pairs.join(" ") + trailing))
+        }
+        'k' => Some(Expanded::Many(
+            array
+                .entries()
+                .into_iter()
+                .flat_map(|(key, value)| [key, value])
+                .collect(),
+        )),
+        _ => None,
     }
 }
 
@@ -693,5 +1009,47 @@ mod tests {
         let mut shell = Shell::new();
         shell.variables.insert("HOME".into(), "/home/me".into());
         assert_eq!(expand(&mut shell, "~/x '~'"), ["/home/me/x", "~"]);
+    }
+
+    #[test]
+    fn tildes_after_colons_in_assignment_words() {
+        let mut shell = Shell::new();
+        shell.variables.insert("HOME".into(), "/home/me".into());
+        assert_eq!(
+            expand(&mut shell, "a=~/x:~/y b:~/z"),
+            ["a=/home/me/x:/home/me/y", "b:~/z"]
+        );
+    }
+
+    #[test]
+    fn star_and_at_in_every_context() {
+        let mut shell = Shell::new();
+        shell.positional = vec!["a b".into(), "c".into()];
+        shell.set_variable("IFS", ",");
+        assert_eq!(expand(&mut shell, "\"$*\""), ["a b,c"]);
+        assert_eq!(expand(&mut shell, "$*"), ["a b", "c"]);
+        let word = lexer::lex("\"$@\"").unwrap().tokens.remove(0);
+        let Token::Word(word) = word.token else {
+            panic!()
+        };
+        assert_eq!(single(&mut shell, &word).unwrap(), "a b c");
+    }
+
+    #[test]
+    fn case_modification_with_patterns() {
+        let mut shell = Shell::new();
+        shell.set_variable("word", "hello");
+        assert_eq!(expand(&mut shell, "${word^^[lo]}"), ["heLLO"]);
+        assert_eq!(expand(&mut shell, "${word~}"), ["Hello"]);
+    }
+
+    #[test]
+    fn length_counts_bytes_in_the_c_locale() {
+        let mut shell = Shell::new();
+        shell.set_variable("text", "\u{e9}");
+        shell.set_variable("LC_ALL", "en_US.UTF-8");
+        assert_eq!(expand(&mut shell, "${#text}"), ["1"]);
+        shell.set_variable("LC_ALL", "C");
+        assert_eq!(expand(&mut shell, "${#text}"), ["2"]);
     }
 }

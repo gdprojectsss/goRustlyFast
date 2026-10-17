@@ -70,7 +70,7 @@ fn functions(list: &List, names: &mut BTreeSet<String>) {
         for pipeline in pipelines {
             for command in &pipeline.commands {
                 nested(command, &mut |inner| functions(inner, names));
-                if let CommandKind::FunctionDefinition { name, body } = &command.kind {
+                if let CommandKind::FunctionDefinition { name, body, .. } = &command.kind {
                     names.insert(name.clone());
                     nested(body, &mut |inner| functions(inner, names));
                 }

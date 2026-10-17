@@ -18,6 +18,7 @@ pub enum WordPart {
     Indices {
         name: String,
         quoted: bool,
+        joined: bool,
     },
     Indirect {
         name: String,
@@ -88,7 +89,9 @@ pub enum ParameterOperation {
     },
     ChangeCase {
         upper: bool,
+        toggle: bool,
         all: bool,
+        pattern: Word,
     },
     Transform(char),
     Substring {
@@ -187,6 +190,7 @@ pub enum CommandKind {
     FunctionDefinition {
         name: String,
         body: Rc<Command>,
+        source: Rc<str>,
     },
 }
 

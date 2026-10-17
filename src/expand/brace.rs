@@ -1,6 +1,6 @@
 use crate::syntax::ast::{Word, WordPart};
 
-const MAX_RESULTS: usize = 100_000;
+const MAX_RESULTS: usize = 16_000_000;
 
 #[derive(Debug, Clone, PartialEq)]
 enum Item {
@@ -8,17 +8,21 @@ enum Item {
     Part(WordPart),
 }
 
-pub fn expand(word: &Word) -> Option<Vec<Word>> {
+pub fn expand(word: &Word) -> Result<Option<Vec<Word>>, String> {
     let has_brace = word
         .parts
         .iter()
         .any(|part| matches!(part, WordPart::Literal(text) if text.contains('{')));
     if !has_brace {
-        return None;
+        return Ok(None);
     }
     let mut results = Vec::new();
-    expand_items(to_items(word), &mut results);
-    Some(results.into_iter().map(from_items).collect())
+    expand_items(to_items(word), &mut results)?;
+    Ok(Some(results.into_iter().map(from_items).collect()))
+}
+
+fn too_many(count: usize) -> String {
+    format!("brace expansion: failed to allocate memory for {count} elements")
 }
 
 fn to_items(word: &Word) -> Vec<Item> {
@@ -77,7 +81,7 @@ fn top_level_commas(content: &[Item]) -> Vec<usize> {
     commas
 }
 
-fn alternatives(content: &[Item]) -> Option<Vec<Vec<Item>>> {
+fn alternatives(content: &[Item]) -> Result<Option<Vec<Vec<Item>>>, String> {
     let commas = top_level_commas(content);
     if !commas.is_empty() {
         let mut pieces = Vec::with_capacity(commas.len() + 1);
@@ -87,7 +91,7 @@ fn alternatives(content: &[Item]) -> Option<Vec<Vec<Item>>> {
             start = comma + 1;
         }
         pieces.push(content[start..].to_vec());
-        return Some(pieces);
+        return Ok(Some(pieces));
     }
     let text: Option<String> = content
         .iter()
@@ -96,20 +100,26 @@ fn alternatives(content: &[Item]) -> Option<Vec<Vec<Item>>> {
             Item::Part(_) => None,
         })
         .collect();
-    sequence(&text?).map(|values| {
+    let Some(text) = text else {
+        return Ok(None);
+    };
+    Ok(sequence(&text)?.map(|values| {
         values
             .into_iter()
             .map(|value| value.chars().map(Item::Char).collect())
             .collect()
-    })
+    }))
 }
 
-fn sequence(text: &str) -> Option<Vec<String>> {
+fn sequence(text: &str) -> Result<Option<Vec<String>>, String> {
     let pieces: Vec<&str> = text.split("..").collect();
     let (start, end, step) = match pieces.as_slice() {
         [start, end] => (*start, *end, None),
-        [start, end, step] => (*start, *end, Some(step.parse::<i64>().ok()?)),
-        _ => return None,
+        [start, end, step] => match step.parse::<i64>() {
+            Ok(step) => (*start, *end, Some(step)),
+            Err(_) => return Ok(None),
+        },
+        _ => return Ok(None),
     };
     let step = step.map(i64::abs).filter(|step| *step != 0).unwrap_or(1);
 
@@ -123,17 +133,17 @@ fn sequence(text: &str) -> Option<Vec<String>> {
         } else {
             0
         };
-        let count = (first.abs_diff(last) / step as u64) as usize + 1;
-        if count > MAX_RESULTS {
-            return None;
+        let count = (first.abs_diff(last) / step.unsigned_abs()).saturating_add(1);
+        if count > MAX_RESULTS as u64 {
+            return Err(too_many(count as usize));
         }
         let direction = if last >= first { step } else { -step };
-        return Some(
+        return Ok(Some(
             (0..count as i64)
                 .map(|offset| first + offset * direction)
                 .map(|value| format!("{value:0width$}"))
                 .collect(),
-        );
+        ));
     }
 
     let mut start_chars = start.chars();
@@ -144,10 +154,10 @@ fn sequence(text: &str) -> Option<Vec<String>> {
         end_chars.next(),
         end_chars.next(),
     ) else {
-        return None;
+        return Ok(None);
     };
     if !first.is_ascii_alphabetic() || !last.is_ascii_alphabetic() {
-        return None;
+        return Ok(None);
     }
     let (low, high) = (first.min(last) as u8, first.max(last) as u8);
     let mut letters: Vec<String> = (low..=high)
@@ -157,12 +167,12 @@ fn sequence(text: &str) -> Option<Vec<String>> {
     if first > last {
         letters.reverse();
     }
-    Some(letters)
+    Ok(Some(letters))
 }
 
-fn expand_items(items: Vec<Item>, results: &mut Vec<Vec<Item>>) {
+fn expand_items(items: Vec<Item>, results: &mut Vec<Vec<Item>>) -> Result<(), String> {
     if results.len() >= MAX_RESULTS {
-        return;
+        return Err(too_many(results.len() + 1));
     }
     let mut search_from = 0;
     while let Some(open) = items[search_from..]
@@ -173,18 +183,19 @@ fn expand_items(items: Vec<Item>, results: &mut Vec<Vec<Item>>) {
         let Some(close) = matching_close(&items, open) else {
             break;
         };
-        if let Some(choices) = alternatives(&items[open + 1..close]) {
+        if let Some(choices) = alternatives(&items[open + 1..close])? {
             for choice in choices {
                 let mut expanded = items[..open].to_vec();
                 expanded.extend(choice);
                 expanded.extend_from_slice(&items[close + 1..]);
-                expand_items(expanded, results);
+                expand_items(expanded, results)?;
             }
-            return;
+            return Ok(());
         }
         search_from = open + 1;
     }
     results.push(items);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -203,6 +214,7 @@ mod tests {
             })
             .unwrap();
         expand(&word)
+            .unwrap()
             .unwrap_or_else(|| vec![word.clone()])
             .into_iter()
             .map(|word| {
@@ -244,6 +256,21 @@ mod tests {
         assert_eq!(expand_text("'{a,b}'"), ["{a,b}"]);
         assert_eq!(expand_text("{a,b"), ["{a,b"]);
         assert_eq!(expand_text("{1..x}"), ["{1..x}"]);
+    }
+
+    #[test]
+    fn large_sequences_expand_and_huge_ones_fail() {
+        assert_eq!(expand_text("{1..200000}").len(), 200_000);
+        let word = lexer::lex("{1..99999999999}")
+            .unwrap()
+            .tokens
+            .into_iter()
+            .find_map(|spanned| match spanned.token {
+                Token::Word(word) => Some(word),
+                _ => None,
+            })
+            .unwrap();
+        assert!(expand(&word).is_err());
     }
 
     #[test]

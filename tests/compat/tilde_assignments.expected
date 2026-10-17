@@ -1,0 +1,11 @@
+colon list ok
+middle and end ok
+second equals ok
+declare ok
+export ok
+assignment-like argument ok
+plain argument ok
+quoted ok
+user tilde expanded
+unknown user ok
+--- exit 0

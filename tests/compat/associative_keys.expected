@@ -1,0 +1,18 @@
+spaced
+single single
+spaced
+key with space single q plain
+1 2 3
+c d e a b
+declare -A m=([c]="q\"z" [b]="2" [a]="x y" )
+c=q"z
+b=2
+a=x y
+c b a
+c b a
+2100 k1698 k1699 k1696 k1697 k1694 k1695
+declare -A odd=(["*"]="7" [a=b]="9" ["x\"y"]="2" [$'n\nl']="6" ["q]r"]="5" ["\$z"]="3" )
+"*" "7" a=b "9" "x\"y" "2" $'n\nl' "6" "q]r" "5" "\$z" "3" 
+not reached
+status after empty key: 0
+--- exit 0

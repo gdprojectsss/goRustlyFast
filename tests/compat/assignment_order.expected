@@ -1,0 +1,12 @@
+b=1
+prefix b=1
+a after prefix: unset
+y=7
+x=5
+in function b=3 c=3
+after function: unset unset
+p=2 q=2
+2 [a b] [c d]
+n=12 m=12
+count=2
+--- exit 0

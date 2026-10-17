@@ -7,7 +7,9 @@ use crate::directories::DirectoryHistory;
 use crate::jobs::JobTable;
 use crate::syntax::ast::Command;
 use crate::sys;
-use crate::variables::{Array, Attributes, Evaluated, Key, Saved};
+use crate::variables::{Array, Attributes, Evaluated, Frame, Key, Saved};
+
+const MAX_REFERENCE_DEPTH: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Flow {
@@ -17,6 +19,7 @@ pub enum Flow {
     Return,
     Exit,
     Interrupted,
+    Abort,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -30,15 +33,21 @@ pub struct ShellOptions {
     pub nullglob: bool,
     pub dotglob: bool,
     pub nocaseglob: bool,
+    pub allexport: bool,
 }
 
 impl ShellOptions {
     pub fn flags(&self) -> String {
-        [(self.errexit, 'e'), (self.nounset, 'u'), (self.xtrace, 'x')]
-            .iter()
-            .filter(|(enabled, _)| *enabled)
-            .map(|(_, flag)| *flag)
-            .collect()
+        [
+            (self.allexport, 'a'),
+            (self.errexit, 'e'),
+            (self.nounset, 'u'),
+            (self.xtrace, 'x'),
+        ]
+        .iter()
+        .filter(|(enabled, _)| *enabled)
+        .map(|(_, flag)| *flag)
+        .collect()
     }
 }
 
@@ -67,6 +76,9 @@ pub struct Shell {
     pub running_hook: bool,
     pub source_stack: Vec<String>,
     pub function_stack: Vec<String>,
+    pub call_stack: Vec<Frame>,
+    pub function_files: HashMap<String, String>,
+    pub function_sources: HashMap<String, Rc<str>>,
     pub abbreviations: std::collections::BTreeMap<String, String>,
     pub key_bindings: Vec<(String, KeyBinding)>,
     pub bindings_version: u64,
@@ -120,6 +132,9 @@ impl Shell {
             running_hook: false,
             source_stack: Vec::new(),
             function_stack: Vec::new(),
+            call_stack: Vec::new(),
+            function_files: HashMap::new(),
+            function_sources: HashMap::new(),
             abbreviations: std::collections::BTreeMap::new(),
             key_bindings: Vec::new(),
             bindings_version: 0,
@@ -160,7 +175,15 @@ impl Shell {
             ),
         };
         shell.init_working_directory();
+        shell.init_variables();
         shell
+    }
+
+    fn init_variables(&mut self) {
+        self.variables
+            .insert("IFS".into(), crate::expand::DEFAULT_IFS.into());
+        unsafe { std::env::remove_var("IFS") };
+        self.import_functions();
     }
 
     fn init_working_directory(&mut self) {
@@ -184,7 +207,8 @@ impl Shell {
             "!" => return self.last_background_pid.map(|pid| pid.to_string()),
             "#" => return Some(self.positional.len().to_string()),
             "0" => return Some(self.arg0.clone()),
-            "@" | "*" => return Some(self.positional.join(" ")),
+            "@" => return Some(self.positional.join(" ")),
+            "*" => return Some(self.positional.join(&self.join_separator())),
             "-" => {
                 let interactive = if self.interactive { "i" } else { "" };
                 return Some(format!("{}{interactive}", self.options.flags()));
@@ -198,16 +222,150 @@ impl Shell {
         if let Ok(index) = name.parse::<usize>() {
             return self.positional.get(index.wrapping_sub(1)).cloned();
         }
+        if self.reference_of(name).is_some() {
+            let target = self.resolve_name(name);
+            return self.get_reference(&target);
+        }
         if let Some(array) = self.arrays.get(name) {
             return array.first().cloned();
         }
         if let Some(values) = self.special_array(name) {
             return values.into_iter().next();
         }
-        self.variables
+        if let Some(value) = self.variables.get(name) {
+            return Some(value.clone());
+        }
+        if self
+            .attributes
             .get(name)
-            .cloned()
-            .or_else(|| std::env::var(name).ok())
+            .is_some_and(|attributes| attributes.invisible)
+        {
+            return None;
+        }
+        std::env::var(name).ok()
+    }
+
+    pub fn variable_is_set(&self, text: &str) -> bool {
+        let target = self.resolve_name(text);
+        let Some((name, key)) = split_subscript(&target) else {
+            return self.get_variable(&target).is_some();
+        };
+        let name = self.resolve_name(name);
+        if key == "@" || key == "*" {
+            return match self.arrays.get(&name) {
+                Some(array) => !array.is_empty(),
+                None => self.get_variable(&name).is_some(),
+            };
+        }
+        let key = if self.is_associative(&name) {
+            Some(Key::Name(key.to_string()))
+        } else {
+            key.trim()
+                .parse()
+                .ok()
+                .or_else(|| self.get_variable(key.trim())?.trim().parse().ok())
+                .map(Key::Index)
+        };
+        let Some(key) = key else {
+            return false;
+        };
+        match self.arrays.get(&name) {
+            Some(array) => array.get(&key).is_some(),
+            None => key == Key::Index(0) && self.get_variable(&name).is_some(),
+        }
+    }
+
+    fn mark_assigned(&mut self, name: &str) {
+        if let Some(attributes) = self.attributes.get_mut(name) {
+            attributes.invisible = false;
+        }
+    }
+
+    pub fn function_variable(name: &str) -> String {
+        format!("{FUNCTION_PREFIX}{name}{FUNCTION_SUFFIX}")
+    }
+
+    pub fn export_function(&mut self, name: &str) -> bool {
+        let Some(source) = self.function_sources.get(name) else {
+            return false;
+        };
+        let value = format!("() {source}");
+        unsafe { std::env::set_var(Self::function_variable(name), value) };
+        true
+    }
+
+    pub fn unexport_function(&mut self, name: &str) {
+        unsafe { std::env::remove_var(Self::function_variable(name)) };
+    }
+
+    pub fn is_function_exported(&self, name: &str) -> bool {
+        std::env::var_os(Self::function_variable(name)).is_some()
+    }
+
+    pub fn join_separator(&self) -> String {
+        match self.get_variable("IFS") {
+            Some(ifs) => ifs.chars().next().map(String::from).unwrap_or_default(),
+            None => " ".into(),
+        }
+    }
+
+    fn reference_of(&self, name: &str) -> Option<&String> {
+        if self.is_reference(name) {
+            self.variables.get(name).filter(|target| !target.is_empty())
+        } else {
+            None
+        }
+    }
+
+    pub fn is_reference(&self, name: &str) -> bool {
+        self.attributes
+            .get(name)
+            .is_some_and(|attributes| attributes.nameref)
+    }
+
+    pub fn resolve_name(&self, name: &str) -> String {
+        let mut current = name;
+        for _ in 0..MAX_REFERENCE_DEPTH {
+            match self.reference_of(current) {
+                Some(target) => current = target,
+                None => break,
+            }
+        }
+        current.to_string()
+    }
+
+    fn reference_key(&self, name: &str, key: &str) -> Option<Key> {
+        if self.is_associative(name) {
+            Some(Key::Name(key.to_string()))
+        } else {
+            key.trim().parse().ok().map(Key::Index)
+        }
+    }
+
+    fn get_reference(&self, target: &str) -> Option<String> {
+        let Some((name, key)) = split_subscript(target) else {
+            return self.get_variable(target);
+        };
+        if key == "@" || key == "*" {
+            return self.arrays.get(name).map(|array| array.values().join(" "));
+        }
+        let key = self.reference_key(name, key)?;
+        match self.arrays.get(name) {
+            Some(array) => array.get(&key).cloned(),
+            None if key == Key::Index(0) => self.get_variable(name),
+            None => None,
+        }
+    }
+
+    pub fn is_exported(&self, name: &str) -> bool {
+        self.attributes
+            .get(name)
+            .is_some_and(|attributes| attributes.exported)
+            || (!self.variables.contains_key(name) && std::env::var_os(name).is_some())
+    }
+
+    fn should_export(&self, name: &str) -> bool {
+        self.options.allexport || self.is_exported(name)
     }
 
     pub fn snapshot(&self, name: &str) -> Saved {
@@ -215,6 +373,7 @@ impl Shell {
             scalar: self.variables.get(name).cloned(),
             array: self.arrays.get(name).cloned(),
             attributes: self.attributes.get(name).copied(),
+            environment: std::env::var(name).ok(),
         }
     }
 
@@ -227,15 +386,64 @@ impl Shell {
             Some(array) => self.arrays.insert(name.clone(), array),
             None => self.arrays.remove(&name),
         };
+        match saved.environment {
+            Some(value) => unsafe { std::env::set_var(&name, value) },
+            None => unsafe { std::env::remove_var(&name) },
+        }
         match saved.attributes {
             Some(attributes) => self.attributes.insert(name, attributes),
             None => self.attributes.remove(&name),
         };
     }
 
+    fn frames(&self) -> Vec<Frame> {
+        let mut frames: Vec<Frame> = self.call_stack.iter().rev().cloned().collect();
+        let sourced = self
+            .call_stack
+            .iter()
+            .filter(|frame| !frame.function)
+            .count();
+        if self.source_stack.len() > sourced {
+            frames.push(Frame {
+                name: "main".into(),
+                source: self.source_stack[0].clone(),
+                line: 0,
+                function: false,
+            });
+        }
+        frames
+    }
+
+    pub fn push_frame(&mut self, name: &str, source: String, function: bool) {
+        self.call_stack.push(Frame {
+            name: name.to_string(),
+            source,
+            line: self.current_line,
+            function,
+        });
+    }
+
+    pub fn current_source(&self) -> String {
+        self.source_stack
+            .last()
+            .cloned()
+            .unwrap_or_else(|| self.arg0.clone())
+    }
+
     pub fn special_array(&self, name: &str) -> Option<Vec<String>> {
         match name {
-            "BASH_SOURCE" => Some(self.source_stack.iter().rev().cloned().collect()),
+            "BASH_SOURCE" => Some(
+                self.frames()
+                    .into_iter()
+                    .map(|frame| frame.source)
+                    .collect(),
+            ),
+            "BASH_LINENO" => Some(
+                self.frames()
+                    .iter()
+                    .map(|frame| frame.line.to_string())
+                    .collect(),
+            ),
             "PIPESTATUS" => Some(
                 self.last_pipe_statuses
                     .iter()
@@ -243,11 +451,10 @@ impl Shell {
                     .collect(),
             ),
             "FUNCNAME" => {
-                let mut names: Vec<String> = self.function_stack.iter().rev().cloned().collect();
-                if !names.is_empty() && self.source_stack.is_empty() {
-                    names.push("main".into());
+                if !self.call_stack.iter().any(|frame| frame.function) {
+                    return Some(Vec::new());
                 }
-                Some(names)
+                Some(self.frames().into_iter().map(|frame| frame.name).collect())
             }
             _ => None,
         }
@@ -290,14 +497,33 @@ impl Shell {
     }
 
     pub fn set_array(&mut self, name: &str, array: Array) -> Result<(), String> {
+        let resolved;
+        let name = if self.is_reference(name) {
+            resolved = self.resolve_name(name);
+            split_subscript(&resolved).map_or(resolved.as_str(), |(base, _)| base)
+        } else {
+            name
+        };
         self.check_writable(name)?;
         self.variables.remove(name);
+        self.mark_assigned(name);
         self.arrays.insert(name.to_string(), array);
         Ok(())
     }
 
     pub fn set_element(&mut self, name: &str, key: Key, value: &str) -> Result<(), String> {
+        let resolved;
+        let name = if self.is_reference(name) {
+            resolved = self.resolve_name(name);
+            split_subscript(&resolved).map_or(resolved.as_str(), |(base, _)| base)
+        } else {
+            name
+        };
         self.check_writable(name)?;
+        if key == Key::Name(String::new()) && self.is_associative(name) {
+            return Err(format!("{name}[]: bad array subscript"));
+        }
+        self.mark_assigned(name);
         let value = self.transform_value(name, value)?;
         if !self.arrays.contains_key(name) {
             let existing = self
@@ -317,12 +543,27 @@ impl Shell {
     }
 
     pub fn try_set_variable(&mut self, name: &str, value: &str) -> Result<(), String> {
+        let resolved;
+        let name = if self.is_reference(name) {
+            resolved = self.resolve_name(name);
+            resolved.as_str()
+        } else {
+            name
+        };
+        if let Some((base, key)) = split_subscript(name) {
+            let key = self
+                .reference_key(base, key)
+                .ok_or_else(|| format!("{name}: bad array subscript"))?;
+            return self.set_element(base, key, value);
+        }
         self.check_writable(name)?;
         let value = self.transform_value(name, value)?;
+        self.mark_assigned(name);
         if let Some(array) = self.arrays.get_mut(name) {
             return array.set(Key::Index(0), value);
         }
-        if !self.variables.contains_key(name) && std::env::var_os(name).is_some() {
+        if self.should_export(name) {
+            self.variables.remove(name);
             unsafe { std::env::set_var(name, value) };
         } else {
             self.variables.insert(name.into(), value);
@@ -337,26 +578,106 @@ impl Shell {
     }
 
     pub fn export_variable(&mut self, name: &str, value: Option<&str>) {
+        let name = self.resolve_name(name);
+        if self.arrays.contains_key(&name) {
+            self.attributes.entry(name).or_default().exported = true;
+            return;
+        }
         let value = value
             .map(String::from)
-            .or_else(|| self.variables.get(name).cloned())
-            .or_else(|| std::env::var(name).ok());
-        self.variables.remove(name);
-        if let Some(value) = value {
-            unsafe { std::env::set_var(name, value) };
+            .or_else(|| self.variables.get(&name).cloned())
+            .or_else(|| std::env::var(&name).ok());
+        self.variables.remove(&name);
+        match value {
+            Some(value) => unsafe { std::env::set_var(&name, value) },
+            None => self.attributes.entry(name).or_default().exported = true,
         }
     }
 
-    pub fn unset_variable(&mut self, name: &str) {
-        if self.is_readonly(name) {
-            error(format!("unset: {name}: readonly variable"));
+    pub fn unexport_variable(&mut self, name: &str) {
+        let name = self.resolve_name(name);
+        if let Some(attributes) = self.attributes.get_mut(&name) {
+            attributes.exported = false;
+        }
+        if self.variables.contains_key(&name) || self.arrays.contains_key(&name) {
             return;
+        }
+        if let Ok(value) = std::env::var(&name) {
+            unsafe { std::env::remove_var(&name) };
+            self.variables.insert(name, value);
+        }
+    }
+
+    pub fn unset_variable(&mut self, name: &str) -> bool {
+        let target = self.resolve_name(name);
+        if let Some((base, key)) = split_subscript(&target) {
+            if self.is_readonly(base) {
+                error(format!("unset: {base}: cannot unset: readonly variable"));
+                return false;
+            }
+            if let Some(key) = self.reference_key(base, key)
+                && let Some(array) = self.arrays.get_mut(base)
+            {
+                array.remove(&key);
+            }
+            return true;
+        }
+        self.unset_name(&target)
+    }
+
+    pub fn unset_name(&mut self, name: &str) -> bool {
+        if self.is_readonly(name) {
+            error(format!("unset: {name}: cannot unset: readonly variable"));
+            return false;
         }
         self.attributes.remove(name);
         self.arrays.remove(name);
         self.variables.remove(name);
         unsafe { std::env::remove_var(name) };
+        true
     }
+
+    fn import_functions(&mut self) {
+        let exported: Vec<(String, String)> = std::env::vars_os()
+            .filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)))
+            .filter_map(|(name, value)| {
+                let function = name
+                    .strip_prefix(FUNCTION_PREFIX)?
+                    .strip_suffix(FUNCTION_SUFFIX)?;
+                Some((function.to_string(), value))
+            })
+            .collect();
+        for (name, value) in exported {
+            if let Some(body) = parse_exported_function(&name, &value) {
+                self.functions.insert(name.clone(), body);
+                let source = value.strip_prefix("() ").unwrap_or(&value);
+                self.function_sources.insert(name, Rc::from(source));
+            }
+        }
+    }
+}
+
+pub const FUNCTION_PREFIX: &str = "BASH_FUNC_";
+pub const FUNCTION_SUFFIX: &str = "%%";
+
+fn parse_exported_function(name: &str, value: &str) -> Option<Rc<Command>> {
+    let body = value.strip_prefix("() ")?;
+    let list = crate::syntax::parser::parse(&format!("{name} () {body}")).ok()?;
+    let [item] = list.as_slice() else {
+        return None;
+    };
+    let [command] = item.first.commands.as_slice() else {
+        return None;
+    };
+    match &command.kind {
+        crate::syntax::ast::CommandKind::FunctionDefinition { body, .. } => Some(Rc::clone(body)),
+        _ => None,
+    }
+}
+
+pub fn split_subscript(text: &str) -> Option<(&str, &str)> {
+    let (name, rest) = text.split_once('[')?;
+    Some((name, rest.strip_suffix(']')?))
 }
 
 fn random() -> u64 {
@@ -432,5 +753,77 @@ mod tests {
         shell.set_variable("GRFSH_UNIT_LOCAL", "1");
         assert_eq!(shell.get_variable("GRFSH_UNIT_LOCAL").as_deref(), Some("1"));
         assert!(std::env::var("GRFSH_UNIT_LOCAL").is_err());
+    }
+
+    #[test]
+    fn export_attribute_survives_until_assignment() {
+        let mut shell = Shell::new();
+        shell.export_variable("GRFSH_UNIT_LATER", None);
+        assert!(shell.is_exported("GRFSH_UNIT_LATER"));
+        assert!(std::env::var("GRFSH_UNIT_LATER").is_err());
+        shell.set_variable("GRFSH_UNIT_LATER", "now");
+        assert_eq!(std::env::var("GRFSH_UNIT_LATER").as_deref(), Ok("now"));
+        shell.unexport_variable("GRFSH_UNIT_LATER");
+        assert!(std::env::var("GRFSH_UNIT_LATER").is_err());
+        assert_eq!(
+            shell.get_variable("GRFSH_UNIT_LATER").as_deref(),
+            Some("now")
+        );
+    }
+
+    #[test]
+    fn allexport_exports_new_assignments() {
+        let mut shell = Shell::new();
+        shell.options.allexport = true;
+        shell.set_variable("GRFSH_UNIT_AUTO", "1");
+        shell.options.allexport = false;
+        assert_eq!(std::env::var("GRFSH_UNIT_AUTO").as_deref(), Ok("1"));
+        shell.unset_variable("GRFSH_UNIT_AUTO");
+    }
+
+    #[test]
+    fn name_references_follow_their_target() {
+        let mut shell = Shell::new();
+        shell.set_variable("target", "1");
+        shell.variables.insert("reference".into(), "target".into());
+        shell
+            .attributes
+            .entry("reference".into())
+            .or_default()
+            .nameref = true;
+        assert_eq!(shell.get_variable("reference").as_deref(), Some("1"));
+        shell.set_variable("reference", "2");
+        assert_eq!(shell.get_variable("target").as_deref(), Some("2"));
+        shell
+            .set_array("list", Array::indexed(vec!["a".into(), "b".into()]))
+            .unwrap();
+        shell.variables.insert("reference".into(), "list[1]".into());
+        assert_eq!(shell.get_variable("reference").as_deref(), Some("b"));
+        assert!(shell.variable_is_set("list[1]"));
+        assert!(!shell.variable_is_set("list[2]"));
+    }
+
+    #[test]
+    fn ifs_defaults_and_star_joins_with_its_first_character() {
+        let mut shell = Shell::new();
+        assert_eq!(shell.get_variable("IFS").as_deref(), Some(" \t\n"));
+        shell.positional = vec!["a".into(), "b".into()];
+        shell.set_variable("IFS", ",;");
+        assert_eq!(shell.get_variable("*").as_deref(), Some("a,b"));
+        shell.unset_variable("IFS");
+        assert_eq!(shell.get_variable("*").as_deref(), Some("a b"));
+    }
+
+    #[test]
+    fn unset_of_readonly_reports_failure() {
+        let mut shell = Shell::new();
+        shell.set_variable("locked", "1");
+        shell
+            .attributes
+            .entry("locked".into())
+            .or_default()
+            .readonly = true;
+        assert!(!shell.unset_variable("locked"));
+        assert!(shell.try_set_variable("locked", "2").is_err());
     }
 }

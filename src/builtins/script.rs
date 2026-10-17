@@ -23,10 +23,12 @@ pub(super) fn source(shell: &mut Shell, args: &[String]) -> i32 {
         (args.len() > 1).then(|| std::mem::replace(&mut shell.positional, args[1..].to_vec()));
     shell.source_depth += 1;
     shell.source_stack.push(path.clone());
+    shell.push_frame("source", path.clone(), false);
     let line = shell.current_line;
     let mut lines = contents.lines().map(String::from);
     let status = shell.run_lines(|| lines.next());
     shell.current_line = line;
+    shell.call_stack.pop();
     shell.source_stack.pop();
     shell.source_depth -= 1;
     if shell.flow == Flow::Return {
@@ -200,8 +202,8 @@ pub(super) fn read(shell: &mut Shell, args: &[String]) -> i32 {
             shell::error(format!("read: {message}"));
             return 1;
         }
-    } else {
-        assign_fields(shell, &names, &line);
+    } else if !assign_fields(shell, &names, &line) {
+        return 1;
     }
     match ending {
         Ending::TimedOut => 142,
@@ -246,8 +248,21 @@ pub(super) fn mapfile(shell: &mut Shell, args: &[String]) -> i32 {
     }
     let mut lines = Vec::new();
     let mut seen = 0;
+    let mut buffered = limit.is_none().then(|| {
+        let input = sys::read_all(0);
+        let mut pieces: Vec<String> = input
+            .split_inclusive(|byte| *byte == b'\n')
+            .map(|line| String::from_utf8_lossy(line).into_owned())
+            .collect();
+        pieces.reverse();
+        pieces
+    });
     while limit.is_none_or(|limit| lines.len() < limit) {
-        let Some(mut line) = sys::read_line(0) else {
+        let next = match buffered.as_mut() {
+            Some(pieces) => pieces.pop(),
+            None => sys::read_line(0),
+        };
+        let Some(mut line) = next else {
             break;
         };
         seen += 1;
@@ -283,20 +298,34 @@ fn remove_backslashes(text: &str) -> String {
     out
 }
 
-fn assign_fields(shell: &mut Shell, names: &[String], line: &str) {
+fn assign_fields(shell: &mut Shell, names: &[String], line: &str) -> bool {
     let ifs = shell
         .get_variable("IFS")
         .unwrap_or_else(|| DEFAULT_IFS.into());
     let fields = split_ifs(line, &ifs, Some(names.len()));
+    let mut assigned = true;
     for (index, name) in names.iter().enumerate() {
-        shell.set_variable(name, fields.get(index).map_or("", String::as_str));
+        let field = fields.get(index).map_or("", String::as_str);
+        if let Err(message) = shell.try_set_variable(name, field) {
+            shell::error(message);
+            assigned = false;
+        }
     }
+    assigned
 }
 
-const OPTION_NAMES: &[&str] = &["errexit", "nounset", "xtrace", "pipefail", "vi"];
+const OPTION_NAMES: &[&str] = &[
+    "allexport",
+    "errexit",
+    "nounset",
+    "xtrace",
+    "pipefail",
+    "vi",
+];
 
 fn option_flag<'a>(options: &'a mut ShellOptions, name: &str) -> Option<&'a mut bool> {
     match name {
+        "allexport" | "a" => Some(&mut options.allexport),
         "errexit" | "e" => Some(&mut options.errexit),
         "nounset" | "u" => Some(&mut options.nounset),
         "xtrace" | "x" => Some(&mut options.xtrace),

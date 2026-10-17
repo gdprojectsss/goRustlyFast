@@ -10,7 +10,7 @@ use crate::syntax::ast::*;
 use crate::syntax::parser;
 use crate::sys;
 use crate::table;
-use crate::variables::{Array, Evaluated, Key};
+use crate::variables::{Array, Evaluated, Key, Saved, keyed_element};
 
 mod process;
 mod redirect;
@@ -21,7 +21,7 @@ impl Shell {
     pub(crate) fn run_source(&mut self, source: &str) -> i32 {
         let first_line = self.current_line.max(1);
         match parser::parse_from_line(source, &self.aliases, first_line) {
-            Ok(list) => self.run_list(&list),
+            Ok(list) => self.run_line_chunks(&list),
             Err(error) => {
                 self.report_parse_error(error);
                 2
@@ -80,7 +80,20 @@ impl Shell {
         self.last_status = 2;
     }
 
-    pub(crate) fn run_list(&mut self, list: &List) -> i32 {
+    fn run_line_chunks(&mut self, list: &List) -> i32 {
+        let mut chunks = list
+            .chunk_by(|first, second| first.line == second.line)
+            .peekable();
+        while let Some(chunk) = chunks.next() {
+            self.run_list(chunk);
+            if self.flow == Flow::Abort && chunks.peek().is_some() {
+                self.flow = Flow::Normal;
+            }
+        }
+        self.last_status
+    }
+
+    pub(crate) fn run_list(&mut self, list: &[AndOr]) -> i32 {
         for item in list {
             if signals::any_pending() {
                 self.handle_signals();
@@ -314,8 +327,8 @@ impl Shell {
             CommandKind::Simple(simple) => {
                 self.run_simple(simple, &command.redirects, exec_in_place)
             }
-            CommandKind::FunctionDefinition { name, body } => {
-                self.functions.insert(name.clone(), Rc::clone(body));
+            CommandKind::FunctionDefinition { name, body, source } => {
+                self.define_function(name, body, source);
                 0
             }
             kind => self.with_redirects(&command.redirects, |shell| shell.run_compound(kind)),
@@ -485,8 +498,15 @@ impl Shell {
                 };
                 let mut status = 0;
                 self.loop_depth += 1;
+                let reference = self.is_reference(variable);
                 for value in values {
-                    self.set_variable(variable, &value);
+                    if reference {
+                        self.variables.insert(variable.clone(), value);
+                    } else if let Err(error) = self.try_set_variable(variable, &value) {
+                        shell::error(error);
+                        status = 1;
+                        break;
+                    }
                     status = self.run_list(body);
                     if self.loop_should_exit() {
                         break;
@@ -518,7 +538,7 @@ impl Shell {
                 self.flow = Flow::Normal;
                 false
             }
-            Flow::Return | Flow::Exit | Flow::Interrupted => true,
+            Flow::Return | Flow::Exit | Flow::Interrupted | Flow::Abort => true,
         }
     }
 
@@ -576,6 +596,10 @@ impl Shell {
             }
             Condition::Not(inner) => Ok(!self.evaluate_condition(inner)?),
             Condition::Single(word) => Ok(!expand::single(self, word)?.is_empty()),
+            Condition::Unary { operator, operand } if operator == "-v" => {
+                let operand = expand::single(self, operand)?;
+                Ok(self.is_set_with_subscript(&operand))
+            }
             Condition::Unary { operator, operand } => {
                 let operand = expand::single(self, operand)?;
                 Ok(test::unary(self, operator, &operand))
@@ -614,7 +638,22 @@ impl Shell {
         }
     }
 
+    fn is_set_with_subscript(&mut self, text: &str) -> bool {
+        let Some((name, key)) = shell::split_subscript(text) else {
+            return self.variable_is_set(text);
+        };
+        let name = self.resolve_name(name);
+        if self.is_associative(&name) || key == "@" || key == "*" {
+            return self.variable_is_set(&format!("{name}[{key}]"));
+        }
+        match expand::evaluate_arithmetic(self, key) {
+            Ok(index) => self.variable_is_set(&format!("{name}[{index}]")),
+            Err(_) => false,
+        }
+    }
+
     pub(crate) fn array_key(&mut self, name: &str, index: &Word) -> Result<Key, String> {
+        let name = &self.resolve_name(name);
         if self.is_associative(name) {
             Ok(Key::Name(expand::single(self, index)?))
         } else {
@@ -633,7 +672,7 @@ impl Shell {
                     name: assignment.name.clone(),
                     key,
                     append: assignment.append,
-                    value: expand::single(self, word)?,
+                    value: expand::single(self, &expand::assignment_tildes(word))?,
                 })
             }
             AssignedValue::Array(words) => Ok(Evaluated::Array {
@@ -652,6 +691,7 @@ impl Shell {
                 append,
                 value,
             } => {
+                let name = self.resolve_name(&name);
                 let value = if append {
                     let current = self
                         .arrays
@@ -690,8 +730,13 @@ impl Shell {
                 append,
                 elements,
             } => {
-                let mut array = match self.arrays.get(&name) {
-                    Some(existing) if append => existing.clone(),
+                let name = self.resolve_name(&name);
+                if self.is_readonly(&name) {
+                    return Err(format!("{name}: readonly variable"));
+                }
+                let elements = self.resolve_indexed_keys(&name, elements)?;
+                let mut array = match self.arrays.remove(&name) {
+                    Some(existing) if append => existing,
                     Some(existing) if existing.is_associative() => Array::associative(),
                     _ if append => {
                         Array::indexed(self.variables.get(&name).cloned().into_iter().collect())
@@ -711,11 +756,110 @@ impl Shell {
                 } else {
                     elements
                 };
-                array
+                let extended = array
                     .extend(elements)
-                    .map_err(|message| format!("{name}: {message}"))?;
-                self.set_array(&name, array)
+                    .map_err(|message| format!("{name}: {message}"));
+                self.set_array(&name, array)?;
+                extended
             }
+        }
+    }
+
+    fn resolve_indexed_keys(
+        &mut self,
+        name: &str,
+        elements: Vec<String>,
+    ) -> Result<Vec<String>, String> {
+        if self.is_associative(name) {
+            return Ok(elements);
+        }
+        elements
+            .into_iter()
+            .map(|element| match keyed_element(&element) {
+                Some((key, value)) if key.trim().parse::<i64>().is_err() => {
+                    let index = expand::evaluate_arithmetic(self, key)?;
+                    Ok(format!("[{index}]={value}"))
+                }
+                _ => Ok(element),
+            })
+            .collect()
+    }
+
+    fn define_function(&mut self, name: &str, body: &Rc<Command>, source: &str) {
+        self.functions.insert(name.to_string(), Rc::clone(body));
+        let file = self.current_source();
+        self.function_files.insert(name.to_string(), file);
+        self.function_sources
+            .insert(name.to_string(), Rc::from(source));
+        if self.is_function_exported(name) {
+            self.export_function(name);
+        }
+    }
+
+    fn assign_in_order(&mut self, assignments: &[Assignment]) -> i32 {
+        for assignment in assignments {
+            let evaluated = match self.evaluate_assignment(assignment) {
+                Ok(evaluated) => evaluated,
+                Err(error) => return self.expansion_failed(error),
+            };
+            if self.options.xtrace
+                && let Evaluated::Scalar { name, value, .. } = &evaluated
+            {
+                self.trace(&[(name.clone(), value.clone())], &[]);
+            }
+            if let Err(error) = self.assign(evaluated) {
+                shell::error(error);
+                self.flow = Flow::Abort;
+                return 1;
+            }
+        }
+        self.substitution_status.unwrap_or(0)
+    }
+
+    fn evaluate_prefix(
+        &mut self,
+        assignments: &[Assignment],
+    ) -> Result<Vec<(String, String)>, String> {
+        let saved: Vec<(String, Saved)> = assignments
+            .iter()
+            .map(|assignment| (assignment.name.clone(), self.snapshot(&assignment.name)))
+            .collect();
+        let mut evaluated = Vec::with_capacity(assignments.len());
+        let mut failure = None;
+        for assignment in assignments {
+            match self.evaluate_assignment(assignment) {
+                Ok(Evaluated::Scalar {
+                    name,
+                    key: None,
+                    append,
+                    value,
+                }) => {
+                    if self.is_readonly(&name) {
+                        shell::error(format!("{name}: readonly variable"));
+                        continue;
+                    }
+                    let value = if append {
+                        self.get_variable(&name).unwrap_or_default() + &value
+                    } else {
+                        value
+                    };
+                    self.variables.remove(&name);
+                    unsafe { std::env::set_var(&name, &value) };
+                    evaluated.push((name, value));
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    failure = Some(error);
+                    break;
+                }
+            }
+        }
+        for (name, previous) in saved.into_iter().rev() {
+            self.restore(name, previous);
+        }
+        match failure {
+            Some(error) => Err(error),
+            None => Ok(evaluated),
         }
     }
 
@@ -738,51 +882,24 @@ impl Shell {
             }
         }
         self.pending_declarations = declarations;
-        let mut pending = Vec::with_capacity(simple.assignments.len());
-        for assignment in &simple.assignments {
-            match self.evaluate_assignment(assignment) {
-                Ok(evaluated) => pending.push(evaluated),
-                Err(error) => return self.expansion_failed(error),
-            }
-        }
 
         if argv.is_empty() {
-            if self.options.xtrace {
-                let traced: Vec<(String, String)> = pending
-                    .iter()
-                    .filter_map(|evaluated| match evaluated {
-                        Evaluated::Scalar { name, value, .. } => {
-                            Some((name.clone(), value.clone()))
-                        }
-                        Evaluated::Array { .. } => None,
-                    })
-                    .collect();
-                self.trace(&traced, &[]);
+            let status = self.assign_in_order(&simple.assignments);
+            if self.flow != Flow::Normal {
+                return status;
             }
-            for evaluated in pending {
-                if let Err(error) = self.assign(evaluated) {
-                    shell::error(error);
-                    return 1;
-                }
-            }
-            let status = self.substitution_status.unwrap_or(0);
             return self.with_redirects(redirects, |_| status);
         }
-        let assignments: Vec<(String, String)> = pending
-            .into_iter()
-            .filter_map(|evaluated| match evaluated {
-                Evaluated::Scalar {
-                    name,
-                    key: None,
-                    value,
-                    ..
-                } => Some((name, value)),
-                _ => None,
-            })
-            .collect();
+        let assignments = match self.evaluate_prefix(&simple.assignments) {
+            Ok(assignments) => assignments,
+            Err(error) => return self.expansion_failed(error),
+        };
 
         if self.options.xtrace {
-            self.trace(&assignments, &argv);
+            for assignment in &assignments {
+                self.trace(std::slice::from_ref(assignment), &[]);
+            }
+            self.trace(&[], &argv);
         }
 
         let mut bypass_functions = false;
@@ -912,7 +1029,14 @@ impl Shell {
         let saved = std::mem::replace(&mut self.positional, argv[1..].to_vec());
         self.locals.push(HashMap::new());
         self.function_stack.push(argv[0].clone());
+        let file = self
+            .function_files
+            .get(&argv[0])
+            .cloned()
+            .unwrap_or_else(|| self.current_source());
+        self.push_frame(&argv[0], file, true);
         self.run_command(body, false);
+        self.call_stack.pop();
         self.function_stack.pop();
         if self.flow == Flow::Return {
             self.flow = Flow::Normal;

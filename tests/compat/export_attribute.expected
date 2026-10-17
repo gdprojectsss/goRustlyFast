@@ -1,0 +1,22 @@
+LATER=value
+DECLARED=4
+GONE=unset
+still set: 5
+declare -- GONE="5"
+PLUS=unset
+declare -x PENDING
+declare -x DECLARED="4"
+declare -x LATER="value"
+declare -x PENDING
+AUTO=1 MANUAL=unset
+ALSO=3
+a not in flags
+a in flags
+child sees local HOME=/elsewhere
+HOME restored
+LOCAL_ONLY=1
+after function LOCAL_ONLY=unset
+export array status 0
+declare -ax list=([0]="1" [1]="2")
+export readonly status 1
+--- exit 0

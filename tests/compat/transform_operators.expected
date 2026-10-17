@@ -1,0 +1,22 @@
+'it'\''s a b' x='it'\''s a b' declare -i n='5' i a A
+'1' 'two 2'
+declare -a arr=([0]="1" [1]="two 2")
+k "v" |
+k v
+0 "1" 1 "two 2"
+a	bA
+HELLO Hello hello
+heLLO Hello heLLo hello
+HEllo hELLO hello Hello hELLO
+Abc Def Abc dEf
+[] [] []
+r
+declare -ir ri='3'
+x declare -x ex='1'
+'' emp=''
+$'tab\there'
+'plain' 'plain'
+declare -A only=([one]="1" )
+declare -A only
+\ x A
+--- exit 0

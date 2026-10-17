@@ -190,6 +190,10 @@ impl WordBuf {
     }
 }
 
+fn starts_indirect_name(character: char) -> bool {
+    is_name_start(character) || character.is_ascii_digit() || character == '#'
+}
+
 fn is_name_start(character: char) -> bool {
     character == '_' || character.is_ascii_alphabetic()
 }
@@ -700,7 +704,7 @@ impl Lexer {
             }
             return Ok(WordPart::Length { name, subscript });
         }
-        if self.peek() == Some('!') && self.peek_at(1).is_some_and(is_name_start) {
+        if self.peek() == Some('!') && self.peek_at(1).is_some_and(starts_indirect_name) {
             self.position += 1;
             let name = self.parameter_name()?;
             if matches!(self.peek(), Some('*' | '@')) && self.peek_at(1) == Some('}') {
@@ -713,8 +717,12 @@ impl Lexer {
                 });
             }
             return match self.subscript()? {
-                Some(Subscript::All | Subscript::Joined) if self.eat('}') => {
-                    Ok(WordPart::Indices { name, quoted })
+                Some(subscript @ (Subscript::All | Subscript::Joined)) if self.eat('}') => {
+                    Ok(WordPart::Indices {
+                        name,
+                        quoted,
+                        joined: subscript == Subscript::Joined,
+                    })
                 }
                 None => {
                     let operator = if self.eat('}') {
@@ -759,6 +767,13 @@ impl Lexer {
                 Some('[') => depth += 1,
                 Some(']') if depth == 0 => break,
                 Some(']') => depth -= 1,
+                Some('\\') => {
+                    self.bump();
+                }
+                Some('\'') => {
+                    self.single_quoted()?;
+                }
+                Some('"') => self.skip_double_quoted()?,
                 _ => {}
             }
         }
@@ -766,7 +781,7 @@ impl Lexer {
         Ok(Some(match text.trim() {
             "@" => Subscript::All,
             "*" => Subscript::Joined,
-            index => Subscript::Index(parse_double_quoted_text(index)?),
+            index => Subscript::Index(Lexer::new(index).brace_word(&[])?.0),
         }))
     }
 
@@ -829,18 +844,22 @@ impl Lexer {
                     replacement,
                 }
             }
-            '^' | ',' => {
+            '^' | ',' | '~' => {
                 let all = self.eat(first);
-                if !self.eat('}') {
-                    return Err(ParseError::syntax("bad substitution"));
-                }
+                let pattern = if self.eat('}') {
+                    Word::default()
+                } else {
+                    self.brace_word(&['}'])?.0
+                };
                 ParameterOperation::ChangeCase {
                     upper: first == '^',
+                    toggle: first == '~',
                     all,
+                    pattern,
                 }
             }
             '@' => match (self.bump(), self.bump()) {
-                (Some(letter), Some('}')) if "QEULua".contains(letter) => {
+                (Some(letter), Some('}')) if "QEPAKaUuLk".contains(letter) => {
                     ParameterOperation::Transform(letter)
                 }
                 _ => return Err(ParseError::syntax("bad substitution")),
@@ -874,8 +893,14 @@ impl Lexer {
         let mut word = WordBuf::default();
         let stop = loop {
             match self.bump() {
+                None if stops.is_empty() => break '\0',
                 None => return Err(ParseError::incomplete("unclosed ${")),
                 Some(character) if stops.contains(&character) => break character,
+                Some('$') if self.peek() == Some('\'') => {
+                    self.position += 1;
+                    let text = self.ansi_quoted()?;
+                    word.quoted_text(&text);
+                }
                 Some('\\') => match self.bump() {
                     Some(character) => word.quoted(character),
                     None => return Err(ParseError::incomplete("unclosed ${")),

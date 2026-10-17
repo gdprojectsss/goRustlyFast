@@ -46,7 +46,7 @@ const TOPICS: &[(&str, &str, &str)] = &[
     ),
     (
         "declare",
-        "declare [-aAilrux] [name[=value] ...]",
+        "declare [-aAgilnprux] [+ilnux] [name[=value] ...]",
         "set variable attributes or list variables",
     ),
     ("dirs", "dirs [-c | -v]", "show the directory stack"),
@@ -60,7 +60,7 @@ const TOPICS: &[(&str, &str, &str)] = &[
     ("exit", "exit [n]", "leave the shell"),
     (
         "export",
-        "export [name[=value] ...]",
+        "export [-fnp] [name[=value] ...]",
         "export variables to commands",
     ),
     (
@@ -89,7 +89,7 @@ const TOPICS: &[(&str, &str, &str)] = &[
     ("kill", "kill [-signal] pid | %job", "send a signal"),
     (
         "local",
-        "local [-aA] name[=value] ...",
+        "local [-aAilnrux] name[=value] ...",
         "declare variables local to a function",
     ),
     (
@@ -117,7 +117,7 @@ const TOPICS: &[(&str, &str, &str)] = &[
     ("readarray", "readarray [-t] [array]", "same as mapfile"),
     (
         "readonly",
-        "readonly [name[=value] ...]",
+        "readonly [-aAfp] [name[=value] ...]",
         "make variables read only",
     ),
     (
@@ -128,7 +128,7 @@ const TOPICS: &[(&str, &str, &str)] = &[
     ("return", "return [n]", "leave a function or sourced file"),
     (
         "set",
-        "set [-euxo option] [--] [args]",
+        "set [-aeuxo option] [--] [args]",
         "set shell options or positional parameters",
     ),
     ("shift", "shift [n]", "drop positional parameters"),
@@ -173,7 +173,7 @@ const TOPICS: &[(&str, &str, &str)] = &[
     ("unalias", "unalias [-a] name ...", "remove aliases"),
     (
         "unset",
-        "unset [-f] name ...",
+        "unset [-fnv] name ...",
         "remove variables, array elements or functions",
     ),
     ("wait", "wait [-n] [%job]", "wait for background jobs"),

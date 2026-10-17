@@ -1,0 +1,29 @@
+0000000    [      \t  \n   ]  \n                                        
+a b,c
+a b c
+a bc
+a b c
+p:q r:s
+0:1:2
+q r:s
+p:q r:S
+p:q r:s
+1,2,3
+outside: a b c
+unquoted star assignment: a b,c
+unquoted at assignment: a b c
+quoted at assignment: a b c
+<a b><c>
+<a b><c>
+<a b,c>
+<p><q r><s>
+case matched
+conditional matched
+a b,c
+<a bc><a b><c><pq rs>
+m=one two three
+x y z
+array in conditional
+array in case
+<>
+--- exit 0
