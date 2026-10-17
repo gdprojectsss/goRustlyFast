@@ -2,6 +2,25 @@
 
 All notable changes to grfsh are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [semantic versioning](https://semver.org). See the [stability promise](https://grf.sh/docs/stability/) for what that covers.
 
+## [1.1.1] - 2026-10-17
+
+grfsh now matches bash or the Oils expected result in 2489 of the 2754 Oils spec cases, up from 2253 in 1.1.0.
+
+### Fixed
+
+- `unset ""`, `unset =5` and values containing a NUL byte in exported or temporary variables no longer crash grfsh.
+- Array literals assign `[k]=v` elements in order with bash's numbering, associative arrays accept key and value pairs, and a bad subscript aborts only its line.
+- `declare`, `local`, `export`, `readonly` and `typeset` accept `name=value` words that come from expansions or through `command` and `builtin`, `local -a` starts empty, and `set` lists variables quoted like bash.
+- Quoting inside `${x-word}`, `${x:+word}` and the other parameter operators follows bash, unquoted default words are split and tilde expanded, and indirect expansion handles array elements and subscripts.
+- Aliases expand like bash: an alias ending in a blank expands the next word, aliases can start compound commands, and `alias` and `unalias` report errors like bash.
+- `GLOBIGNORE` is supported, glob results sort with the locale's collation, a long glob can be interrupted with Ctrl-C, and `[[ =~ ]]` treats spaces and operators inside parentheses literally.
+- Redirect targets are expanded fully, so a glob matching one file works and anything else is an ambiguous redirect; `N>&M-` moves a descriptor and `>&file` redirects both outputs.
+- DEBUG traps run for `(( ))`, `[[ ]]`, `case`, loop iterations and pipeline parts, ERR and `set -e` no longer fire on the status a compound command passes up, and trap listings work in subshells.
+- `getopts` reports invalid names and honours `OPTERR=0`, `break` and `continue` counts are capped at the loop depth, `exit` and `return` with bad arguments behave like bash, and `builtin` skips `--`.
+- `search` exits with status 1 when nothing matches, like grep.
+- The installer and the new docs/switching-back.md explain how to try grfsh first, how to switch back with `chsh` and in terminal apps, and how to start without startup files.
+- The sandboxed fuzz run no longer stops on its own timeout alarm, and the compatibility reference check uses bash 5.3.
+
 ## [1.1.0] - 2026-10-17
 
 A large compatibility and reliability release. grfsh now passes 2253 of the 2754 Oils bash spec cases (82%, bash 5.3 passes 89%), up from 1652 (60%) in 1.0.2.

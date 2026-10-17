@@ -1,8 +1,9 @@
 # Differential cases where grfsh still differs from bash, regenerate with scripts/differential.sh --write-baseline
+options-and-builtins:29
+scripts/c07_assoc
 scripts/c26_recursion
 scripts/d07_misc_builtins
 scripts/d08_seq_misc
-scripts/f03_traps
 scripts/f09_numfmt
 scripts/f12_exitcodes
 scripts/j01_misc

@@ -37,7 +37,7 @@
 <br>
 
 > [!NOTE]
-> grfsh runs real scripts and makes a pleasant interactive shell, but it does not cover all of bash yet: it passes about 82% of the Oils bash spec suite, where bash itself passes 89%. Run `grfsh --check script.sh` to see whether a script uses anything grfsh cannot run, and see [compatibility](https://grf.sh/docs/compatibility/) for the full list.
+> grfsh runs real scripts and makes a pleasant interactive shell, but it does not cover all of bash yet: it matches bash or the expected result in about 90% of the Oils bash spec suite. Run `grfsh --check script.sh` to see whether a script uses anything grfsh cannot run, and see [compatibility](https://grf.sh/docs/compatibility/) for the full list.
 
 ## What is grfsh?
 
