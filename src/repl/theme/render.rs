@@ -48,6 +48,10 @@ fn nearest_256(red: u8, green: u8, blue: u8) -> u8 {
 }
 
 pub(super) fn color_code(color: &str, background: bool) -> Option<String> {
+    color_code_at_depth(color, background, crate::text::truecolor())
+}
+
+fn color_code_at_depth(color: &str, background: bool, truecolor: bool) -> Option<String> {
     let layer = if background { 48 } else { 38 };
     if let Some(hex) = color.strip_prefix('#') {
         if hex.len() != 6 {
@@ -55,7 +59,7 @@ pub(super) fn color_code(color: &str, background: bool) -> Option<String> {
         }
         let channel = |range: std::ops::Range<usize>| u8::from_str_radix(&hex[range], 16).ok();
         let (red, green, blue) = (channel(0..2)?, channel(2..4)?, channel(4..6)?);
-        if crate::text::truecolor() {
+        if truecolor {
             return Some(format!("{layer};2;{red};{green};{blue}"));
         }
         return Some(format!("{layer};5;{}", nearest_256(red, green, blue)));
@@ -249,8 +253,12 @@ mod tests {
         assert_eq!(color_code("gray", true).as_deref(), Some("100"));
         assert_eq!(color_code("208", false).as_deref(), Some("38;5;208"));
         assert_eq!(
-            color_code("#ff8800", false).as_deref(),
+            color_code_at_depth("#ff8800", false, true).as_deref(),
             Some("38;2;255;136;0")
+        );
+        assert_eq!(
+            color_code_at_depth("#ff8800", true, false).as_deref(),
+            Some("48;5;208")
         );
         assert!(color_code("teal-ish", false).is_none());
     }
