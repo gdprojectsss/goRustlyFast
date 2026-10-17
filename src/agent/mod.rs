@@ -32,6 +32,7 @@ pub(crate) fn requested() -> bool {
 }
 
 pub(crate) fn prepare_environment() {
+    budget::remove_old_logs();
     for (name, value) in ENVIRONMENT {
         unsafe { std::env::set_var(name, value) };
     }

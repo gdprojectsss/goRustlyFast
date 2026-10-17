@@ -240,3 +240,148 @@ fn serve_keeps_state_between_requests() {
     assert!(server.0.wait().unwrap().success());
     assert!(!std::path::Path::new(&socket).exists());
 }
+
+#[test]
+fn write_file_refuses_empty_input_and_replace_handles_crlf() {
+    let directory = std::env::temp_dir().join(format!("grfsh_edit_more_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    let file = directory.join("keep.txt");
+    std::fs::write(&file, "one\r\ntwo\r\nthree\r\n").unwrap();
+    let path = file.display();
+    let empty = grfsh(&[
+        "-c",
+        &format!("write-file {path} < /dev/null; echo status=$?"),
+    ]);
+    assert_eq!(stdout(&empty), "status=1\n");
+    assert!(String::from_utf8_lossy(&empty.stderr).contains("use -f"));
+    let blocks = format!(
+        "printf '<<<<<<<\\none\\ntwo\\n=======\\nuno\\n>>>>>>>\\n<<<<<<<\\nthree\\n=======\\n>>>>>>>\\n' | replace {path}; echo status=$?"
+    );
+    let replaced = grfsh(&["-c", &blocks]);
+    assert_eq!(stdout(&replaced), "status=0\n", "{:?}", replaced);
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "uno\r\n");
+    let forced = grfsh(&[
+        "-c",
+        &format!("write-file -f {path} < /dev/null; echo status=$?"),
+    ]);
+    assert_eq!(stdout(&forced), "status=0\n");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "");
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn agent_mode_removes_day_old_output_logs() {
+    let uid = String::from_utf8(Command::new("id").arg("-u").output().unwrap().stdout).unwrap();
+    let directory = std::env::temp_dir().join(format!("grfsh-output-{}", uid.trim()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let old = directory.join(format!("old-{}.log", std::process::id()));
+    std::fs::write(&old, "x").unwrap();
+    let status = Command::new("touch")
+        .args(["-t", "202001010000"])
+        .arg(&old)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let output = grfsh(&["--agent", "-c", "true"]);
+    assert!(output.status.success());
+    assert!(!old.exists());
+}
+
+#[test]
+fn explain_keeps_substitutions_symbolic_and_follows_aliases() {
+    let output = grfsh(&[
+        "--explain",
+        "x=$(date)\necho $x\nalias hello='echo hi'; hello\nhello there",
+    ]);
+    let text = stdout(&output);
+    assert!(text.contains("   1  sets x=\"$(date)\""), "{text}");
+    assert!(text.contains("   2  echo \"$(date)\""), "{text}");
+    assert!(
+        text.contains("aliases only take effect from the next line"),
+        "{text}"
+    );
+    assert!(text.contains("   4  echo hi there"), "{text}");
+}
+
+struct Server {
+    child: std::process::Child,
+    socket: String,
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let _ = std::fs::remove_file(&self.socket);
+    }
+}
+
+fn start_server(name: &str) -> Server {
+    let socket = std::env::temp_dir().join(format!("grfsh-{name}-{}.sock", std::process::id()));
+    let socket = socket.to_str().unwrap().to_string();
+    let _ = std::fs::remove_file(&socket);
+    let child = Command::new(env!("CARGO_BIN_EXE_grfsh"))
+        .args(["--serve", &socket])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    for _ in 0..200 {
+        if std::path::Path::new(&socket).exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    Server { child, socket }
+}
+
+#[test]
+fn serve_requests_read_from_dev_null_and_timeouts_stop_read() {
+    let server = start_server("stdin");
+    let started = std::time::Instant::now();
+    let read = grfsh(&[
+        "--client",
+        &server.socket,
+        "-t",
+        "5",
+        "read x; echo status=$?",
+    ]);
+    assert_eq!(stdout(&read), "status=1\n");
+    assert!(started.elapsed() < std::time::Duration::from_secs(4));
+    let fifo = std::env::temp_dir().join(format!("grfsh-fifo-{}", std::process::id()));
+    let _ = std::fs::remove_file(&fifo);
+    let command = format!("mkfifo {path}; read x <> {path}", path = fifo.display());
+    let started = std::time::Instant::now();
+    let blocked = grfsh(&["--client", &server.socket, "-t", "0.5", &command]);
+    assert_eq!(blocked.status.code(), Some(124));
+    assert!(started.elapsed() < std::time::Duration::from_secs(4));
+    assert!(String::from_utf8_lossy(&blocked.stderr).contains("timed out after 0.5s"));
+    let after = grfsh(&["--client", &server.socket, "echo still here"]);
+    assert_eq!(stdout(&after), "still here\n");
+    let _ = std::fs::remove_file(&fifo);
+}
+
+#[test]
+fn serve_removes_its_socket_on_sigterm_and_sighup() {
+    for signal in ["TERM", "HUP"] {
+        let mut server = start_server(&format!("signal-{signal}"));
+        let _ = Command::new("kill")
+            .args([&format!("-{signal}"), &server.child.id().to_string()])
+            .status();
+        let status = server.child.wait().unwrap();
+        assert!(!status.success());
+        assert!(!std::path::Path::new(&server.socket).exists(), "{signal}");
+    }
+}
+
+#[test]
+fn serve_explains_socket_paths_that_are_too_long() {
+    let long = format!("/tmp/{}.sock", "x".repeat(120));
+    let output = grfsh(&["--serve", &long]);
+    assert_eq!(output.status.code(), Some(2));
+    let message = String::from_utf8_lossy(&output.stderr);
+    assert!(message.contains("use a shorter path"), "{message}");
+    assert!(!message.contains("SUN_LEN"));
+}

@@ -2,7 +2,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use super::{Capture, result_json};
@@ -14,6 +14,89 @@ use crate::table::json::{self, Json};
 static RUNNING: Mutex<Vec<i32>> = Mutex::new(Vec::new());
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 static TIMED_OUT: AtomicBool = AtomicBool::new(false);
+static SERVER_PID: AtomicI32 = AtomicI32::new(0);
+static MAIN_THREAD: AtomicUsize = AtomicUsize::new(0);
+static STOP_SIGNAL: AtomicI32 = AtomicI32::new(0);
+
+fn in_server() -> bool {
+    unsafe { libc::getpid() == SERVER_PID.load(Ordering::SeqCst) }
+}
+
+fn default_action(signal: libc::c_int) {
+    unsafe {
+        libc::signal(signal, libc::SIG_DFL);
+        libc::raise(signal);
+    }
+}
+
+extern "C" fn stop(signal: libc::c_int) {
+    if !in_server() {
+        default_action(signal);
+        return;
+    }
+    STOP_SIGNAL.store(signal, Ordering::SeqCst);
+    signals::mark_pending();
+}
+
+extern "C" fn wake(signal: libc::c_int) {
+    if !in_server() {
+        default_action(signal);
+    }
+}
+
+fn handler_installed(signal: libc::c_int) -> bool {
+    unsafe {
+        let mut current: libc::sigaction = std::mem::zeroed();
+        libc::sigaction(signal, std::ptr::null(), &mut current);
+        current.sa_sigaction != libc::SIG_DFL && current.sa_sigaction != libc::SIG_IGN
+    }
+}
+
+fn install(signal: libc::c_int, handler: extern "C" fn(libc::c_int)) {
+    if handler_installed(signal) {
+        return;
+    }
+    unsafe {
+        let mut action: libc::sigaction = std::mem::zeroed();
+        action.sa_sigaction = handler as libc::sighandler_t;
+        action.sa_flags = 0;
+        libc::sigemptyset(&mut action.sa_mask);
+        libc::sigaction(signal, &action, std::ptr::null_mut());
+    }
+}
+
+fn interrupt_main_thread() {
+    if handler_installed(libc::SIGALRM) {
+        let thread = MAIN_THREAD.load(Ordering::SeqCst) as libc::pthread_t;
+        unsafe { libc::pthread_kill(thread, libc::SIGALRM) };
+    }
+}
+
+fn watch_for_stop_signals(socket: std::path::PathBuf) {
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_millis(50));
+            let signal = STOP_SIGNAL.load(Ordering::SeqCst);
+            if signal == 0 {
+                continue;
+            }
+            let _ = std::fs::remove_file(&socket);
+            signal_running(libc::SIGTERM);
+            std::process::exit(128 + signal);
+        }
+    });
+}
+
+fn socket_path_problem(path: &str) -> Option<String> {
+    let address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+    let limit = address.sun_path.len() - 1;
+    (path.len() > limit).then(|| {
+        format!(
+            "{path}: the socket path is {} bytes long but at most {limit} fit in a Unix socket address, use a shorter path such as /tmp/grfsh.sock",
+            path.len()
+        )
+    })
+}
 
 pub(crate) fn register(pids: &[i32]) {
     if let Ok(mut running) = RUNNING.lock() {
@@ -52,6 +135,7 @@ fn arm(limit: Duration) -> u64 {
         }
         TIMED_OUT.store(true, Ordering::SeqCst);
         signals::mark_pending();
+        interrupt_main_thread();
         signal_running(libc::SIGTERM);
         std::thread::sleep(Duration::from_secs(2));
         if GENERATION.load(Ordering::SeqCst) == generation {
@@ -116,12 +200,19 @@ fn respond(shell: &mut Shell, request: Request) -> Json {
             ]);
         }
     };
+    let saved_input = sys::save_fd(0);
+    if let Ok(empty) = sys::open("/dev/null", libc::O_RDONLY) {
+        let _ = sys::dup2(empty, 0);
+        sys::close(empty);
+    }
     if let Some(limit) = request.timeout {
+        install(libc::SIGALRM, wake);
         arm(limit);
     }
     shell.run_source(&request.command);
     let timed_out = TIMED_OUT.load(Ordering::SeqCst);
     disarm();
+    sys::restore_fds(vec![(0, saved_input)]);
     if timed_out {
         shell.last_status = 124;
     }
@@ -170,6 +261,10 @@ fn handle(shell: &mut Shell, stream: UnixStream) {
 }
 
 pub(crate) fn serve(shell: &mut Shell, path: &str) -> i32 {
+    if let Some(problem) = socket_path_problem(path) {
+        shell::error(format!("--serve: {problem}"));
+        return 2;
+    }
     let absolute = std::env::current_dir()
         .map(|directory| directory.join(path))
         .unwrap_or_else(|_| path.into());
@@ -197,10 +292,19 @@ pub(crate) fn serve(shell: &mut Shell, path: &str) -> i32 {
         }
     };
     let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    SERVER_PID.store(unsafe { libc::getpid() }, Ordering::SeqCst);
+    MAIN_THREAD.store(unsafe { libc::pthread_self() } as usize, Ordering::SeqCst);
+    for signal in [libc::SIGTERM, libc::SIGHUP, libc::SIGINT] {
+        install(signal, stop);
+    }
+    watch_for_stop_signals(absolute.clone());
     eprintln!("grfsh: serving on {path}");
     for stream in listener.incoming() {
         if let Ok(stream) = stream {
             handle(shell, stream);
+        }
+        for signal in [libc::SIGTERM, libc::SIGHUP, libc::SIGINT] {
+            install(signal, stop);
         }
         if shell.flow == Flow::Exit {
             break;
@@ -225,9 +329,24 @@ pub(crate) fn client(path: &str, args: &[String], raw: bool) -> i32 {
         shell::error("--client: usage: grfsh --client socket [-t seconds] command...");
         return 2;
     }
+    if let Some(problem) = socket_path_problem(path) {
+        shell::error(format!("--client: {problem}"));
+        return 2;
+    }
+    let limit = match timeout.as_deref().map(str::parse::<f64>) {
+        Some(Ok(seconds)) if seconds > 0.0 && seconds.is_finite() => Some(seconds),
+        Some(_) => {
+            shell::error(format!(
+                "--client: {}: invalid timeout",
+                timeout.unwrap_or_default()
+            ));
+            return 2;
+        }
+        None => None,
+    };
     let mut request = vec![("command".to_string(), Json::String(words.join(" ")))];
-    if let Some(seconds) = timeout {
-        request.push(("timeout".into(), Json::Number(seconds)));
+    if let Some(seconds) = limit {
+        request.push(("timeout".into(), Json::Number(seconds.to_string())));
     }
     let mut stream = match UnixStream::connect(path) {
         Ok(stream) => stream,
@@ -240,10 +359,33 @@ pub(crate) fn client(path: &str, args: &[String], raw: bool) -> i32 {
         shell::error("--client: the server closed the connection");
         return 2;
     }
+    if let Some(seconds) = limit {
+        let grace = Duration::from_secs_f64(seconds) + Duration::from_secs(10);
+        let _ = stream.set_read_timeout(Some(grace));
+    }
     let mut line = String::new();
-    if BufReader::new(&stream).read_line(&mut line).unwrap_or(0) == 0 {
-        shell::error("--client: no response from the server");
-        return 2;
+    match BufReader::new(&stream).read_line(&mut line) {
+        Ok(0) => {
+            shell::error("--client: no response from the server");
+            return 2;
+        }
+        Ok(_) => {}
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+            ) =>
+        {
+            shell::error(format!(
+                "--client: no response within {}s; the server runs one request at a time and may be busy with another",
+                limit.unwrap_or_default() + 10.0
+            ));
+            return 124;
+        }
+        Err(error) => {
+            shell::error(format!("--client: {}", sys::error_message(&error)));
+            return 2;
+        }
     }
     if raw {
         print!("{line}");
@@ -268,6 +410,12 @@ pub(crate) fn client(path: &str, args: &[String], raw: bool) -> i32 {
         }
         if let Some(Json::String(text)) = field("stderr") {
             eprint!("{text}");
+        }
+        if field("timed_out") == Some(&Json::Bool(true)) {
+            shell::error(format!(
+                "--client: timed out after {}s",
+                timeout.unwrap_or_default()
+            ));
         }
     }
     match field("status") {
