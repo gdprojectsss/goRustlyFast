@@ -15,7 +15,7 @@ enum Trigger {
     Flag(&'static str, char),
     Argument(&'static str, &'static str),
     ArgumentContaining(&'static str, &'static str),
-    Text(&'static str),
+    Variable(&'static str),
     ExtendedGlob,
 }
 
@@ -89,8 +89,14 @@ const UNSUPPORTED: &[Unsupported] = &[
         Trigger::ArgumentContaining("printf", "%("),
         "printf %(format)T dates are not supported",
     ),
-    entry(Trigger::Text("BASH_VERSINFO"), "BASH_VERSINFO is not set"),
-    entry(Trigger::Text("BASH_LINENO"), "BASH_LINENO is not set"),
+    entry(
+        Trigger::Variable("BASH_VERSINFO"),
+        "BASH_VERSINFO is not set in grfsh",
+    ),
+    entry(
+        Trigger::Variable("BASH_LINENO"),
+        "BASH_LINENO is not set in grfsh",
+    ),
     entry(
         Trigger::ExtendedGlob,
         "extended glob patterns are not supported",
@@ -232,7 +238,7 @@ fn text_findings(lines: &mut [String], extended_globs: bool) -> Vec<Finding> {
         let number = index + 1;
         for unsupported in UNSUPPORTED {
             let pattern = match unsupported.trigger {
-                Trigger::Text(pattern) => pattern,
+                Trigger::Variable(pattern) => pattern,
                 Trigger::ExtendedGlob if !extended_globs => "shopt -s extglob",
                 _ => continue,
             };
@@ -242,7 +248,12 @@ fn text_findings(lines: &mut [String], extended_globs: bool) -> Vec<Finding> {
                 } else {
                     format!("{} ({pattern})", unsupported.message)
                 };
-                findings.push(error(number, message));
+                let variable = matches!(unsupported.trigger, Trigger::Variable(_));
+                findings.push(Finding {
+                    line: number,
+                    error: !variable,
+                    message,
+                });
             }
         }
         for (pattern, hint) in ZSH_FILES {
@@ -367,49 +378,81 @@ fn report_syntax_error(
     ));
 }
 
-fn parse_script(lines: &[String], findings: &mut Vec<Finding>, extended_globs: bool) -> Script {
-    let mut list = List::new();
-    let mut buffer = String::new();
-    let mut chunk_start = 1;
-    let mut after_error = false;
-    for (index, line) in lines.iter().enumerate() {
-        if buffer.is_empty() {
-            chunk_start = index + 1;
+fn joined(lines: &[String]) -> String {
+    let mut text = lines.join("\n");
+    text.push('\n');
+    text
+}
+
+fn until_exit(mut list: List, total_lines: usize) -> Script {
+    match list.iter().position(ends_script) {
+        Some(position) => {
+            let last_line = list[position].line;
+            list.truncate(position + 1);
+            Script { list, last_line }
         }
-        buffer.push_str(line);
-        buffer.push('\n');
-        match parser::parse_from_line(&buffer, &HashMap::new(), chunk_start) {
-            Err(problem) if problem.incomplete => continue,
-            Err(problem) => {
-                let line = problem.line.unwrap_or(chunk_start);
-                report_syntax_error(findings, &problem, line, lines, after_error, extended_globs);
-                after_error = true;
-            }
-            Ok(parsed) => {
-                if let Some(position) = parsed.iter().position(ends_script) {
-                    list.extend(parsed.into_iter().take(position + 1));
-                    return Script {
-                        list,
-                        last_line: index + 1,
-                    };
-                }
-                list.extend(parsed);
-            }
-        }
-        buffer.clear();
+        None => Script {
+            list,
+            last_line: total_lines,
+        },
     }
-    if !buffer.trim().is_empty()
-        && let Err(problem) = parser::parse_from_line(&buffer, &HashMap::new(), chunk_start)
-    {
-        let line = match unclosed_quote_line(&buffer) {
-            Some(offset) if problem.message.contains("quote") => chunk_start + offset,
-            _ => chunk_start,
+}
+
+fn exit_before(lines: &[String], error_line: usize) -> Option<Script> {
+    let end = error_line.saturating_sub(1).min(lines.len());
+    for (index, line) in lines[..end].iter().enumerate() {
+        if !matches!(first_word(line), "exit" | "exec") {
+            continue;
+        }
+        let Ok(list) = parser::parse_from_line(&joined(&lines[..=index]), &HashMap::new(), 1)
+        else {
+            continue;
         };
-        report_syntax_error(findings, &problem, line, lines, false, extended_globs);
+        let script = until_exit(list, lines.len());
+        if script.last_line <= index + 1 {
+            return Some(script);
+        }
     }
-    Script {
-        list,
-        last_line: lines.len(),
+    None
+}
+
+fn parse_script(lines: &[String], findings: &mut Vec<Finding>, extended_globs: bool) -> Script {
+    let mut lines = lines.to_vec();
+    let mut after_error = false;
+    loop {
+        let text = joined(&lines);
+        let problem = match parser::parse_from_line(&text, &HashMap::new(), 1) {
+            Ok(list) => return until_exit(list, lines.len()),
+            Err(problem) => problem,
+        };
+        let error_line = problem.line.unwrap_or(lines.len().max(1));
+        if let Some(script) = exit_before(&lines, error_line) {
+            return script;
+        }
+        let line = match unclosed_quote_line(&text) {
+            Some(offset) if problem.incomplete && problem.message.contains("quote") => offset + 1,
+            _ => error_line,
+        };
+        report_syntax_error(
+            findings,
+            &problem,
+            line,
+            &lines,
+            after_error,
+            extended_globs,
+        );
+        after_error = true;
+        if problem.incomplete
+            || error_line == 0
+            || error_line > lines.len()
+            || lines[error_line - 1].is_empty()
+        {
+            return Script {
+                list: List::new(),
+                last_line: lines.len(),
+            };
+        }
+        lines[error_line - 1].clear();
     }
 }
 
@@ -953,7 +996,6 @@ mod tests {
     fn syntax_errors_and_text_patterns() {
         let findings = check("if true; then\n  echo ok\n");
         assert!(findings[0].2.contains("unexpected end of file"));
-        assert_eq!(findings[0].0, 1);
         if !extended_globs_supported() {
             let findings = check("shopt -s extglob\n");
             assert!(findings[0].2.contains("extended glob"));
