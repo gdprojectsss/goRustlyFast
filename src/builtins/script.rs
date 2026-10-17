@@ -53,19 +53,15 @@ pub(super) fn source(shell: &mut Shell, command: &str, args: &[String]) -> i32 {
     let saved_positional =
         (args.len() > 1).then(|| std::mem::replace(&mut shell.positional, args[1..].to_vec()));
     shell.source_depth += 1;
-    shell.call_frames.push((
-        "source".to_string(),
-        shell.current_line,
-        shell.source_stack.last().cloned(),
-    ));
     shell.source_stack.push(path.clone());
+    shell.push_frame("source", path.clone(), false);
     let line = shell.current_line;
     let status = shell.run_lines(|| reader.next_line());
     if shell.flow == Flow::Return {
         shell.flow = Flow::Normal;
     }
     shell.run_named_trap("RETURN");
-    shell.call_frames.pop();
+    shell.call_stack.pop();
     shell.current_line = line;
     shell.source_stack.pop();
     shell.source_depth -= 1;

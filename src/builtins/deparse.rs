@@ -235,7 +235,7 @@ impl Printer {
                 self.out.push_str(raw_word(expression).trim());
                 self.out.push_str(" ))");
             }
-            CommandKind::FunctionDefinition { name, body } => {
+            CommandKind::FunctionDefinition { name, body, .. } => {
                 let nested = function(name, body);
                 let indentation = INDENT.repeat(self.indent);
                 self.out
@@ -720,13 +720,23 @@ fn parameter_operation(operation: &ParameterOperation) -> String {
                 self::word(replacement)
             )
         }
-        ParameterOperation::ChangeCase { upper, all } => {
-            let symbol = if *upper { "^" } else { "," };
-            if *all {
+        ParameterOperation::ChangeCase {
+            upper,
+            toggle,
+            all,
+            pattern,
+        } => {
+            let symbol = match (*toggle, *upper) {
+                (true, _) => "~",
+                (false, true) => "^",
+                (false, false) => ",",
+            };
+            let repeated = if *all {
                 symbol.repeat(2)
             } else {
                 symbol.to_string()
-            }
+            };
+            format!("{repeated}{}", self::word(pattern))
         }
         ParameterOperation::Transform(letter) => format!("@{letter}"),
         ParameterOperation::Substring { offset, length } => match length {
@@ -743,7 +753,8 @@ mod tests {
 
     fn printed(source: &str) -> String {
         let list = parser::parse_from_line(source, &Default::default(), 1).unwrap();
-        let CommandKind::FunctionDefinition { name, body } = &list[0].first.commands[0].kind else {
+        let CommandKind::FunctionDefinition { name, body, .. } = &list[0].first.commands[0].kind
+        else {
             panic!("not a function");
         };
         function(name, body)

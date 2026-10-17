@@ -92,7 +92,7 @@ pub fn open(path: &str, flags: libc::c_int) -> io::Result<i32> {
 }
 
 pub fn temp_file_with(content: &[u8]) -> io::Result<i32> {
-    let directory = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
+    let directory = crate::bytes::env_var("TMPDIR").unwrap_or_else(|| "/tmp".into());
     let directory = directory.trim_end_matches('/');
     for attempt in 0..100 {
         let path = format!("{directory}/grfsh-{}-{attempt}", std::process::id());
@@ -584,7 +584,7 @@ pub fn terminal_width(fd: i32) -> Option<usize> {
     if result == 0 && size.ws_col > 0 {
         return Some(usize::from(size.ws_col));
     }
-    std::env::var("COLUMNS").ok()?.parse().ok()
+    crate::bytes::env_var("COLUMNS")?.parse().ok()
 }
 
 pub fn wait_readable(fd: i32, timeout: std::time::Duration) -> bool {

@@ -1,0 +1,16 @@
+indexed 1 set
+indexed 5 unset
+indexed i set
+indexed i+4 unset
+assoc k set
+assoc nokey unset
+assoc spaced key set
+indexed set
+assoc without element 0 unset
+indexed has elements
+indexed element 0 unset
+declared without value unset
+declared empty set
+test builtin indexed 1 set
+bracket assoc k set
+--- exit 0

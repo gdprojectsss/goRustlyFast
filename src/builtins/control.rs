@@ -60,32 +60,18 @@ pub(super) fn let_command(shell: &mut Shell, args: &[String]) -> i32 {
     i32::from(last == 0)
 }
 
-type Frame = (String, usize, Option<String>);
-
-fn caller_frames(shell: &Shell) -> Vec<Frame> {
-    let mut frames: Vec<Frame> = shell.call_frames.iter().rev().cloned().collect();
-    let sourced = shell
-        .call_frames
-        .iter()
-        .filter(|(name, _, _)| name == "source")
-        .count();
-    if shell.source_stack.len() > sourced {
-        frames.push(("main".to_string(), 0, None));
-    }
-    frames
-}
-
-fn source_name(source: &Option<String>) -> String {
-    source.clone().unwrap_or_else(|| "NULL".into())
-}
-
 pub(super) fn caller(shell: &Shell, args: &[String], out: &mut dyn std::io::Write) -> i32 {
-    let frames = caller_frames(shell);
+    let frames = shell.frames();
+    let source = |index: usize| {
+        frames
+            .get(index)
+            .map_or_else(|| "NULL".to_string(), |frame| frame.source.clone())
+    };
     let Some(argument) = args.first() else {
-        let Some((_, line, source)) = frames.first() else {
+        let Some(frame) = frames.first() else {
             return 1;
         };
-        let _ = writeln!(out, "{line} {}", source_name(source));
+        let _ = writeln!(out, "{} {}", frame.line, source(1));
         return 0;
     };
     let Ok(frame) = argument.parse::<usize>() else {
@@ -99,8 +85,8 @@ pub(super) fn caller(shell: &Shell, args: &[String], out: &mut dyn std::io::Writ
         return 2;
     };
     match (frames.get(frame), frames.get(frame + 1)) {
-        (Some((_, line, source)), Some((name, _, _))) => {
-            let _ = writeln!(out, "{line} {name} {}", source_name(source));
+        (Some(current), Some(calling)) => {
+            let _ = writeln!(out, "{} {} {}", current.line, calling.name, calling.source);
             0
         }
         _ => 1,

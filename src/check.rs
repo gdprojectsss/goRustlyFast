@@ -449,7 +449,7 @@ impl Sources {
             match part {
                 WordPart::Literal(text) | WordPart::Quoted(text) => out.push_str(text),
                 WordPart::Tilde(user) if user.is_empty() => {
-                    out.push_str(&std::env::var("HOME").ok()?);
+                    out.push_str(&crate::bytes::env_var("HOME")?);
                 }
                 WordPart::Parameter {
                     name,
@@ -483,7 +483,7 @@ impl Sources {
         }
         let mut places: Vec<PathBuf> = Vec::new();
         if !path.contains('/') {
-            let search = std::env::var("PATH").unwrap_or_default();
+            let search = crate::bytes::env_var("PATH").unwrap_or_default();
             places.extend(
                 search
                     .split(':')
@@ -618,7 +618,7 @@ fn record_definitions(
 ) {
     for item in list {
         for command in commands_of(item) {
-            if let CommandKind::FunctionDefinition { name, body } = &command.kind {
+            if let CommandKind::FunctionDefinition { name, body, .. } = &command.kind {
                 if in_function {
                     inner.insert(name.clone());
                 } else {
@@ -654,7 +654,7 @@ impl Checker<'_> {
     fn command(&mut self, command: &Command, line: usize, scope: &Scope) {
         match &command.kind {
             CommandKind::Simple(_) => self.simple(command, line, scope),
-            CommandKind::FunctionDefinition { name, body } => {
+            CommandKind::FunctionDefinition { name, body, .. } => {
                 if !scope.in_function {
                     self.defined.insert(name.clone());
                 }
@@ -845,7 +845,7 @@ pub fn run(paths: &[String]) -> i32 {
         crate::shell::error("--check: expected a script path");
         return 2;
     }
-    let path_commands = commands::on_path(&std::env::var("PATH").unwrap_or_default());
+    let path_commands = commands::on_path(&crate::bytes::env_var("PATH").unwrap_or_default());
     let mut status = 0;
     for path in paths {
         let source = match crate::bytes::read_file(path) {

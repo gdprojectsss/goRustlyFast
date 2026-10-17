@@ -1,0 +1,10 @@
+top: 0 [] [call_stack.sh] [0] here=call_stack.sh
+outer: 3 [names outer main] [call_stack.sh call_stack.sh call_stack.sh] [14 17 0]
+inner: 4 [names inner outer main] [call_stack.sh call_stack.sh call_stack.sh call_stack.sh] [10 15 17 0]
+caller: outer self: inner
+sourced: 3 [names source main] [call_stack.sh LIB call_stack.sh] [4 19 0]
+lib: 4 [names lib source main] [call_stack.sh LIB LIB call_stack.sh] [2 5 19 0]
+lib: 3 [names lib main] [call_stack.sh LIB call_stack.sh] [2 20 0]
+sourced: 4 [names source wrapper main] [call_stack.sh LIB call_stack.sh call_stack.sh] [4 21 22 0]
+lib: 5 [names lib source wrapper main] [call_stack.sh LIB LIB call_stack.sh call_stack.sh] [2 5 21 22 0]
+--- exit 0

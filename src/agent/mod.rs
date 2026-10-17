@@ -28,7 +28,7 @@ const ENVIRONMENT: &[(&str, &str)] = &[
 ];
 
 pub(crate) fn requested() -> bool {
-    std::env::var("GRFSH_AGENT").is_ok_and(|value| !value.is_empty() && value != "0")
+    crate::bytes::env_var("GRFSH_AGENT").is_some_and(|value| !value.is_empty() && value != "0")
 }
 
 pub(crate) fn prepare_environment() {

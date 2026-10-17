@@ -893,7 +893,7 @@ fn associative_arrays_and_declare() {
     let (out, _, _) = run_command(
         "declare -A cfg=([host]=db-1 [port]=5432); cfg[user]=admin; for k in \"${!cfg[@]}\"; do echo \"$k=${cfg[$k]}\"; done; echo ${#cfg[@]}",
     );
-    assert_eq!(out, "host=db-1\nport=5432\nuser=admin\n3\n");
+    assert_eq!(out, "port=5432\nhost=db-1\nuser=admin\n3\n");
 }
 
 #[test]
@@ -914,7 +914,7 @@ fn declaration_builtins_do_not_split_values() {
 #[test]
 fn readonly_and_integer_attributes() {
     let (out, error, _) = run_command(
-        "readonly PI=3.14; PI=3; echo $PI; declare -i n=2+3; n+=4; echo $n; declare -l low=MiXeD; echo $low",
+        "readonly PI=3.14; PI=3; echo skipped\necho $PI; declare -i n=2+3; n+=4; echo $n; declare -l low=MiXeD; echo $low",
     );
     assert!(error.contains("PI: readonly variable"));
     assert_eq!(out, "3.14\n9\nmixed\n");
@@ -1526,4 +1526,39 @@ fn select_is_a_loop_only_with_loop_syntax() {
     let (out, _, _) = run_command("set -- p q; select x\ndo echo \"got $x\"; break; done <<< 2");
     assert_eq!(out, "got q\n");
     let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn exported_functions_reach_child_shells() {
+    let binary = env!("CARGO_BIN_EXE_grfsh");
+    let (out, _, _) = run_command(&format!(
+        "greet() {{ echo \"hello $1\"; }}; export -f greet; {binary} -c 'greet child'; greet() {{ echo \"again $1\"; }}; {binary} -c 'greet redefined'; export -nf greet; {binary} -c 'greet gone' 2>/dev/null || echo unexported"
+    ));
+    assert_eq!(out, "hello child\nagain redefined\nunexported\n");
+}
+
+#[test]
+fn exported_function_environment_uses_bash_format() {
+    let (out, _, _) = run_command("f() { echo f; }; export -f f; env | grep '^BASH_FUNC_f%%='");
+    assert_eq!(out, "BASH_FUNC_f%%=() { echo f; }\n");
+}
+
+#[test]
+fn array_append_and_length_stay_fast() {
+    let started = std::time::Instant::now();
+    let (out, _, _) = run_command(
+        "a=(); for ((i = 0; i < 100000; i++)); do a+=(\"item $i\"); n=${#a[@]}; done; echo $n ${a[99999]}",
+    );
+    assert_eq!(out, "100000 item 99999\n");
+    assert!(started.elapsed() < std::time::Duration::from_secs(20));
+}
+
+#[test]
+fn readonly_assignment_aborts_only_its_line_in_command_strings() {
+    let (out, error, status) =
+        run_command("readonly R=1\nR=2; echo skipped\necho next $?\nunset R\necho unset $?");
+    assert!(error.contains("R: readonly variable"));
+    assert!(error.contains("unset: R: cannot unset: readonly variable"));
+    assert_eq!(out, "next 1\nunset 1\n");
+    assert_eq!(status, 0);
 }

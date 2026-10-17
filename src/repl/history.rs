@@ -654,7 +654,7 @@ fn fc_edit(shell: &mut Shell, entries: &[String], options: &FcOptions) -> i32 {
     if options.reverse {
         selected.reverse();
     }
-    let directory = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
+    let directory = crate::bytes::env_var("TMPDIR").unwrap_or_else(|| "/tmp".into());
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_nanos());

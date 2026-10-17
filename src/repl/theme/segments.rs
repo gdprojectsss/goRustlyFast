@@ -49,7 +49,7 @@ fn labelled(icon: &str, text: &str) -> String {
 }
 
 fn directory_text(theme: &Theme, directory: &str) -> String {
-    let home = std::env::var("HOME").unwrap_or_default();
+    let home = crate::bytes::env_var("HOME").unwrap_or_default();
     let shown = match directory.strip_prefix(&home) {
         Some(rest) if !home.is_empty() && (rest.is_empty() || rest.starts_with('/')) => {
             format!("~{rest}")
@@ -137,7 +137,7 @@ static VERSIONS: Mutex<Option<VersionCache>> = Mutex::new(None);
 fn version_key(tool: &'static str, directory: &str) -> VersionKey {
     VersionKey {
         tool,
-        path: std::env::var("PATH").unwrap_or_default(),
+        path: crate::bytes::env_var("PATH").unwrap_or_default(),
         directory: directory.to_string(),
     }
 }
@@ -211,7 +211,7 @@ pub(super) fn segment(name: &str, theme: &Theme, context: &PromptContext) -> Opt
             if !(remote || root || theme.context_always) {
                 return None;
             }
-            let user = std::env::var("USER").unwrap_or_else(|_| "user".into());
+            let user = crate::bytes::env_var("USER").unwrap_or_else(|| "user".into());
             let host = crate::sys::hostname().unwrap_or_default();
             let host = host.split('.').next().unwrap_or_default().to_string();
             (

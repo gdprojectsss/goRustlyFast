@@ -570,7 +570,10 @@ impl<'a> Parser<'a> {
 
     fn function_body(&mut self, name: String) -> Result<Command> {
         self.skip_newlines();
+        let start = self.tokens[self.position].start;
         let body = self.command()?;
+        let end = self.tokens[self.position.saturating_sub(1)].end.max(start);
+        let source = Rc::from(self.text(start, end).trim());
         if matches!(body.kind, CommandKind::Simple(_)) {
             return Err(ParseError::syntax(format!(
                 "{name}: function body must be a compound command"
@@ -580,6 +583,7 @@ impl<'a> Parser<'a> {
             kind: CommandKind::FunctionDefinition {
                 name,
                 body: Rc::new(body),
+                source,
             },
             redirects: Vec::new(),
         })

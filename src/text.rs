@@ -53,12 +53,12 @@ pub fn display_width(text: &str) -> usize {
 
 pub fn colors_enabled() -> bool {
     let no_color = std::env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty());
-    let dumb = std::env::var("TERM").is_ok_and(|term| term == "dumb");
+    let dumb = crate::bytes::env_var("TERM").is_some_and(|term| term == "dumb");
     !no_color && !dumb
 }
 
 pub fn truecolor() -> bool {
-    std::env::var("COLORTERM").is_ok_and(|value| {
+    crate::bytes::env_var("COLORTERM").is_some_and(|value| {
         let value = value.to_ascii_lowercase();
         value == "truecolor" || value == "24bit"
     })
@@ -67,7 +67,7 @@ pub fn truecolor() -> bool {
 pub fn unicode_terminal() -> bool {
     let locale = ["LC_ALL", "LC_CTYPE", "LANG"]
         .iter()
-        .find_map(|name| std::env::var(name).ok().filter(|value| !value.is_empty()));
+        .find_map(|name| crate::bytes::env_var(name).filter(|value| !value.is_empty()));
     match locale {
         Some(value) => {
             let value = value.to_ascii_lowercase();

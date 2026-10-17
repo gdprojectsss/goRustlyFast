@@ -40,7 +40,7 @@ fn sample_git() -> GitInfo {
 
 fn preview(theme: &Theme) -> String {
     let git = sample_git();
-    let home = std::env::var("HOME").unwrap_or_default();
+    let home = crate::bytes::env_var("HOME").unwrap_or_default();
     let directory = format!("{home}/projects/grfsh");
     let context = PromptContext {
         status: 0,

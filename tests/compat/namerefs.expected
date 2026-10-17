@@ -1,0 +1,28 @@
+5
+7
+x
+b 3 a b c
+a B c
+a B c d
+c
+a B C d
+v
+w
+set by function
+3 two
+7
+x still: 7
+r gone
+x after unset through reference: unset
+[]
+a
+declare -n r3="arr"
+value 1
+value 2
+r3 set
+c=2
+self reference status 1
+declare -n numref="number"
+declare -i number="5"
+i
+--- exit 0

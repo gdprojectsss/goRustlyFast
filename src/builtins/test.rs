@@ -46,7 +46,7 @@ pub(crate) fn unary(shell: &Shell, operator: &str, operand: &str) -> bool {
         "-n" => !operand.is_empty(),
         "-z" => operand.is_empty(),
         "-t" => operand.parse().is_ok_and(sys::isatty),
-        "-v" => shell.get_variable(operand).is_some(),
+        "-v" => shell.variable_is_set(operand),
         "-o" => option_enabled(shell, operand),
         _ => false,
     }

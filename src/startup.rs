@@ -8,7 +8,7 @@ pub(crate) fn initialize_environment() {
     if std::env::var_os("PATH").is_none() {
         unsafe { std::env::set_var("PATH", DEFAULT_PATH) };
     }
-    let level = next_shell_level(std::env::var("SHLVL").ok().as_deref());
+    let level = next_shell_level(crate::bytes::env_var("SHLVL").as_deref());
     unsafe { std::env::set_var("SHLVL", level.to_string()) };
 }
 

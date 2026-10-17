@@ -87,6 +87,10 @@ pub(crate) fn lossy(text: &str) -> String {
     String::from_utf8_lossy(&encode(text)).into_owned()
 }
 
+pub(crate) fn env_var<K: AsRef<OsStr>>(name: K) -> Option<String> {
+    std::env::var_os(name).map(|value| from_os(&value))
+}
+
 pub(crate) fn from_os(text: &OsStr) -> String {
     decode(text.as_bytes())
 }

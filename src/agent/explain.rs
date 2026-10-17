@@ -89,7 +89,7 @@ fn operands(args: &[String]) -> Vec<&String> {
 }
 
 fn risky_path(path: &str) -> bool {
-    let home = std::env::var("HOME").unwrap_or_default();
+    let home = crate::bytes::env_var("HOME").unwrap_or_default();
     let trimmed = path.trim_end_matches('/');
     matches!(trimmed, "" | "." | ".." | "~" | "*" | "/*" | "./*")
         || trimmed == home

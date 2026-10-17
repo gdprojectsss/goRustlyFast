@@ -1,0 +1,34 @@
+declare -A m=([c]="q\"z" [b]="2" [a]="x y" )
+declare -a ar=([0]="1" [1]="" [2]="a b")
+declare -A e
+declare -A e=()
+declare -a ea
+declare -a ea=()
+declare -i i="3"
+declare -l lo="abc"
+declare -u U="ABC"
+declare -rxl z="a"
+declare -ixu w="3"
+declare -ai ai=([0]="1" [1]="2")
+declare -- s2="a\$b\`c\"\\d"
+declare -- nl=$'a\nb'
+declare -- esc=$'tab\there\E[0m'
+declare -- ctl=$'\001\177'
+declare -- quote="quote's and \\ back"
+declare -r ro="1"
+declare -- un
+declare -- un="1"
+declare -i iu
+declare -a sp=([1]="y" [3]="x")
+missing status 1
+declare -- lv="1"
+unset
+declare -- unset_local
+local shadows: unset
+global again: 5
+declare -a x=([0]="a" [2]="c")
+unset array status 1
+declare -n nr
+declare -n nr="x"
+declare -r RO1="2"
+--- exit 0

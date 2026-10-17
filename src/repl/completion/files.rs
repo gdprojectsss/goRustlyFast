@@ -44,7 +44,7 @@ fn unquote(raw: &str) -> (Option<char>, String) {
 }
 
 fn variable(name: &str) -> String {
-    std::env::var(name).unwrap_or_default()
+    crate::bytes::env_var(name).unwrap_or_default()
 }
 
 fn expand_variables(text: &str) -> String {
@@ -80,7 +80,7 @@ fn expand_tilde(text: &str) -> String {
     };
     let (user, tail) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
     let home = if user.is_empty() {
-        std::env::var("HOME").ok()
+        crate::bytes::env_var("HOME")
     } else {
         crate::sys::user_home(user)
     };

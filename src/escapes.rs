@@ -177,7 +177,7 @@ fn extended_utf8(value: u32) -> Vec<u8> {
 
 pub(crate) fn needs_ansi_quote(text: &str) -> bool {
     text.chars()
-        .any(|character| character.is_ascii_control() || bytes::raw_byte(character).is_some())
+        .any(|character| character.is_control() || bytes::raw_byte(character).is_some())
 }
 
 pub(crate) fn ansi_quote(text: &str) -> String {
@@ -197,8 +197,11 @@ pub(crate) fn ansi_quote(text: &str) -> String {
             (None, '\x08') => quoted.push_str("\\b"),
             (None, '\x0b') => quoted.push_str("\\v"),
             (None, '\x0c') => quoted.push_str("\\f"),
-            (None, control) if control.is_ascii_control() => {
-                quoted.push_str(&format!("\\{:03o}", u32::from(control)));
+            (None, control) if control.is_control() => {
+                let mut buffer = [0u8; 4];
+                for byte in control.encode_utf8(&mut buffer).bytes() {
+                    quoted.push_str(&format!("\\{byte:03o}"));
+                }
             }
             (None, other) => quoted.push(other),
         }

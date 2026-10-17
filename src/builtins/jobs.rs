@@ -266,7 +266,9 @@ fn set_reported(shell: &mut Shell, variable: &Option<String>, pid: Option<sys::P
     if let Some(name) = variable {
         match pid {
             Some(pid) => shell.set_variable(name, &pid.to_string()),
-            None => shell.unset_variable(name),
+            None => {
+                shell.unset_variable(name);
+            }
         }
     }
 }

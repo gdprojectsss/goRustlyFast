@@ -1,0 +1,18 @@
+unset status 1
+unset -v status 1
+next line status 1
+subshell status 1
+prefix still runs
+declare status 1
+function subshell status 1
+for status 1
+read status 1
+export status 1
+after group
+after function
+readonly -f status 1
+invalid unset status 0
+not reached after empty key
+empty key status 0
+end
+--- exit 0

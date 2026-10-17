@@ -100,7 +100,7 @@ pub(super) fn git_refs() -> Vec<String> {
 }
 
 pub(super) fn cargo_subcommands() -> Vec<String> {
-    let path = std::env::var("PATH").unwrap_or_default();
+    let path = crate::bytes::env_var("PATH").unwrap_or_default();
     let installed = commands::on_path(&path)
         .into_iter()
         .filter_map(|name| name.strip_prefix("cargo-").map(String::from));

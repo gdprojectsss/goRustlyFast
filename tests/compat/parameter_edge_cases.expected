@@ -1,0 +1,22 @@
+indirect 1: hello
+indirect #: last
+indirect n: other
+<d><d><><><><a>
+<d><d><d><><><a>
+<d><d><d>< ><a>
+<x><alt><alt>
+<><>< ><><>
+<d><d><d>
+<x><d>
+a
+b
+c
+0000000    a  \t   b   ,   c  \n                                        
+a-b-c
+1
+C length 2
+LANG=C length 2
+default length 1
+150000 1 150000
+a1 a2 b1 b2 c1 c2
+--- exit 0

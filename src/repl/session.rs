@@ -481,7 +481,7 @@ impl Session {
         update_window_size(shell);
         let terminal = sys::terminal_state(0);
         let started = Instant::now();
-        let directory = std::env::var("PWD").unwrap_or_default();
+        let directory = crate::bytes::env_var("PWD").unwrap_or_default();
         shell.run_source(&line);
         self.duration = started.elapsed();
         if shell.last_status > 128
