@@ -22,9 +22,11 @@ sparse=([3]=x)
 show "${sparse[@]-d}" "${sparse-d}"
 s=a,b,c
 echo "${s//,/$'\n'}"
-echo "${s/,/$'\t'}" | od -An -c | tr -s ' ' | sed -n 1p
+echo "${s/,/$'\t'}" | od -An -c | tr -s ' ' | sed -n '1s/ *$//p'
 v=${s//,/$'-'}
 echo "$v"
+unset LC_ALL LC_CTYPE
+LANG=en_US.UTF-8
 s=é
 echo "${#s}"
 LC_ALL=C

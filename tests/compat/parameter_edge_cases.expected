@@ -11,7 +11,7 @@ indirect n: other
 a
 b
 c
- a \t b , c \n 
+ a \t b , c \n
 a-b-c
 1
 C length 2
