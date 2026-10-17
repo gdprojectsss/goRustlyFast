@@ -64,7 +64,7 @@ dependencies = [
 
 [[package]]
 name = "grfsh"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "libc",
  "rustyline",

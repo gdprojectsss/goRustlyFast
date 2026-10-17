@@ -18,23 +18,17 @@ const UNSUPPORTED_COMMANDS: &[(&str, &str)] = &[
     ("suspend", "suspend is not supported"),
     ("fc", "use history and !-expansion instead"),
     ("hash", "the command cache is managed automatically"),
-    (
-        "setopt",
-        "zsh only, see https://grf.sh/docs/migrating-from-zsh/",
-    ),
-    (
-        "unsetopt",
-        "zsh only, see https://grf.sh/docs/migrating-from-zsh/",
-    ),
-    (
-        "autoload",
-        "zsh only, see https://grf.sh/docs/migrating-from-zsh/",
-    ),
-    ("zstyle", "zsh only, completion is configured with complete"),
-    ("zmodload", "zsh only"),
-    ("compinit", "zsh only, completion is built in"),
-    ("compdef", "zsh only, use complete instead"),
-    ("zle", "zsh only, use bindkey instead"),
+];
+
+const ZSH_COMMANDS: &[(&str, &str)] = &[
+    ("setopt", "see https://grf.sh/docs/migrating-from-zsh/"),
+    ("unsetopt", "see https://grf.sh/docs/migrating-from-zsh/"),
+    ("autoload", "see https://grf.sh/docs/migrating-from-zsh/"),
+    ("zstyle", "completion is configured with complete"),
+    ("zmodload", "grfsh has no modules"),
+    ("compinit", "completion is built in"),
+    ("compdef", "use complete instead"),
+    ("zle", "use bindkey instead"),
 ];
 
 const ZSH_FILES: &[(&str, &str)] = &[
@@ -144,6 +138,14 @@ impl Checker<'_> {
                     line,
                     error: true,
                     message: format!("'{name}' is not supported: {hint}"),
+                });
+            } else if let Some((_, hint)) =
+                ZSH_COMMANDS.iter().find(|(command, _)| *command == name)
+            {
+                self.findings.push(Finding {
+                    line,
+                    error: false,
+                    message: format!("'{name}' only exists in zsh, {hint}"),
                 });
             } else if !self.known.contains(name) && !name.contains('/') && !name.contains('=') {
                 self.findings.push(Finding {
@@ -361,11 +363,9 @@ mod tests {
                 .iter()
                 .any(|finding| finding.0 == 2 && finding.2.contains("powerlevel10k"))
         );
-        assert!(
-            findings
-                .iter()
-                .any(|finding| finding.0 == 4 && finding.2.contains("zsh only"))
-        );
+        assert!(findings.iter().any(|finding| finding.0 == 4
+            && !finding.1
+            && finding.2.contains("only exists in zsh")));
         assert!(
             findings
                 .iter()
