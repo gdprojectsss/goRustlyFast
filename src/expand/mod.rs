@@ -31,13 +31,12 @@ pub fn words(shell: &mut Shell, words: &[Word]) -> Result<Vec<String>, String> {
             let expanded = argument_tildes(expanded);
             let expanded = expanded.as_ref();
             let mut fields = Fields::new(true);
-            fields.glob_options = glob::options(shell);
             fields.nullglob = shell.options.nullglob;
             fields.noglob = shell.options.noglob;
             fields.failglob = shell.options.failglob;
             fields.ifs = Rc::clone(&ifs);
             expand_into(shell, expanded, &mut fields)?;
-            out.extend(fields.finish()?);
+            out.extend(fields.finish(shell)?);
         }
     }
     Ok(out)
@@ -994,7 +993,6 @@ struct Fields {
     glob: bool,
     started: bool,
     pattern_mode: bool,
-    glob_options: glob::GlobOptions,
     nullglob: bool,
     noglob: bool,
     failglob: bool,
@@ -1040,7 +1038,6 @@ impl Fields {
             glob: false,
             started: false,
             pattern_mode: false,
-            glob_options: glob::GlobOptions::default(),
             nullglob: false,
             noglob: false,
             failglob: false,
@@ -1134,13 +1131,19 @@ impl Fields {
         }
     }
 
-    fn finish(mut self) -> Result<Vec<String>, String> {
+    fn finish(mut self, shell: &Shell) -> Result<Vec<String>, String> {
         self.break_field();
         let mut out = Vec::new();
+        let mut options = None;
         for (text, pattern, glob) in self.done {
             let glob = glob && !self.noglob && glob::has_magic(&pattern);
             match glob
-                .then(|| glob::expand(&pattern, &self.glob_options))
+                .then(|| {
+                    glob::expand(
+                        &pattern,
+                        options.get_or_insert_with(|| glob::options(shell)),
+                    )
+                })
                 .flatten()
             {
                 Some(matches) => out.extend(matches),
