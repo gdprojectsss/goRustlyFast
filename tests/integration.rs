@@ -865,3 +865,35 @@ fn help_lists_and_describes_builtins() {
     assert!(out.starts_with("getopts spec name [args]"));
     assert_eq!(status, 0);
 }
+
+#[test]
+fn help_points_to_the_docs_and_covers_time() {
+    let (out, _, status) = run_command("help");
+    assert!(out.contains("https://grf.sh/docs/"), "{out}");
+    assert_eq!(status, 0);
+    let (out, _, _) = run_command("help time timeout");
+    assert!(out.starts_with("time [-p] pipeline"), "{out}");
+    assert!(out.contains("--preserve-status"), "{out}");
+}
+
+#[test]
+fn verbose_and_noexec_options_in_scripts() {
+    let directory = std::env::temp_dir().join(format!("grfsh_options_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let script = directory.join("options.sh");
+    std::fs::write(
+        &script,
+        "set -v\necho shown\nset +v\nset -n\necho skipped\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_grfsh"))
+        .arg(&script)
+        .output()
+        .expect("failed to run grfsh");
+    std::fs::remove_dir_all(&directory).ok();
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "shown\n");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "echo shown\nset +v\n"
+    );
+}
