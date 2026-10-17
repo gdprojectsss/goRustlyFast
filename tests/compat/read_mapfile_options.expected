@@ -1,0 +1,39 @@
+[  a  b  ]
+[x]
+ready 0
+[ab
+] 0
+[éà]
+[éà]
+[a]
+[from fd 7]
+[given]
+[ab
+] 1
+[a\b]
+[abc]
+[a ][]
+[x:yz][]
+1 [a b]
+[ab]
+[ab]
+bad fd 1
+bad fd spec 1
+bad count 1
+[] 0
+[  a]
+[a
+b]
+3 a: c
+2 a b
+z z 1 2 3
+callback 1 [l2]
+callback 3 [l4]
+l1 l2 l3 l4 l5
+b
+fd nine
+bad option 2
+bad quantum 1
+1 2 then 3
+1 then 2 3 4
+--- exit 0

@@ -1,0 +1,22 @@
+7 14 0
+1
+10
+1
+8 16
+9 0
+1
+from builtin
+1
+0
+function cd /
+/
+wrapped: hello
+31
+31 outer
+32 inner
+31 outer
+33 main
+0 0
+top frame status 1
+invalid status 2
+--- exit 0

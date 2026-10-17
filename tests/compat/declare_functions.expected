@@ -1,0 +1,155 @@
+branches () 
+{ 
+    if [ "$1" = a ]; then
+        echo yes;
+    else
+        if [[ $1 == b* ]]; then
+            echo b;
+        else
+            echo no;
+        fi;
+    fi
+}
+cases () 
+{ 
+    case $1 in 
+        a | b)
+            echo ab
+        ;;
+        *)
+            echo other
+        ;&
+        x)
+
+        ;;&
+    esac
+}
+chained () 
+{ 
+    echo a && { 
+        echo b;
+        echo c
+    } || while true; do
+        break;
+    done | cat
+}
+docs () 
+{ 
+    local a=$(date) b=`pwd`;
+    cat <<EOF
+hello $a
+EOF
+
+    echo after
+    cat <<-'X'
+literal
+X
+
+}
+first () 
+{ 
+    echo one;
+    echo b | cat;
+    x=1 y=2 true > /dev/null 2>&1
+}
+keyword () 
+{ 
+    echo kw
+}
+loops () 
+{ 
+    for i in 1 "2 3" $x;
+    do
+        echo $i;
+    done;
+    for j in "$@";
+    do
+        :;
+    done;
+    while read -r line; do
+        echo "$line";
+    done < /dev/null;
+    until true; do
+        break;
+    done
+}
+mixed () 
+{ 
+    (( x++ ));
+    for ((i=0; i<3; i++))
+    do
+        echo $i;
+    done;
+    ! true && false || echo z;
+    { 
+        echo g
+    } > /dev/null;
+    ( echo sub )
+}
+nested () 
+{ 
+    if true; then
+        if false; then
+            :;
+        fi;
+    fi;
+    x=$((1+2));
+    [[ -n $x && $x != y ]] && echo k
+}
+quoting () 
+{ 
+    echo 'single' "double $x" \$escaped;
+    arr=(1 2 "3 4");
+    echo ${arr[@]} >> /dev/null
+}
+redirected () 
+{ 
+    echo a
+} 2> /dev/null
+second () 
+{ 
+    echo two
+}
+spaced () 
+{ 
+    echo one two;
+    if true; then
+        echo nested;
+    fi
+}
+subshell () 
+{ 
+    ( cd /tmp;
+    ls )
+}
+declare -f branches
+declare -f cases
+declare -f chained
+declare -f docs
+declare -f first
+declare -f keyword
+declare -f loops
+declare -f mixed
+declare -f nested
+declare -f quoting
+declare -f redirected
+declare -f second
+declare -f spaced
+declare -f subshell
+first
+status 1
+status 1
+second () 
+{ 
+    echo two
+}
+status 0
+second
+after
+literal
+second is a function
+second () 
+{ 
+    echo two
+}
+--- exit 0
