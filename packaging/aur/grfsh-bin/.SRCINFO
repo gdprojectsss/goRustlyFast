@@ -1,0 +1,18 @@
+pkgbase = grfsh-bin
+	pkgdesc = Small Unix shell with bash style scripting, typed table pipelines and an agent mode
+	pkgver = 1.0.0
+	pkgrel = 1
+	url = https://grf.sh
+	install = grfsh.install
+	arch = x86_64
+	arch = aarch64
+	license = MIT
+	provides = grfsh
+	conflicts = grfsh
+	source_x86_64 = grfsh-1.0.0-x86_64.tar.gz::https://github.com/gdprojectsss/goRustlyFast/releases/download/v1.0.0/grfsh-v1.0.0-x86_64-unknown-linux-musl.tar.gz
+	sha256sums_x86_64 = b3f6856a598a19625f3bdf5a04a7038245fee40f2690fc8501999cf62d18847d
+	depends_aarch64 = gcc-libs
+	source_aarch64 = grfsh-1.0.0-aarch64.tar.gz::https://github.com/gdprojectsss/goRustlyFast/releases/download/v1.0.0/grfsh-v1.0.0-aarch64-unknown-linux-gnu.tar.gz
+	sha256sums_aarch64 = 7f796ffa1849f3f13f47cd4bc3eb83d8b2a41f9f342a1b886632ad28e8ca3f7b
+
+pkgname = grfsh-bin

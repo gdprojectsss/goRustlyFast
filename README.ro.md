@@ -53,7 +53,7 @@ Depinde de doua crate-uri: `rustyline` pentru line editing si `libc` pentru proc
 curl -fsSL https://grf.sh | sh
 ```
 
-Scriptul alege binarul potrivit pentru sistemul tau, verifica suma SHA-256 si il instaleaza in `~/.local/bin`. Exista si pachete `.deb` si `.rpm`, un PKGBUILD pentru AUR, un flake Nix, o formula Homebrew si `cargo install --git https://github.com/gdprojectsss/goRustlyFast`. Detalii la [instalare](https://grf.sh/docs/installation/).
+Scriptul alege binarul potrivit pentru sistemul tau, verifica suma SHA-256 si il instaleaza in `~/.local/bin`. Exista si pachete `.deb` si `.rpm`, un PKGBUILD pentru AUR, un flake Nix, `brew install gdprojectsss/tap/grfsh` si `cargo install grfsh`. Detalii la [instalare](https://grf.sh/docs/installation/).
 
 ```
 grfsh                          shell interactiv

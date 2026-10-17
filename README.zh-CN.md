@@ -52,7 +52,7 @@ grfsh 在常见场景下使用与 bash 兼容的语法：管道、重定向、`i
 curl -fsSL https://grf.sh | sh
 ```
 
-脚本会为你的系统选择合适的二进制文件，校验 SHA-256 校验和，并安装到 `~/.local/bin`。另外还提供 `.deb` 和 `.rpm` 软件包、AUR 的 PKGBUILD、Nix flake、Homebrew 公式以及 `cargo install --git https://github.com/gdprojectsss/goRustlyFast`。详见[安装](https://grf.sh/zh-cn/docs/installation/)。
+脚本会为你的系统选择合适的二进制文件，校验 SHA-256 校验和，并安装到 `~/.local/bin`。另外还提供 `.deb` 和 `.rpm` 软件包、AUR 的 PKGBUILD、Nix flake、`brew install gdprojectsss/tap/grfsh` 以及 `cargo install grfsh`。详见[安装](https://grf.sh/zh-cn/docs/installation/)。
 
 ```
 grfsh                          交互式 shell

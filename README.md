@@ -61,12 +61,12 @@ The script picks the release binary for your system, checks its SHA-256 sum and 
 
 | System | Command |
 | --- | --- |
-| Homebrew | `brew install --HEAD ./packaging/homebrew/grfsh.rb` |
+| Homebrew | `brew install gdprojectsss/tap/grfsh` |
 | Debian, Ubuntu | `sudo apt install ./grfsh_1.0.0_amd64.deb` from a [release](https://github.com/gdprojectsss/goRustlyFast/releases) |
 | Fedora, RHEL | `sudo dnf install ./grfsh-1.0.0.x86_64.rpm` from a release |
 | Arch Linux | `makepkg -si` in [`packaging/aur/grfsh-bin`](packaging/aur/grfsh-bin) or [`grfsh-git`](packaging/aur/grfsh-git), AUR packages coming |
 | Nix | `nix run github:gdprojectsss/goRustlyFast` |
-| Cargo | `cargo install --git https://github.com/gdprojectsss/goRustlyFast` |
+| Cargo | `cargo install grfsh` |
 
 Release files come with a cosign signed `SHA256SUMS`, see [installation](https://grf.sh/docs/installation/).
 
