@@ -23,7 +23,8 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-24.04-arm
           - target: x86_64-apple-darwin
-            runner: macos-13
+            runner: macos-14
+            cross: true
           - target: aarch64-apple-darwin
             runner: macos-14
     runs-on: ${{ matrix.runner }}
@@ -37,7 +38,7 @@ jobs:
       - if: contains(matrix.target, 'musl')
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
-      - if: ${{ !contains(matrix.target, 'musl') }}
+      - if: ${{ !contains(matrix.target, 'musl') && !matrix.cross }}
         run: cargo test --release --target ${{ matrix.target }}
 
       - run: cargo build --release --target ${{ matrix.target }}
