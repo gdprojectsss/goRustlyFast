@@ -69,3 +69,42 @@ jobs:
 
       - name: Stay within twice the time of dash
         run: ./scripts/bench-check.sh
+
+  differential:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.os == 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install bash 5
+        if: runner.os == 'macOS'
+        run: |
+          brew install bash
+          echo "BASH_REFERENCE=$(brew --prefix)/bin/bash" >> "$GITHUB_ENV"
+
+      - name: Use the system bash
+        if: runner.os == 'Linux'
+        run: echo "BASH_REFERENCE=/bin/bash" >> "$GITHUB_ENV"
+
+      - run: cargo build --release
+
+      - name: Same output as bash on the differential corpus
+        run: ./scripts/differential.sh
+
+      - name: No new failures in the Oils spec tests
+        if: always()
+        run: ./scripts/spec-tests.sh --baseline scripts/spec-baseline.txt --quiet
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: spec-failures-${{ matrix.os }}
+          path: target/oils-spec/run/failures.txt

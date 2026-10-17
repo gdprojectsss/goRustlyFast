@@ -1,12 +1,17 @@
 name: Fuzz
 
 on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
   schedule:
     - cron: "0 3 * * 1"
   workflow_dispatch:
 
 jobs:
   fuzz:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -27,4 +32,26 @@ jobs:
         if: failure()
         with:
           name: crash-${{ matrix.target }}
+          path: fuzz/artifacts
+
+  run-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - run: cargo install cargo-fuzz
+
+      - name: Run untrusted scripts in the sandbox for two minutes
+        working-directory: fuzz
+        run: |
+          mkdir -p corpus/run
+          cp ../tests/compat/*.sh corpus/run/
+          cargo fuzz run -s none run corpus/run -- -max_total_time=120 -max_len=2048 -timeout=10 -rss_limit_mb=2048 -close_fd_mask=3
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: crash-run-smoke
           path: fuzz/artifacts
