@@ -5,7 +5,7 @@
   <img alt="grfsh" src=".github/assets/logo-light.svg" width="340">
 </picture>
 
-### A small Unix shell written in Rust.<br>Bash style scripting, job control, and pipelines that can carry typed tables.
+### A small Unix shell written in Rust.<br>Bash style scripting, job control, pipelines that carry typed tables, and an agent mode.
 
 <p>
   <a href="https://github.com/gdprojectsss/goRustlyFast/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/gdprojectsss/goRustlyFast/ci.yml?branch=main&style=flat-square&label=ci"></a>
@@ -13,12 +13,15 @@
   <a href="Cargo.toml"><img alt="Dependencies: 2" src="https://img.shields.io/badge/dependencies-2-22c55e?style=flat-square"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-6366f1?style=flat-square"></a>
   <a href="https://github.com/gdprojectsss/goRustlyFast/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/gdprojectsss/goRustlyFast?style=flat-square&color=22d3ee"></a>
-  <img alt="Status: experimental" src="https://img.shields.io/badge/status-experimental-f59e0b?style=flat-square">
+  <a href="https://github.com/gdprojectsss/goRustlyFast/releases"><img alt="Version 1.0" src="https://img.shields.io/badge/version-1.0-f97316?style=flat-square"></a>
+  <a href="https://grf.sh/docs/"><img alt="Docs" src="https://img.shields.io/badge/docs-grf.sh-0ea5e9?style=flat-square"></a>
 </p>
 
 <p>
   <a href="#quick-start"><b>Quick start</b></a> |
+  <a href="https://grf.sh/docs/"><b>Docs</b></a> |
   <a href="#table-pipelines"><b>Table pipelines</b></a> |
+  <a href="#for-coding-agents"><b>For agents</b></a> |
   <a href="#why-grfsh"><b>Why grfsh</b></a> |
   <a href="#performance"><b>Performance</b></a> |
   <a href="#how-it-works"><b>How it works</b></a> |
@@ -33,7 +36,7 @@
 <br>
 
 > [!NOTE]
-> grfsh is a young shell. It runs real scripts and makes a pleasant interactive shell, but it does not cover all of bash yet (extglob, coprocesses and `select` are missing). Run `grfsh --check script.sh` to see whether a script uses anything grfsh cannot run.
+> grfsh 1.0 runs real scripts and makes a pleasant interactive shell, but it does not cover all of bash: extended globs, name references, coprocesses and `select` are missing. Run `grfsh --check script.sh` to see whether a script uses anything grfsh cannot run, and see [compatibility](https://grf.sh/docs/compatibility/) for the full list.
 
 ## What is grfsh?
 
@@ -43,25 +46,39 @@ For interactive use it has autosuggestions from history, syntax highlighting, co
 
 It also has a set of table commands. `files`, `procs` and `load` produce typed tables, so `where size -gt 10mb` compares sizes and `where modified gt 2d` compares dates. When a table is piped into `grep` or `wc`, it is printed as plain text.
 
+For coding agents and CI jobs it has an agent mode: no pagers or prompts, output that stays within a budget, JSON results, a persistent session server, `timeout`, `explain` and exact file edits.
+
 It depends on two crates: `rustyline` for line editing and `libc` for processes and signals.
 
 ## Quick start
 
 ```sh
-cargo install --git https://github.com/gdprojectsss/goRustlyFast
-grfsh
+curl -fsSL https://grf.sh | sh
 ```
 
-Or build from a clone with `cargo build --release` and run `target/release/grfsh`. A Homebrew formula lives in [`packaging/homebrew`](packaging/homebrew/grfsh.rb): `brew install --HEAD ./packaging/homebrew/grfsh.rb`.
+The script picks the release binary for your system, checks its SHA-256 sum and installs to `~/.local/bin`. Other ways to install:
+
+| System | Command |
+| --- | --- |
+| Homebrew | `brew install --HEAD ./packaging/homebrew/grfsh.rb` |
+| Debian, Ubuntu | `sudo apt install ./grfsh_1.0.0_amd64.deb` from a [release](https://github.com/gdprojectsss/goRustlyFast/releases) |
+| Fedora, RHEL | `sudo dnf install ./grfsh-1.0.0.x86_64.rpm` from a release |
+| Arch Linux | `makepkg -si` in [`packaging/aur`](packaging/aur/PKGBUILD) |
+| Nix | `nix run github:gdprojectsss/goRustlyFast` |
+| Cargo | `cargo install --git https://github.com/gdprojectsss/goRustlyFast` |
+
+Release files come with a cosign signed `SHA256SUMS`, see [installation](https://grf.sh/docs/installation/).
 
 ```
 grfsh                          interactive shell
 grfsh -l                       login shell, reads ~/.grfsh_profile first
 grfsh script.sh [args...]      run a script
 grfsh -c 'command' [name args] run one command line
+grfsh --check script.sh        list what grfsh cannot run, without running it
+grfsh --agent -c 'command'     agent mode, see below
 ```
 
-To make it your login shell, add its path to `/etc/shells` and run `chsh -s "$(command -v grfsh)"`.
+To make it your login shell, add its path to `/etc/shells` and run `chsh -s "$(command -v grfsh)"`. The [login shell guide](https://grf.sh/docs/login-shell/) covers terminal apps too.
 
 A few things to try once it is running:
 
@@ -122,6 +139,38 @@ $ load servers.csv | group-by region
 
 </details>
 
+## For coding agents
+
+Agents, CI jobs and editor integrations drive a shell with nobody at the keyboard. grfsh has the pieces they need built in:
+
+```console
+$ grfsh --json -c 'cd /tmp; export MODE=test; echo built'
+{"status":0,"stdout":"built\n","stderr":"","duration_ms":0,"cwd":"/tmp","env":{"MODE":"test"},"truncated":false,"stdout_log":null,"stderr_log":null}
+
+$ build=; explain 'rm -rf $build/'
+   1  rm -rf /
+        warning: $build is empty or unset here
+        deletes recursively: /
+        warning: this deletes /
+        runs /bin/rm
+
+$ search -l old_name src | replace old_name new_name
+src/main.rs: 2 replacements
+```
+
+| Tool | What it does |
+| --- | --- |
+| `--agent` or `GRFSH_AGENT=1` | pagers become `cat`, colors and git prompts are off, and commands that try to read from the terminal fail at once |
+| output budget | long output keeps its first and last lines, the rest is saved to a file whose path is printed |
+| `--json` | status, stdout, stderr, duration, final directory and changed environment as one object |
+| `--serve socket`, `--client` | a shell that keeps its directory, variables and functions between requests, with per request timeouts |
+| `timeout` | stops the whole process group, works on macOS and with functions |
+| `explain`, `--explain` | shows each command after expansion without running it, and flags risky ones |
+| `replace`, `write-file` | exact, atomic edits that fail when the text is missing or appears twice |
+| `search`, `git-status`, `ports` | `.gitignore` aware search and status as tables |
+
+The [agent guide](https://grf.sh/docs/agents/) has the details, and [grf.sh/llms.txt](https://grf.sh/llms.txt) has the same instructions in a compact form for agents to read.
+
 ## Why grfsh?
 
 How grfsh compares to other shells on the features it focuses on:
@@ -134,6 +183,7 @@ How grfsh compares to other shells on the features it focuses on:
 | Autosuggestions out of the box               |    yes    |  no  | no  | yes  |   yes   |
 | Syntax highlighting out of the box           |    yes    |  no  | no  | yes  |   yes   |
 | Frecent directory jumping built in           |    yes    |  no  | no  |  no  |   no    |
+| Agent mode with JSON results                 |    yes    |  no  | no  |  no  |   no    |
 | Mature and battle tested                     |    no     | yes  | yes | yes  | partial |
 
 <sub>Compared with default installs, no plugins or extra configuration, as of October 2026. Corrections are welcome in an issue.</sub>
@@ -144,13 +194,13 @@ grfsh is measured against dash, bash and zsh with [hyperfine](https://github.com
 
 | Benchmark | grfsh | dash | bash | zsh |
 | --- | ---: | ---: | ---: | ---: |
-| Startup, `-c true` | 1.9 ms | 1.2 ms | 1.6 ms | 2.5 ms |
-| 20,000 iteration `while [ ]` loop | 34.5 ms | 36.7 ms | 65.7 ms | 34.7 ms |
-| Building a string 5,000 times | 17.3 ms | 49.8 ms | 911.8 ms | 106.2 ms |
-| Five stage pipeline | 4.4 ms | 3.7 ms | 4.2 ms | 5.3 ms |
-| 200 command substitutions | 84.5 ms | 73.2 ms | 83.0 ms | 90.5 ms |
+| Startup, `-c true` | 2.0 ms | 1.2 ms | 1.6 ms | 2.6 ms |
+| 20,000 iteration `while [ ]` loop | 31.6 ms | 37.0 ms | 65.9 ms | 35.1 ms |
+| Building a string 5,000 times | 16.6 ms | 50.2 ms | 917.0 ms | 107.8 ms |
+| Five stage pipeline | 4.6 ms | 3.7 ms | 4.2 ms | 5.5 ms |
+| 200 command substitutions | 87.0 ms | 77.1 ms | 83.9 ms | 91.7 ms |
 
-`test` and `[` are builtins, so conditions inside loops do not fork. The bash shipped with macOS is old; a current bash will do better on the string benchmark.
+`test` and `[` are builtins, so conditions inside loops do not fork. CI fails when a loop, string or substitution benchmark takes more than 1.5 times as long as dash. The bash shipped with macOS is old; a current bash will do better on the string benchmark.
 
 ## How it works
 
@@ -193,6 +243,26 @@ flowchart LR
 - Autosuggestions, highlighting, vi mode, `abbr`, `bindkey`
 - Completion for git, cargo, ssh, make and your own `complete` rules
 - `z`, "did you mean", `!!` expansion, `history --table`
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+**Agents**
+- `--agent`, `--json`, an output budget and job logs
+- `--serve` sessions with per request timeouts
+- `timeout`, `explain`, `replace`, `write-file`
+- `search`, `git-status` and `ports` as tables
+
+</td>
+<td valign="top">
+
+**Distribution**
+- Static musl Linux binary, macOS builds for Intel and Apple silicon
+- `.deb`, `.rpm`, AUR, Nix, Homebrew and an install script
+- Cosign signed checksums, a man page and docs at grf.sh
+- Fuzzed parser and a compatibility suite against bash 5.3
 
 </td>
 </tr>
@@ -272,7 +342,7 @@ export GRFSH_PROMPT='{blue}{cwd}{reset} {git}{red}{status}{reset}> '
 
 <br>
 
-`cd`, `z`, `pushd`, `popd`, `dirs`, `pwd`, `printf`, `test`, `[`, `trap`, `history`, `declare`, `typeset`, `readonly`, `getopts`, `shopt`, `mapfile`, `readarray`, `exec`, `umask`, `ulimit`, `abbr`, `bindkey`, `complete`, `configure-prompt`, `echo`, `exit`, `export`, `unset`, `local`, `set`, `shift`, `read`, `source`, `.`, `eval`, `alias`, `unalias`, `type`, `command`, `return`, `break`, `continue`, `jobs`, `fg`, `bg`, `wait`, `kill`, `true`, `false`, `:`
+`cd`, `z`, `pushd`, `popd`, `dirs`, `pwd`, `printf`, `test`, `[`, `trap`, `timeout`, `replace`, `write-file`, `explain`, `history`, `declare`, `typeset`, `readonly`, `getopts`, `shopt`, `mapfile`, `readarray`, `exec`, `umask`, `ulimit`, `abbr`, `bindkey`, `complete`, `configure-prompt`, `echo`, `exit`, `export`, `unset`, `local`, `set`, `shift`, `read`, `source`, `.`, `eval`, `alias`, `unalias`, `type`, `command`, `return`, `break`, `continue`, `jobs`, `fg`, `bg`, `wait`, `kill`, `true`, `false`, `:`
 
 </details>
 
@@ -289,6 +359,7 @@ src/
   builtins/  builtin commands
   table/     typed values, table commands, JSON and CSV, rendering
   repl/      prompt themes, completion, highlighting, keys, the interactive loop
+  agent/     agent mode, output budget, explain, the session server
   check.rs   static checks behind grfsh --check
 ```
 
@@ -310,8 +381,9 @@ src/
 | 5 | `getopts`, `declare`, associative arrays, `$PIPESTATUS`, `**` globs, process substitution | done |
 | 5 | Native themes, right and transient prompts, `configure-prompt`, hooks, vi mode | done |
 | 5 | `grfsh --check` for scripts, queryable history table, plugins, `abbr`, `bindkey` | done |
-| 6 | Conformance and differential tests, fuzzing, hardening | planned |
-| 6 | Releases, packages, man page, docs site, migration guides | planned |
+| 6 | Conformance and differential tests, fuzzing, hardening | done |
+| 6 | Releases, packages, man page, docs site, migration guides | done |
+| 6 | Agent mode, JSON results, sessions, `timeout`, `explain`, `replace`, `search` | done |
 
 ## Star history
 
@@ -324,7 +396,7 @@ src/
 
 ## Contributing
 
-Issues and pull requests are welcome. Before sending a change, run the same checks as CI:
+Issues and pull requests are welcome, see [CONTRIBUTING.md](CONTRIBUTING.md). Before sending a change, run the same checks as CI:
 
 ```sh
 cargo fmt --check

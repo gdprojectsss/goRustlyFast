@@ -5,18 +5,21 @@
   <img alt="grfsh" src=".github/assets/logo-light.svg" width="340">
 </picture>
 
-### Un shell Unix mic, scris in Rust.<br>Scripting in stil bash, job control si pipeline-uri care pot transporta tabele cu tipuri.
+### Un shell Unix mic, scris in Rust.<br>Scripting in stil bash, job control, pipeline-uri care transporta tabele cu tipuri si un mod pentru agenti.
 
 <p>
   <a href="https://github.com/gdprojectsss/goRustlyFast/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/gdprojectsss/goRustlyFast/ci.yml?branch=main&style=flat-square&label=ci"></a>
   <a href="https://www.rust-lang.org"><img alt="Rust 2024 edition" src="https://img.shields.io/badge/rust-2024_edition-f97316?style=flat-square&logo=rust&logoColor=white"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-6366f1?style=flat-square"></a>
-  <img alt="Status: experimental" src="https://img.shields.io/badge/status-experimental-f59e0b?style=flat-square">
+  <a href="https://github.com/gdprojectsss/goRustlyFast/releases"><img alt="Versiunea 1.0" src="https://img.shields.io/badge/version-1.0-f97316?style=flat-square"></a>
+  <a href="https://grf.sh/docs/"><img alt="Documentatie" src="https://img.shields.io/badge/docs-grf.sh-0ea5e9?style=flat-square"></a>
 </p>
 
 <p>
   <a href="#pornire-rapida"><b>Pornire rapida</b></a> |
+  <a href="https://grf.sh/docs/"><b>Documentatie</b></a> |
   <a href="#pipeline-uri-cu-tabele"><b>Pipeline-uri cu tabele</b></a> |
+  <a href="#pentru-agenti"><b>Pentru agenti</b></a> |
   <a href="#de-ce-grfsh"><b>De ce grfsh</b></a> |
   <a href="#roadmap"><b>Roadmap</b></a> |
   <a href="README.md"><b>English</b></a>
@@ -29,7 +32,7 @@
 <br>
 
 > [!NOTE]
-> grfsh e un shell tanar. Ruleaza scripturi reale si e placut de folosit interactiv, dar nu acopera inca tot ce face bash (lipsesc extglob, coprocesele si `select`). Ruleaza `grfsh --check script.sh` ca sa vezi daca un script foloseste ceva ce grfsh nu stie.
+> grfsh 1.0 ruleaza scripturi reale si e placut de folosit interactiv, dar nu acopera tot ce face bash: lipsesc extglob, referintele de nume, coprocesele si `select`. Ruleaza `grfsh --check script.sh` ca sa vezi daca un script foloseste ceva ce grfsh nu stie, iar lista completa e la [compatibilitate](https://grf.sh/docs/compatibility/).
 
 ## Ce e grfsh?
 
@@ -39,22 +42,25 @@ Pentru folosirea interactiva are autosugestii din istoric, syntax highlighting, 
 
 Mai are si un set de comenzi de tabel. `files`, `procs` si `load` scot tabele cu tipuri, asa ca `where size -gt 10mb` compara dimensiuni, iar `where modified gt 2d` compara date. Cand un tabel ajunge la `grep` sau `wc`, e afisat ca text simplu.
 
+Pentru agenti de programare si joburi de CI are un mod pentru agenti: fara pager-e sau intrebari, output tinut in buget, rezultate JSON, un server de sesiune persistent, `timeout`, `explain` si editari exacte de fisiere.
+
 Depinde de doua crate-uri: `rustyline` pentru line editing si `libc` pentru procese si semnale.
 
 ## Pornire rapida
 
 ```sh
-cargo install --git https://github.com/gdprojectsss/goRustlyFast
-grfsh
+curl -fsSL https://grf.sh | sh
 ```
 
-Sau dintr-o clona: `cargo build --release` si apoi `target/release/grfsh`. Exista si o formula Homebrew in [`packaging/homebrew`](packaging/homebrew/grfsh.rb): `brew install --HEAD ./packaging/homebrew/grfsh.rb`.
+Scriptul alege binarul potrivit pentru sistemul tau, verifica suma SHA-256 si il instaleaza in `~/.local/bin`. Exista si pachete `.deb` si `.rpm`, un PKGBUILD pentru AUR, un flake Nix, o formula Homebrew si `cargo install --git https://github.com/gdprojectsss/goRustlyFast`. Detalii la [instalare](https://grf.sh/docs/installation/).
 
 ```
 grfsh                          shell interactiv
 grfsh -l                       login shell, citeste intai ~/.grfsh_profile
 grfsh script.sh [args...]      ruleaza un script
 grfsh -c 'comanda' [nume args] ruleaza o singura linie
+grfsh --check script.sh        arata ce nu poate rula grfsh, fara sa ruleze nimic
+grfsh --agent -c 'comanda'     modul pentru agenti, vezi mai jos
 ```
 
 Ca sa-l folosesti ca login shell, adauga calea lui in `/etc/shells` si ruleaza `chsh -s "$(command -v grfsh)"`.
@@ -103,17 +109,34 @@ $ ps aux | where %CPU gt 5 | select PID %CPU COMMAND
 
 `<` si `>` sunt redirectari in orice shell, deci scrie `where size -gt 1mb` sau pune conditia intre ghilimele: `where 'size > 1mb'`. Valorile urmeaza tipul coloanei: `10mb` pentru dimensiuni, `2d` sau `2026-01-31` pentru date.
 
+## Pentru agenti
+
+Agentii, joburile de CI si integrarile din editoare folosesc shell-ul fara nimeni la tastatura. grfsh are din start ce le trebuie:
+
+| Unealta | Ce face |
+| --- | --- |
+| `--agent` sau `GRFSH_AGENT=1` | pager-ele devin `cat`, culorile si intrebarile git sunt oprite, iar comenzile care incearca sa citeasca din terminal esueaza imediat |
+| buget de output | output-ul lung pastreaza primele si ultimele linii, restul e salvat intr-un fisier a carui cale e afisata |
+| `--json` | status, stdout, stderr, durata, directorul final si variabilele de mediu schimbate, intr-un singur obiect |
+| `--serve socket`, `--client` | un shell care isi pastreaza directorul, variabilele si functiile intre cereri, cu timeout pe cerere |
+| `timeout` | opreste tot grupul de procese, merge si pe macOS si cu functii |
+| `explain`, `--explain` | arata fiecare comanda dupa expandare fara s-o ruleze si semnaleaza ce e riscant |
+| `replace`, `write-file` | editari exacte si atomice, care esueaza cand textul lipseste sau apare de doua ori |
+| `search`, `git-status`, `ports` | cautare care respecta `.gitignore` si status ca tabele |
+
+Detalii in [ghidul pentru agenti](https://grf.sh/docs/agents/), iar [grf.sh/llms.txt](https://grf.sh/llms.txt) are aceleasi instructiuni intr-o forma compacta, pentru agenti.
+
 ## Performanta
 
 Masurat contra dash, bash si zsh cu [hyperfine](https://github.com/sharkdp/hyperfine), poti reproduce cu `scripts/bench.sh`. Timp mediu pe un Apple M2 cu macOS 26.6, bash 3.2.57 de sistem, dash si zsh 5.9:
 
 | Test | grfsh | dash | bash | zsh |
 | --- | ---: | ---: | ---: | ---: |
-| Pornire, `-c true` | 1.9 ms | 1.2 ms | 1.6 ms | 2.5 ms |
-| Bucla `while [ ]` cu 20.000 de iteratii | 34.5 ms | 36.7 ms | 65.7 ms | 34.7 ms |
-| Construirea unui string de 5.000 de ori | 17.3 ms | 49.8 ms | 911.8 ms | 106.2 ms |
-| Pipeline cu cinci comenzi | 4.4 ms | 3.7 ms | 4.2 ms | 5.3 ms |
-| 200 de command substitutions | 84.5 ms | 73.2 ms | 83.0 ms | 90.5 ms |
+| Pornire, `-c true` | 2.0 ms | 1.2 ms | 1.6 ms | 2.6 ms |
+| Bucla `while [ ]` cu 20.000 de iteratii | 31.6 ms | 37.0 ms | 65.9 ms | 35.1 ms |
+| Construirea unui string de 5.000 de ori | 16.6 ms | 50.2 ms | 917.0 ms | 107.8 ms |
+| Pipeline cu cinci comenzi | 4.6 ms | 3.7 ms | 4.2 ms | 5.5 ms |
+| 200 de command substitutions | 87.0 ms | 77.1 ms | 83.9 ms | 91.7 ms |
 
 ## De ce grfsh?
 
@@ -127,6 +150,7 @@ Cum se compara grfsh cu alte shell-uri la lucrurile pe care se concentreaza:
 | Autosugestii din start                       |    da     |  nu  | nu  |  da  |   da    |
 | Syntax highlighting din start                |    da     |  nu  | nu  |  da  |   da    |
 | Sarit in directoare frecvente, integrat      |    da     |  nu  | nu  |  nu  |   nu    |
+| Mod pentru agenti cu rezultate JSON          |    da     |  nu  | nu  |  nu  |   nu    |
 | Matur si testat in productie                 |    nu     |  da  | da  |  da  | partial |
 
 <sub>Comparat cu instalarile implicite, fara plugin-uri sau configurari, in octombrie 2026. Corecturile sunt binevenite intr-un issue.</sub>
@@ -147,7 +171,7 @@ Pentru teme ruleaza `configure-prompt`, un wizard scurt cu previzualizari, sau a
 
 Fara fisier de tema, seteaza `GRFSH_PROMPT` ca sa-ti faci promptul cum vrei. Placeholder-e: `{user}`, `{host}`, `{cwd}`, `{branch}`, `{git}`, `{status}`, `{duration}`, `{jobs}` si culorile `{green}`, `{blue}`, `{magenta}`, `{cyan}`, `{red}`, `{yellow}`, `{bold}`, `{reset}`.
 
-Built-in-uri: `cd`, `z`, `pushd`, `popd`, `dirs`, `pwd`, `printf`, `test`, `[`, `trap`, `history`, `echo`, `exit`, `export`, `unset`, `local`, `set`, `shift`, `read`, `source`, `.`, `eval`, `alias`, `unalias`, `type`, `command`, `return`, `break`, `continue`, `jobs`, `fg`, `bg`, `wait`, `kill`, `true`, `false`, `:`
+Built-in-uri: `cd`, `z`, `pushd`, `popd`, `dirs`, `pwd`, `printf`, `test`, `[`, `trap`, `timeout`, `replace`, `write-file`, `explain`, `history`, `echo`, `exit`, `export`, `unset`, `local`, `set`, `shift`, `read`, `source`, `.`, `eval`, `alias`, `unalias`, `type`, `command`, `return`, `break`, `continue`, `jobs`, `fg`, `bg`, `wait`, `kill`, `true`, `false`, `:`
 
 ## Roadmap
 
@@ -165,12 +189,13 @@ Built-in-uri: `cd`, `z`, `pushd`, `popd`, `dirs`, `pwd`, `printf`, `test`, `[`, 
 | 5 | `getopts`, `declare`, array-uri asociative, `$PIPESTATUS`, glob `**`, process substitution | gata |
 | 5 | Teme native, prompt in dreapta si tranzitoriu, `configure-prompt`, hook-uri, mod vi | gata |
 | 5 | `grfsh --check`, istoric interogabil ca tabel, plugin-uri, `abbr`, `bindkey` | gata |
-| 6 | Teste de conformitate si diferentiale, fuzzing, intarire | planificat |
-| 6 | Release-uri, pachete, pagina man, site de documentatie, ghiduri de migrare | planificat |
+| 6 | Teste de conformitate si diferentiale, fuzzing, intarire | gata |
+| 6 | Release-uri, pachete, pagina man, site de documentatie, ghiduri de migrare | gata |
+| 6 | Mod pentru agenti, rezultate JSON, sesiuni, `timeout`, `explain`, `replace`, `search` | gata |
 
 ## Contributii
 
-Issue-urile si pull request-urile sunt binevenite. Inainte sa trimiti o schimbare, ruleaza aceleasi verificari ca CI-ul:
+Issue-urile si pull request-urile sunt binevenite, vezi [CONTRIBUTING.md](CONTRIBUTING.md). Inainte sa trimiti o schimbare, ruleaza aceleasi verificari ca CI-ul:
 
 ```sh
 cargo fmt --check
