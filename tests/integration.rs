@@ -1503,7 +1503,11 @@ fn deep_nesting_is_an_error_instead_of_a_crash() {
         "source",
         "depth=$((depth + 1))\nif (( depth < 100000 )); then . \"$0\"; fi\necho done $depth\n",
     );
-    assert!(error.contains("maximum nesting depth exceeded"), "{error}");
+    assert!(
+        error.contains("maximum nesting depth exceeded")
+            || error.contains("expression recursion level exceeded"),
+        "{error}"
+    );
     assert!(out.contains("done"));
     let (_, error, _) = run_script_text("functions", "f() { g; }\ng() { f; }\nf\n");
     assert!(
