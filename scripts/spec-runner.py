@@ -313,7 +313,7 @@ def stop(process):
 def run_case(shell_path, code, directory, environment, timeout):
     shutil.rmtree(directory, ignore_errors=True)
     os.makedirs(directory)
-    environment = dict(environment, SH=shell_path, TMP=directory)
+    environment = dict(environment, SH=shell_path, TMP=directory, HOME=directory)
     process = subprocess.Popen(
         [shell_path],
         stdin=subprocess.PIPE,
