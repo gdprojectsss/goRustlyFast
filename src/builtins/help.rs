@@ -73,6 +73,11 @@ const TOPICS: &[(&str, &str, &str)] = &[
         "set variable attributes or list variables",
     ),
     ("dirs", "dirs [-c | -v]", "show the directory stack"),
+    (
+        "disown",
+        "disown [-h] [-ar] [%job | pid ...]",
+        "remove jobs from the job table, or keep them on hangup with -h",
+    ),
     ("echo", "echo [-neE] [args]", "print arguments"),
     (
         "enable",
@@ -82,7 +87,7 @@ const TOPICS: &[(&str, &str, &str)] = &[
     ("eval", "eval [args]", "run arguments as shell code"),
     (
         "exec",
-        "exec [command] [redirections]",
+        "exec [-cl] [-a name] [command [args]] [redirections]",
         "replace the shell or redirect its fds",
     ),
     ("exit", "exit [n]", "leave the shell"),
@@ -118,8 +123,16 @@ const TOPICS: &[(&str, &str, &str)] = &[
         "history [n | -c | --table]",
         "show history, or the command log as a table",
     ),
-    ("jobs", "jobs", "list background and stopped jobs"),
-    ("kill", "kill [-signal] pid | %job", "send a signal"),
+    (
+        "jobs",
+        "jobs [-lprs] [%job ...]",
+        "list background and stopped jobs",
+    ),
+    (
+        "kill",
+        "kill [-s signal | -n number | -signal] pid | %job ... | -l [signal]",
+        "send a signal, or list signal names",
+    ),
     (
         "let",
         "let expression ...",
@@ -191,8 +204,8 @@ const TOPICS: &[(&str, &str, &str)] = &[
     ("test", "test expression", "evaluate a condition"),
     (
         "trap",
-        "trap [action] [signal ...]",
-        "run code on signals, EXIT or ERR",
+        "trap [-lp] [action] [signal ...]",
+        "run code on signals, EXIT, ERR, DEBUG or RETURN",
     ),
     (
         "timeout",
@@ -203,6 +216,11 @@ const TOPICS: &[(&str, &str, &str)] = &[
         "time",
         "time [-p] pipeline",
         "run a pipeline and report the elapsed, user and system time",
+    ),
+    (
+        "times",
+        "times",
+        "show user and system time used by the shell and its children",
     ),
     ("true", "true", "succeed"),
     (
@@ -231,7 +249,11 @@ const TOPICS: &[(&str, &str, &str)] = &[
         "unset [-f] name ...",
         "remove variables, array elements or functions",
     ),
-    ("wait", "wait [-n] [%job]", "wait for background jobs"),
+    (
+        "wait",
+        "wait [-fn] [-p var] [%job | pid ...]",
+        "wait for background jobs and return their status",
+    ),
     (
         "write-file",
         "write-file [-p] [-a] [-v] [-f] file < text",

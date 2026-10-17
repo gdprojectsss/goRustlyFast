@@ -145,6 +145,19 @@ pub fn read_all(fd: i32) -> Vec<u8> {
     out
 }
 
+pub fn read_to_end(fd: i32) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut buffer = [0u8; 8192];
+    loop {
+        let count = unsafe { libc::read(fd, buffer.as_mut_ptr().cast(), buffer.len()) };
+        if count > 0 {
+            out.extend_from_slice(&buffer[..count as usize]);
+        } else if count == 0 || io::Error::last_os_error().kind() != io::ErrorKind::Interrupted {
+            return out;
+        }
+    }
+}
+
 pub fn read_line(fd: i32) -> Option<String> {
     let mut line = Vec::new();
     let mut byte = [0u8; 1];
@@ -186,6 +199,7 @@ pub fn kill(pid: Pid, signal: libc::c_int) -> io::Result<()> {
 }
 
 pub fn init_job_control() -> Pid {
+    signals::release_kept_ignored();
     signals::set(libc::SIGHUP, signals::Disposition::Catch);
     unsafe {
         loop {
@@ -197,6 +211,7 @@ pub fn init_job_control() -> Pid {
         }
     }
     ignore_job_signals();
+    signals::set(libc::SIGPIPE, signals::Disposition::Ignore);
     let pid = getpid();
     setpgid(0, pid);
     tcsetpgrp(pid);
@@ -228,53 +243,104 @@ impl WaitResult {
     }
 }
 
-pub fn waitpid(pid: Pid, flags: libc::c_int) -> io::Result<Option<WaitResult>> {
+fn wait_once(pid: Pid, flags: libc::c_int) -> io::Result<Option<(Pid, WaitResult)>> {
     let mut raw_status = 0;
+    let result = unsafe { libc::waitpid(pid, &mut raw_status, flags) };
+    if result < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if result == 0 {
+        return Ok(None);
+    }
+    let outcome = if libc::WIFEXITED(raw_status) {
+        WaitResult::Exited(libc::WEXITSTATUS(raw_status))
+    } else if libc::WIFSIGNALED(raw_status) {
+        WaitResult::Signaled(libc::WTERMSIG(raw_status))
+    } else if libc::WIFSTOPPED(raw_status) {
+        WaitResult::Stopped
+    } else {
+        WaitResult::Continued
+    };
+    Ok(Some((result, outcome)))
+}
+
+pub fn waitpid(pid: Pid, flags: libc::c_int) -> io::Result<Option<WaitResult>> {
     loop {
-        let result = unsafe { libc::waitpid(pid, &mut raw_status, flags) };
-        if result < 0 {
-            let error = io::Error::last_os_error();
-            if error.kind() == io::ErrorKind::Interrupted {
-                continue;
-            }
-            return Err(error);
+        match wait_once(pid, flags) {
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            other => return other.map(|found| found.map(|(_, result)| result)),
         }
-        if result == 0 {
-            return Ok(None);
-        }
-        let result = if libc::WIFEXITED(raw_status) {
-            WaitResult::Exited(libc::WEXITSTATUS(raw_status))
-        } else if libc::WIFSIGNALED(raw_status) {
-            WaitResult::Signaled(libc::WTERMSIG(raw_status))
-        } else if libc::WIFSTOPPED(raw_status) {
-            WaitResult::Stopped
-        } else {
-            WaitResult::Continued
-        };
-        return Ok(Some(result));
     }
 }
 
-pub fn waitpid_any() -> io::Result<Option<(Pid, WaitResult)>> {
-    let mut raw_status = 0;
-    loop {
-        let result = unsafe { libc::waitpid(-1, &mut raw_status, 0) };
-        if result < 0 {
-            let error = io::Error::last_os_error();
-            if error.kind() == io::ErrorKind::Interrupted && !signals::any_pending() {
-                continue;
-            }
-            return Err(error);
-        }
-        let outcome = if libc::WIFEXITED(raw_status) {
-            WaitResult::Exited(libc::WEXITSTATUS(raw_status))
-        } else if libc::WIFSIGNALED(raw_status) {
-            WaitResult::Signaled(libc::WTERMSIG(raw_status))
-        } else {
-            WaitResult::Stopped
-        };
-        return Ok(Some((result, outcome)));
+pub fn waitpid_interruptible(pid: Pid, flags: libc::c_int) -> io::Result<Option<WaitResult>> {
+    wait_once(pid, flags).map(|found| found.map(|(_, result)| result))
+}
+
+pub fn block_signals() -> libc::sigset_t {
+    unsafe {
+        let mut all: libc::sigset_t = std::mem::zeroed();
+        let mut previous: libc::sigset_t = std::mem::zeroed();
+        libc::sigfillset(&mut all);
+        libc::sigprocmask(libc::SIG_BLOCK, &all, &mut previous);
+        previous
     }
+}
+
+pub fn set_signal_mask(mask: &libc::sigset_t) {
+    unsafe {
+        libc::sigprocmask(libc::SIG_SETMASK, mask, std::ptr::null_mut());
+    }
+}
+
+pub fn suspend(mask: &libc::sigset_t) {
+    unsafe {
+        libc::sigsuspend(mask);
+    }
+}
+
+pub fn die_by_signal(signal: libc::c_int) -> ! {
+    let _ = io::stdout().flush();
+    let _ = io::stderr().flush();
+    signals::set(signal, signals::Disposition::Default);
+    unsafe {
+        let mut set: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut set);
+        libc::sigaddset(&mut set, signal);
+        libc::sigprocmask(libc::SIG_UNBLOCK, &set, std::ptr::null_mut());
+        libc::kill(libc::getpid(), signal);
+        libc::_exit(128 + signal)
+    }
+}
+
+pub fn default_pipe_signal() {
+    signals::set(libc::SIGPIPE, signals::Disposition::Default);
+}
+
+pub fn signal_description(signal: libc::c_int) -> String {
+    let text = unsafe { libc::strsignal(signal) };
+    if text.is_null() {
+        return format!("Signal {signal}");
+    }
+    unsafe { std::ffi::CStr::from_ptr(text) }
+        .to_string_lossy()
+        .into_owned()
+}
+
+pub fn process_times() -> [f64; 4] {
+    let seconds = |time: libc::timeval| time.tv_sec as f64 + time.tv_usec as f64 / 1_000_000.0;
+    let mut times = [0.0; 4];
+    for (index, who) in [libc::RUSAGE_SELF, libc::RUSAGE_CHILDREN]
+        .into_iter()
+        .enumerate()
+    {
+        let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+        if unsafe { libc::getrusage(who, &mut usage) } == 0 {
+            times[index * 2] = seconds(usage.ru_utime);
+            times[index * 2 + 1] = seconds(usage.ru_stime);
+        }
+    }
+    times
 }
 
 pub fn exit_now(code: i32) -> ! {
@@ -304,9 +370,34 @@ pub fn ignore_job_signals() {
 
 pub fn reset_child_signals() {
     for signal in JOB_SIGNALS.into_iter().chain([libc::SIGPIPE]) {
-        unsafe {
-            libc::signal(signal, libc::SIG_DFL);
+        signals::set(signal, signals::Disposition::Default);
+    }
+}
+
+fn ignored_on_entry(signal: libc::c_int) -> bool {
+    unsafe {
+        let mut current: libc::sigaction = std::mem::zeroed();
+        libc::sigaction(signal, std::ptr::null(), &mut current);
+        current.sa_sigaction == libc::SIG_IGN
+    }
+}
+
+pub fn init_shell_signals(agent: bool) {
+    for signal in [
+        libc::SIGHUP,
+        libc::SIGINT,
+        libc::SIGTERM,
+        libc::SIGALRM,
+        libc::SIGUSR1,
+        libc::SIGUSR2,
+    ] {
+        if ignored_on_entry(signal) {
+            signals::keep_ignored(signal);
         }
+    }
+    signals::set(libc::SIGQUIT, signals::Disposition::Ignore);
+    if !agent {
+        default_pipe_signal();
     }
 }
 
@@ -327,7 +418,8 @@ pub fn execv(path: &str, argv: &[String]) -> io::Error {
 
 pub fn signal_number(name: &str) -> Option<libc::c_int> {
     if let Ok(number) = name.parse() {
-        return Some(number);
+        let known = number == 0 || SIGNALS.iter().any(|&(_, signal)| signal == number);
+        return known.then_some(number);
     }
     let name = name.to_ascii_uppercase();
     let name = name.strip_prefix("SIG").unwrap_or(&name);
@@ -344,34 +436,68 @@ pub fn signal_name(number: libc::c_int) -> Option<&'static str> {
         .map(|&(name, _)| name)
 }
 
-pub fn signal_description(signal: libc::c_int) -> String {
-    let text = unsafe { libc::strsignal(signal) };
-    if text.is_null() {
-        return format!("Signal {signal}");
-    }
-    unsafe { std::ffi::CStr::from_ptr(text) }
-        .to_string_lossy()
-        .into_owned()
-}
-
 pub const SIGNALS: &[(&str, libc::c_int)] = &[
     ("HUP", libc::SIGHUP),
     ("INT", libc::SIGINT),
     ("QUIT", libc::SIGQUIT),
+    ("ILL", libc::SIGILL),
+    ("TRAP", libc::SIGTRAP),
+    ("ABRT", libc::SIGABRT),
+    #[cfg(any(target_os = "macos", target_os = "freebsd"))]
+    ("EMT", libc::SIGEMT),
+    ("FPE", libc::SIGFPE),
     ("KILL", libc::SIGKILL),
-    ("USR1", libc::SIGUSR1),
-    ("USR2", libc::SIGUSR2),
+    ("BUS", libc::SIGBUS),
+    ("SEGV", libc::SIGSEGV),
+    ("SYS", libc::SIGSYS),
     ("PIPE", libc::SIGPIPE),
     ("ALRM", libc::SIGALRM),
     ("TERM", libc::SIGTERM),
-    ("CHLD", libc::SIGCHLD),
-    ("CONT", libc::SIGCONT),
+    ("URG", libc::SIGURG),
     ("STOP", libc::SIGSTOP),
     ("TSTP", libc::SIGTSTP),
+    ("CONT", libc::SIGCONT),
+    ("CHLD", libc::SIGCHLD),
     ("TTIN", libc::SIGTTIN),
     ("TTOU", libc::SIGTTOU),
+    ("IO", libc::SIGIO),
+    ("XCPU", libc::SIGXCPU),
+    ("XFSZ", libc::SIGXFSZ),
+    ("VTALRM", libc::SIGVTALRM),
+    ("PROF", libc::SIGPROF),
     ("WINCH", libc::SIGWINCH),
+    #[cfg(any(target_os = "macos", target_os = "freebsd"))]
+    ("INFO", libc::SIGINFO),
+    #[cfg(target_os = "linux")]
+    ("STKFLT", libc::SIGSTKFLT),
+    #[cfg(target_os = "linux")]
+    ("PWR", libc::SIGPWR),
+    ("USR1", libc::SIGUSR1),
+    ("USR2", libc::SIGUSR2),
 ];
+
+pub fn signals_by_number() -> Vec<(&'static str, libc::c_int)> {
+    let mut signals = SIGNALS.to_vec();
+    signals.sort_by_key(|&(_, number)| number);
+    signals
+}
+
+pub fn signal_listing() -> String {
+    let signals = signals_by_number();
+    let mut text = String::new();
+    for (position, (name, number)) in signals.iter().enumerate() {
+        text.push_str(&format!("{number:2}) SIG{name}"));
+        text.push(if (position + 1).is_multiple_of(5) {
+            '\n'
+        } else {
+            '\t'
+        });
+    }
+    if !signals.len().is_multiple_of(5) {
+        text.push('\n');
+    }
+    text
+}
 
 pub fn user_home(user: &str) -> Option<String> {
     let c_path = CString::new(user).ok()?;
@@ -451,20 +577,6 @@ pub fn terminal_width(fd: i32) -> Option<usize> {
         return Some(usize::from(size.ws_col));
     }
     std::env::var("COLUMNS").ok()?.parse().ok()
-}
-
-pub fn cpu_times() -> (f64, f64) {
-    let seconds = |time: libc::timeval| time.tv_sec as f64 + time.tv_usec as f64 / 1_000_000.0;
-    let mut user = 0.0;
-    let mut system = 0.0;
-    for who in [libc::RUSAGE_SELF, libc::RUSAGE_CHILDREN] {
-        let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
-        if unsafe { libc::getrusage(who, &mut usage) } == 0 {
-            user += seconds(usage.ru_utime);
-            system += seconds(usage.ru_stime);
-        }
-    }
-    (user, system)
 }
 
 pub fn wait_readable(fd: i32, timeout: std::time::Duration) -> bool {

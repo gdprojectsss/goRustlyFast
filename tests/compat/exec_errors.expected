@@ -1,0 +1,19 @@
+not found 127
+1
+missing path 127
+directory 126
+no shebang 1 one
+plain script 4
+binary 126
+not executable 126
+closed stdout 1
+closed printf 1
+child writes
+scoped fd 1
+here string
+6000
+2
+substitution value=y
+[z]
+renamed
+--- exit 0

@@ -161,6 +161,10 @@ impl<W: Write> Encoder<W> {
         }
     }
 
+    pub(crate) fn inner_mut(&mut self) -> &mut W {
+        &mut self.inner
+    }
+
     fn translate(&mut self, input: &[u8]) -> Vec<u8> {
         let mut joined = std::mem::take(&mut self.pending);
         joined.extend_from_slice(input);

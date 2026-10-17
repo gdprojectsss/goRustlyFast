@@ -204,6 +204,7 @@ pub struct Shell {
     pub reading_stdin: bool,
     pub call_frames: Vec<(String, usize, Option<String>)>,
     pub disabled_builtins: Vec<String>,
+    pub trap_depth: u32,
 }
 
 impl Shell {
@@ -257,6 +258,7 @@ impl Shell {
             reading_stdin: false,
             call_frames: Vec::new(),
             disabled_builtins: Vec::new(),
+            trap_depth: 0,
             directories: DirectoryHistory::new(
                 std::env::var_os("HOME")
                     .map(|home| std::path::Path::new(&home).join(".grfsh_dirs")),

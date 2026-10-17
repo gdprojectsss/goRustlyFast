@@ -61,13 +61,14 @@ pub(super) fn source(shell: &mut Shell, command: &str, args: &[String]) -> i32 {
     shell.source_stack.push(path.clone());
     let line = shell.current_line;
     let status = shell.run_lines(|| reader.next_line());
-    shell.current_line = line;
-    shell.source_stack.pop();
-    shell.call_frames.pop();
-    shell.source_depth -= 1;
     if shell.flow == Flow::Return {
         shell.flow = Flow::Normal;
     }
+    shell.run_named_trap("RETURN");
+    shell.call_frames.pop();
+    shell.current_line = line;
+    shell.source_stack.pop();
+    shell.source_depth -= 1;
     if let Some(positional) = saved_positional {
         shell.positional = positional;
     }

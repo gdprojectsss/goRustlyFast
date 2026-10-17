@@ -76,6 +76,7 @@ pub fn run() -> i32 {
     }
     invocation.login |= invoked_as.starts_with('-');
     invocation.agent |= crate::agent::requested();
+    sys::init_shell_signals(invocation.agent);
     crate::startup::initialize_environment();
     let mut shell = Shell::new();
     if !invoked_as.is_empty() {

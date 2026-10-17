@@ -169,7 +169,7 @@ fn ctrl_z_stops_and_fg_resumes() {
     terminal.wait_for("Stopped");
     terminal.pump(Duration::from_millis(200));
     terminal.send("jobs\r");
-    terminal.wait_for("Stopped    sleep 30");
+    terminal.wait_for(&format!("{:<27}sleep 30", "Stopped"));
     terminal.send("fg\r");
     terminal.wait_for("sleep 30\r\n");
     terminal.pump(Duration::from_millis(400));
@@ -177,6 +177,20 @@ fn ctrl_z_stops_and_fg_resumes() {
     terminal.wait_for("^C");
     terminal.send("echo after=$?\r");
     terminal.wait_for("after=130");
+}
+
+#[test]
+fn ctrl_c_interrupts_wait() {
+    let mut terminal = Terminal::start(&[]);
+    terminal.send("sleep 3 &\r");
+    terminal.pump(Duration::from_millis(300));
+    terminal.send("wait\r");
+    terminal.pump(Duration::from_millis(400));
+    terminal.send("\x03");
+    terminal.send("echo waited=$?\r");
+    terminal.wait_for("waited=130");
+    terminal.send("kill %1\r");
+    terminal.pump(Duration::from_millis(200));
 }
 
 #[test]

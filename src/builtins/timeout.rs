@@ -21,7 +21,7 @@ pub(crate) fn parse_duration(text: &str) -> Option<Duration> {
         'd' => value * 86400.0,
         _ => value,
     };
-    Some(Duration::from_secs_f64(seconds))
+    Some(Duration::try_from_secs_f64(seconds).unwrap_or(Duration::MAX))
 }
 
 fn quote(text: &str) -> String {
@@ -174,7 +174,7 @@ pub(super) fn run(shell: &mut Shell, args: &[String]) -> i32 {
     }
     let status = result.map_or(125, WaitResult::status);
     match signaled_at {
-        Some(_) if killed => 137,
+        Some(_) if killed || settings.signal == libc::SIGKILL => 137,
         Some(_) if !settings.preserve_status => 124,
         _ => status,
     }
@@ -191,5 +191,6 @@ mod tests {
         assert_eq!(parse_duration("1h"), Some(Duration::from_secs(3600)));
         assert_eq!(parse_duration("x"), None);
         assert_eq!(parse_duration("-1"), None);
+        assert_eq!(parse_duration("1e20"), Some(Duration::MAX));
     }
 }
