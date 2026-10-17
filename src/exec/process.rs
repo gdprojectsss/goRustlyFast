@@ -274,7 +274,9 @@ impl Shell {
                     return String::new();
                 }
             };
-            return match crate::bytes::read_file(&path) {
+            return match crate::sandbox::check_read(&path)
+                .and_then(|()| crate::bytes::read_file(&path))
+            {
                 Ok(mut text) => {
                     while text.ends_with('\n') {
                         text.pop();

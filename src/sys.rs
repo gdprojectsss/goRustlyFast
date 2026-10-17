@@ -24,7 +24,10 @@ pub fn error_message(error: &io::Error) -> String {
 pub fn fork() -> io::Result<Pid> {
     let _ = io::stdout().flush();
     let _ = io::stderr().flush();
-    check(unsafe { libc::fork() })
+    crate::sandbox::before_fork()?;
+    let pid = check(unsafe { libc::fork() })?;
+    crate::sandbox::after_fork(pid);
+    Ok(pid)
 }
 
 pub fn pipe() -> io::Result<(i32, i32)> {
@@ -78,6 +81,7 @@ pub fn restore_fds(saved: Vec<(i32, Option<i32>)>) {
 pub fn open(path: &str, flags: libc::c_int) -> io::Result<i32> {
     let c_path = CString::new(crate::bytes::encode(path))
         .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+    crate::sandbox::check_open(path, flags)?;
     check(unsafe {
         libc::open(
             c_path.as_ptr(),
@@ -195,6 +199,7 @@ pub fn setpgid(pid: Pid, pgid: Pid) {
 }
 
 pub fn kill(pid: Pid, signal: libc::c_int) -> io::Result<()> {
+    crate::sandbox::check_kill(pid)?;
     check(unsafe { libc::kill(pid, signal) }).map(|_| ())
 }
 
@@ -402,6 +407,9 @@ pub fn init_shell_signals(agent: bool) {
 }
 
 pub fn execv(path: &str, argv: &[String]) -> io::Error {
+    if let Err(error) = crate::sandbox::check_exec() {
+        return error;
+    }
     let Ok(c_path) = CString::new(crate::bytes::encode(path)) else {
         return io::Error::from(io::ErrorKind::InvalidInput);
     };
