@@ -1,3 +1,4 @@
+mod files;
 mod sources;
 
 use rustyline::completion::Pair;
@@ -141,7 +142,9 @@ pub(super) fn target_with(request: &Request, names: &ShellNames) -> Target {
 }
 
 pub(super) fn target(request: &Request) -> Target {
-    if let Some(prefix) = request.current.strip_prefix('$') {
+    if let Some(prefix) = request.current.strip_prefix('$')
+        && !prefix.contains('/')
+    {
         return Target::Variables {
             prefix: prefix.to_string(),
         };
@@ -207,6 +210,28 @@ pub(super) fn candidates(target: &Target, current: &str, names: &ShellNames) -> 
     matches.into_iter().map(pair).collect()
 }
 
+pub(super) fn files(raw: &str, directories_only: bool) -> Vec<Pair> {
+    files::complete(raw, directories_only)
+}
+
+pub(super) fn finish_single(mut pairs: Vec<Pair>) -> Vec<Pair> {
+    if let [only] = pairs.as_mut_slice()
+        && !only.replacement.ends_with(['/', ':', '='])
+    {
+        if let Some(open) = only
+            .replacement
+            .chars()
+            .next()
+            .filter(|first| *first == '\'' || *first == '"')
+            && only.replacement.matches(open).count() % 2 == 1
+        {
+            only.replacement.push(open);
+        }
+        only.replacement.push(' ');
+    }
+    pairs
+}
+
 fn pair(text: String) -> Pair {
     Pair {
         display: text.clone(),
@@ -255,6 +280,7 @@ mod tests {
                 prefix: "HO".into()
             }
         );
+        assert_eq!(target(&analyze("ls $HOME/pro")), Target::Files);
         assert_eq!(target(&analyze("sudo vi")), Target::Commands);
         assert_eq!(target(&analyze("FOO=1 cd sr")), Target::Directories);
         assert_eq!(target(&analyze("fg %")), Target::Jobs);

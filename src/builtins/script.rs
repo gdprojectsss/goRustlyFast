@@ -45,6 +45,10 @@ pub(super) fn source(shell: &mut Shell, command: &str, args: &[String]) -> i32 {
             return 1;
         }
     };
+    let contents = crate::bytes::read_file(path).unwrap_or_default();
+    if let Some(hint) = crate::repl::startup_file_hint(path, &contents) {
+        shell::error(hint);
+    }
 
     let saved_positional =
         (args.len() > 1).then(|| std::mem::replace(&mut shell.positional, args[1..].to_vec()));

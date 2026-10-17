@@ -65,6 +65,7 @@ const BUILTINS: &[&str] = &[
     "popd",
     "dirs",
     "history",
+    "fc",
     "declare",
     "typeset",
     "readonly",
@@ -163,6 +164,10 @@ pub(crate) fn run(shell: &mut Shell, argv: &[String]) -> i32 {
         "popd" => directory::popd(shell, &mut out),
         "dirs" => directory::dirs(shell, args, &mut out),
         "history" => output::history(shell, args, &mut out),
+        "fc" => {
+            drop(out);
+            return crate::repl::fc(shell, args);
+        }
         "read" => input::read(shell, args),
         "source" | "." => {
             drop(out);

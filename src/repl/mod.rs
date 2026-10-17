@@ -1,29 +1,27 @@
 mod completion;
+mod foreign;
 mod git;
 mod helper;
 mod highlight;
 mod history;
 pub(crate) mod keys;
 mod prompt;
+mod session;
 pub(crate) mod theme;
 
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
-
-use rustyline::config::Configurer;
-use rustyline::error::ReadlineError;
-use rustyline::{Cmd, EditMode, Editor, EventHandler};
+use std::time::Duration;
 
 use crate::builtins;
 use crate::cli::{self, Invocation, Mode};
-use crate::shell::{self, Flow, KeyBinding, Shell};
-use crate::signals;
+use crate::shell::{self, Flow, Shell};
 use crate::sys;
 use crate::table;
 
 use completion::ShellNames;
-use helper::ShellHelper;
-use prompt::PromptState;
+pub(crate) use foreign::startup_file_hint;
+pub(crate) use history::fc;
+use session::interactive;
 
 fn install_panic_handler() {
     std::panic::set_hook(Box::new(|info| {
@@ -373,183 +371,6 @@ fn warn_once(message: String) {
     if !warned.contains(&message) {
         shell::error(&message);
         warned.push(message);
-    }
-}
-
-fn interactive(shell: &mut Shell) {
-    let mut editor = Editor::new().expect("failed to initialize editor");
-    editor.set_helper(Some(ShellHelper::new()));
-    let mut applied_bindings = 0;
-    let mut vi_mode = false;
-    let history = history_path();
-    let _ = editor.load_history(&history);
-    shell.history = editor
-        .history()
-        .iter()
-        .map(|entry| entry.to_string())
-        .collect();
-    let mut warned_about_jobs = false;
-    let mut duration = Duration::ZERO;
-    let mut git_prompt = git::GitPrompt::default();
-    let mut themes = theme::ThemeCache::default();
-
-    loop {
-        shell.reap_jobs();
-        shell.run_hook("precmd", &[]);
-        if shell.bindings_version != applied_bindings {
-            apply_bindings(&mut editor, shell);
-            applied_bindings = shell.bindings_version;
-        }
-        if shell.options.vi != vi_mode {
-            vi_mode = shell.options.vi;
-            editor.set_edit_mode(if vi_mode {
-                EditMode::Vi
-            } else {
-                EditMode::Emacs
-            });
-        }
-        if let Some(helper) = editor.helper_mut() {
-            helper.update(completion_names(shell));
-        }
-        let directory = std::env::current_dir()
-            .map(|path| path.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let state = PromptState {
-            git: git_prompt.info(&directory),
-            status: shell.last_status,
-            duration,
-            jobs: shell.jobs.len(),
-        };
-        let columns = sys::terminal_width(1).unwrap_or(80);
-        let current_theme = themes.current(&theme::theme_path(&config_dir()));
-        let screen = match &current_theme {
-            Some(current_theme) => {
-                let context = theme::PromptContext {
-                    status: state.status,
-                    duration: state.duration,
-                    jobs: state.jobs,
-                    git: state.git.as_ref(),
-                    directory: &directory,
-                };
-                let rendered = match current_theme.engine {
-                    theme::Engine::Starship => theme::starship(&context, columns)
-                        .unwrap_or_else(|| theme::render(current_theme, &context)),
-                    theme::Engine::Native => theme::render(current_theme, &context),
-                };
-                theme::layout(rendered, columns, current_theme.transient)
-            }
-            None => theme::Screen::plain(prompt::build(&state)),
-        };
-        let screen = theme::Screen {
-            prompt: crate::text::without_colors(screen.prompt),
-            right: screen.right.map(|right| helper::RightPrompt {
-                colored: crate::text::without_colors(right.colored),
-                ..right
-            }),
-            transient: screen.transient.map(crate::text::without_colors),
-        };
-        if let Some(helper) = editor.helper_mut() {
-            helper.set_right_prompt(screen.right);
-        }
-        let line = editor.readline(&screen.prompt);
-        git_prompt.settle();
-        if let (Ok(text), Some(transient)) = (&line, &screen.transient) {
-            let highlighted = editor
-                .helper()
-                .map(|helper| highlight::highlight(text, |name| helper.is_command(name)))
-                .unwrap_or_else(|| text.clone());
-            theme::collapse(&screen.prompt, text, transient, &highlighted, columns);
-        }
-        match line {
-            Ok(line) => {
-                if line.trim().is_empty() {
-                    duration = Duration::ZERO;
-                    continue;
-                }
-                let line = match keys::expand_first_word(&line, &shell.abbreviations) {
-                    Some(expanded) => {
-                        eprintln!("{expanded}");
-                        expanded
-                    }
-                    None => line,
-                };
-                let line = match history::expand(&line, &shell.history) {
-                    Ok(Some(expanded)) => {
-                        eprintln!("{expanded}");
-                        expanded
-                    }
-                    Ok(None) => line,
-                    Err(error) => {
-                        shell::error(error);
-                        shell.last_status = 1;
-                        continue;
-                    }
-                };
-                let _ = editor.add_history_entry(line.trim());
-                shell.history.push(line.trim().to_string());
-                shell.run_hook("preexec", std::slice::from_ref(&line));
-                let started = Instant::now();
-                let directory = std::env::var("PWD").unwrap_or_default();
-                shell.run_source(&line);
-                duration = started.elapsed();
-                log_command(&line, &directory, duration, shell.last_status);
-                if shell.flow == Flow::Interrupted {
-                    shell.last_status = 128 + libc::SIGINT;
-                }
-                if shell.flow == Flow::Exit {
-                    if shell.jobs.len() > 0 && !warned_about_jobs {
-                        warned_about_jobs = true;
-                        shell.flow = Flow::Normal;
-                        shell::error("there are unfinished jobs; exit again to leave anyway");
-                        continue;
-                    }
-                    break;
-                }
-                if shell.history_cleared {
-                    let _ = editor.clear_history();
-                    shell.history_cleared = false;
-                }
-                warned_about_jobs = false;
-                shell.flow = Flow::Normal;
-            }
-            Err(ReadlineError::Interrupted) => {
-                duration = Duration::ZERO;
-                continue;
-            }
-            Err(ReadlineError::Eof) => break,
-            Err(error) => {
-                if signals::any_pending() {
-                    shell.handle_signals();
-                    if shell.flow == Flow::Exit {
-                        break;
-                    }
-                    continue;
-                }
-                shell::error(error);
-                break;
-            }
-        }
-    }
-
-    let _ = editor.save_history(&history);
-    sys::make_private(&history);
-}
-
-fn apply_bindings(
-    editor: &mut Editor<ShellHelper, rustyline::history::DefaultHistory>,
-    shell: &Shell,
-) {
-    for (spec, binding) in &shell.key_bindings {
-        let Some(key) = keys::key(spec) else {
-            continue;
-        };
-        let command = match binding {
-            KeyBinding::Action(action) => keys::action(action),
-            KeyBinding::Insert(text) => Some(Cmd::Insert(1, text.clone())),
-        };
-        if let Some(command) = command {
-            editor.bind_sequence(key, EventHandler::Simple(command));
-        }
     }
 }
 

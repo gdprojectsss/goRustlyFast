@@ -3,7 +3,7 @@ enable -n echo
 builtin
 bracket status 0
 status 1
-61
+5
 enable .
 enable :
 enable break

@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering};
 
 const SLOTS: usize = 64;
 
@@ -9,6 +9,78 @@ extern "C" fn record(signal: libc::c_int) {
     if let Some(slot) = PENDING.get(signal as usize) {
         slot.store(true, Ordering::SeqCst);
         ANY_PENDING.store(true, Ordering::SeqCst);
+    }
+}
+
+static WAKE_INPUT: [AtomicI32; SLOTS] = [const { AtomicI32::new(-1) }; SLOTS];
+static WOKEN: AtomicBool = AtomicBool::new(false);
+static MAIN_THREAD: AtomicUsize = AtomicUsize::new(0);
+
+fn wake_prompt(signal: libc::c_int) {
+    if let Some(slot) = WAKE_INPUT.get(signal as usize) {
+        let fd = slot.load(Ordering::SeqCst);
+        if fd >= 0 && unsafe { libc::dup2(fd, 0) } == 0 {
+            WOKEN.store(true, Ordering::SeqCst);
+        }
+    }
+}
+
+extern "C" fn record_and_wake(signal: libc::c_int) {
+    record(signal);
+    wake_prompt(signal);
+}
+
+extern "C" fn only_wake(signal: libc::c_int) {
+    wake_prompt(signal);
+}
+
+pub fn catch_waking_prompt(signal: libc::c_int, recorded: bool) {
+    let handler = if recorded {
+        record_and_wake as extern "C" fn(libc::c_int)
+    } else {
+        only_wake as extern "C" fn(libc::c_int)
+    };
+    unsafe {
+        let mut action: libc::sigaction = std::mem::zeroed();
+        action.sa_sigaction = handler as libc::sighandler_t;
+        action.sa_flags = 0;
+        libc::sigemptyset(&mut action.sa_mask);
+        libc::sigaction(signal, &action, std::ptr::null_mut());
+    }
+}
+
+pub fn set_wake_input(signal: libc::c_int, fd: Option<i32>) {
+    if let Some(slot) = WAKE_INPUT.get(signal as usize) {
+        slot.store(fd.unwrap_or(-1), Ordering::SeqCst);
+    }
+}
+
+pub fn take_woken() -> bool {
+    WOKEN.swap(false, Ordering::SeqCst)
+}
+
+pub fn remember_main_thread() {
+    MAIN_THREAD.store(unsafe { libc::pthread_self() } as usize, Ordering::SeqCst);
+}
+
+pub fn signal_main_thread(signal: libc::c_int) {
+    let thread = MAIN_THREAD.load(Ordering::SeqCst);
+    if thread != 0 {
+        unsafe {
+            libc::pthread_kill(thread as libc::pthread_t, signal);
+        }
+    }
+}
+
+pub fn is_pending(signal: libc::c_int) -> bool {
+    PENDING
+        .get(signal as usize)
+        .is_some_and(|slot| slot.load(Ordering::SeqCst))
+}
+
+pub fn discard(signal: libc::c_int) {
+    if let Some(slot) = PENDING.get(signal as usize) {
+        slot.store(false, Ordering::SeqCst);
     }
 }
 

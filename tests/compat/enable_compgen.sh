@@ -9,7 +9,7 @@ echo "bracket status $?"
 enable test
 enable no_such_builtin 2>/dev/null
 echo "status $?"
-enable | grep -c '^enable '
+enable | grep -cE '^enable (cd|echo|read|printf|test)$'
 enable -s | head -3
 
 f1() { :; }

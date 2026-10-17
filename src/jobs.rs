@@ -86,7 +86,7 @@ impl JobTable {
         let current = self.current_id();
         for job in &mut self.jobs {
             let Job { pids, state, .. } = job;
-            let mut last_status = 0;
+            let mut last_result = WaitResult::Exited(0);
             pids.retain(|&pid| {
                 match sys::waitpid(pid, libc::WNOHANG | libc::WUNTRACED | libc::WCONTINUED) {
                     Ok(None) => true,
@@ -99,7 +99,7 @@ impl JobTable {
                         true
                     }
                     Ok(Some(result)) => {
-                        last_status = result.status();
+                        last_result = result;
                         false
                     }
                     Err(_) => false,
@@ -107,16 +107,22 @@ impl JobTable {
             });
             if job.pids.is_empty() {
                 let marker = if Some(job.id) == current { '+' } else { ' ' };
-                let what = if last_status == 0 {
-                    "Done".to_string()
-                } else {
-                    format!("Exit {last_status}")
-                };
+                let what = finished_description(last_result);
                 notices.push(format!("[{}]{marker}  {what:<10} {}", job.id, job.text));
             }
         }
         self.jobs.retain(|job| !job.pids.is_empty());
         notices
+    }
+}
+
+pub fn finished_description(result: WaitResult) -> String {
+    match result {
+        WaitResult::Exited(0) => "Done".to_string(),
+        WaitResult::Exited(code) => format!("Exit {code}"),
+        WaitResult::Signaled(signal) => sys::signal_description(signal),
+        WaitResult::Stopped => "Stopped".to_string(),
+        WaitResult::Continued => "Running".to_string(),
     }
 }
 
@@ -147,6 +153,16 @@ mod tests {
         assert_eq!(table.find(Some("%vim")), Ok(1));
         assert!(table.find(Some("%9")).is_err());
         assert!(JobTable::default().find(None).is_err());
+    }
+
+    #[test]
+    fn finished_jobs_are_described_like_bash() {
+        assert_eq!(finished_description(WaitResult::Exited(0)), "Done");
+        assert_eq!(finished_description(WaitResult::Exited(3)), "Exit 3");
+        assert!(finished_description(WaitResult::Signaled(libc::SIGKILL)).starts_with("Killed"));
+        assert!(
+            finished_description(WaitResult::Signaled(libc::SIGTERM)).starts_with("Terminated")
+        );
     }
 
     #[test]

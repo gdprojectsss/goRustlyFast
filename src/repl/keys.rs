@@ -1,6 +1,15 @@
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
-use rustyline::{Cmd, KeyCode, KeyEvent, Modifiers, Movement, Word};
+use rustyline::{
+    Cmd, ConditionalEventHandler, Event, EventContext, KeyCode, KeyEvent, Modifiers, Movement,
+    RepeatCount, Word,
+};
+
+use crate::signals;
+
+use super::git::REDRAW_SIGNAL;
 
 pub(crate) const ACTIONS: &[&str] = &[
     "accept-line",
@@ -130,6 +139,130 @@ pub(super) fn expand_first_word(
     Some(format!("{expansion}{}", &trimmed[end..]))
 }
 
+pub(super) fn keep_prompt_on_screen() {
+    signals::set_wake_input(REDRAW_SIGNAL, None);
+}
+
+pub(super) struct WatchKeys {
+    pub interrupted: Arc<AtomicBool>,
+}
+
+impl ConditionalEventHandler for WatchKeys {
+    fn handle(&self, _: &Event, _: RepeatCount, _: bool, _: &EventContext) -> Option<Cmd> {
+        keep_prompt_on_screen();
+        self.interrupted.store(false, Ordering::SeqCst);
+        None
+    }
+}
+
+pub(super) struct InterruptLine {
+    pub interrupted: Arc<AtomicBool>,
+}
+
+impl ConditionalEventHandler for InterruptLine {
+    fn handle(&self, _: &Event, _: RepeatCount, _: bool, _: &EventContext) -> Option<Cmd> {
+        keep_prompt_on_screen();
+        self.interrupted.store(true, Ordering::SeqCst);
+        Some(Cmd::AcceptLine)
+    }
+}
+
+fn suggestion<'a>(context: &'a EventContext) -> Option<&'a str> {
+    if context.pos() != context.line().len() {
+        return None;
+    }
+    context.hint_text().filter(|text| !text.trim().is_empty())
+}
+
+fn first_word(text: &str) -> &str {
+    let start = text.len() - text.trim_start().len();
+    let end = text[start..]
+        .find(char::is_whitespace)
+        .map_or(text.len(), |offset| start + offset);
+    &text[..end]
+}
+
+pub(super) struct AcceptSuggestion {
+    pub whole: bool,
+}
+
+impl ConditionalEventHandler for AcceptSuggestion {
+    fn handle(&self, _: &Event, _: RepeatCount, _: bool, context: &EventContext) -> Option<Cmd> {
+        keep_prompt_on_screen();
+        let text = suggestion(context)?;
+        Some(if self.whole {
+            Cmd::CompleteHint
+        } else {
+            Cmd::Insert(1, first_word(text).to_string())
+        })
+    }
+}
+
+struct Yanked {
+    offset: usize,
+    line: String,
+    position: usize,
+    inserted: usize,
+}
+
+pub(super) struct YankLastArgument {
+    arguments: Arc<Mutex<Vec<String>>>,
+    previous: Mutex<Option<Yanked>>,
+}
+
+impl YankLastArgument {
+    pub(super) fn new(arguments: Arc<Mutex<Vec<String>>>) -> Self {
+        YankLastArgument {
+            arguments,
+            previous: Mutex::new(None),
+        }
+    }
+}
+
+fn start_before(line: &str, position: usize, characters: usize) -> usize {
+    if characters == 0 {
+        return position;
+    }
+    line[..position]
+        .char_indices()
+        .rev()
+        .nth(characters - 1)
+        .map_or(0, |(index, _)| index)
+}
+
+impl ConditionalEventHandler for YankLastArgument {
+    fn handle(&self, _: &Event, _: RepeatCount, _: bool, context: &EventContext) -> Option<Cmd> {
+        keep_prompt_on_screen();
+        let arguments = self.arguments.lock().ok()?;
+        let mut previous = self.previous.lock().ok()?;
+        let line = context.line();
+        let position = context.pos();
+        let (offset, replaced) = match previous.as_ref() {
+            Some(yanked) if yanked.line == line && yanked.position == position => {
+                (yanked.offset + 1, yanked.inserted)
+            }
+            _ => (0, 0),
+        };
+        let Some(word) = arguments.iter().rev().nth(offset).cloned() else {
+            return Some(Cmd::Noop);
+        };
+        let start = start_before(line, position, replaced);
+        *previous = Some(Yanked {
+            offset,
+            line: format!("{}{word}{}", &line[..start], &line[position..]),
+            position: start + word.len(),
+            inserted: word.chars().count(),
+        });
+        Some(if replaced > 0 {
+            let line_start = line[..start].rfind('\n').map_or(0, |newline| newline + 1);
+            let text = format!("{}{word}", &line[line_start..start]);
+            Cmd::Replace(Movement::BeginningOfLine, Some(text))
+        } else {
+            Cmd::Insert(1, word)
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -160,6 +293,19 @@ mod tests {
             assert!(action(name).is_some(), "{name}");
         }
         assert!(action("fly").is_none());
+    }
+
+    #[test]
+    fn suggestion_words() {
+        assert_eq!(first_word("status --short"), "status");
+        assert_eq!(first_word(" --short now"), " --short");
+        assert_eq!(first_word("tail"), "tail");
+    }
+
+    #[test]
+    fn yank_start_counts_characters() {
+        assert_eq!(start_before("echo héllo", 11, 5), 5);
+        assert_eq!(start_before("echo x", 6, 0), 6);
     }
 
     #[test]

@@ -14,7 +14,7 @@ categories = ["command-line-utilities"]
 exclude = [".github/", "scripts/", "packaging/", "fuzz/", "flake.nix", "install.sh"]
 
 [dependencies]
-rustyline = "15"
+rustyline = { version = "15", features = ["buffer-redux"] }
 libc = "0.2"
 
 [profile.release]
