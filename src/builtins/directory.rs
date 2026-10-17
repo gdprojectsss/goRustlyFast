@@ -71,7 +71,13 @@ pub(crate) fn change_directory(shell: &mut Shell, target: &str) -> i32 {
         shell::error(format!("cd: {target}: {}", sys::error_message(&error)));
         return 1;
     } else {
-        std::env::current_dir().unwrap_or(logical)
+        std::env::current_dir().unwrap_or_else(|error| {
+            shell::error(format!(
+                "cd: error retrieving current directory: getcwd: cannot access parent directories: {}",
+                sys::error_message(&error)
+            ));
+            Path::new(&previous).join(target)
+        })
     };
     let destination = destination.to_string_lossy().into_owned();
     shell.export_variable("OLDPWD", Some(&previous));

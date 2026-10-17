@@ -369,11 +369,20 @@ pub(super) fn set(shell: &mut Shell, args: &[String], out: &mut dyn Write) -> i3
     0
 }
 
-const SHOPT_NAMES: &[&str] = &["dotglob", "globstar", "nocaseglob", "nullglob"];
+const SHOPT_NAMES: &[&str] = &[
+    "dotglob",
+    "expand_aliases",
+    "globstar",
+    "login_shell",
+    "nocaseglob",
+    "nullglob",
+];
 
 fn shopt_flag<'a>(options: &'a mut ShellOptions, name: &str) -> Option<&'a mut bool> {
     match name {
         "dotglob" => Some(&mut options.dotglob),
+        "expand_aliases" => Some(&mut options.expand_aliases),
+        "login_shell" => Some(&mut options.login_shell),
         "globstar" => Some(&mut options.globstar),
         "nocaseglob" => Some(&mut options.nocaseglob),
         "nullglob" => Some(&mut options.nullglob),

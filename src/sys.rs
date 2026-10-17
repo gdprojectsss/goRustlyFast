@@ -390,6 +390,49 @@ pub fn hostname() -> Option<String> {
     Some(String::from_utf8_lossy(&buffer[..end]).into_owned())
 }
 
+pub fn current_user_home() -> Option<String> {
+    unsafe {
+        let entry = libc::getpwuid(libc::getuid());
+        if entry.is_null() || (*entry).pw_dir.is_null() {
+            return None;
+        }
+        Some(
+            std::ffi::CStr::from_ptr((*entry).pw_dir)
+                .to_string_lossy()
+                .into_owned(),
+        )
+    }
+}
+
+pub fn user_id() -> u32 {
+    unsafe { libc::getuid() }
+}
+
+pub fn effective_user_id() -> u32 {
+    unsafe { libc::geteuid() }
+}
+
+pub fn group_ids() -> Vec<u32> {
+    let mut groups = vec![0 as libc::gid_t; 1024];
+    let count = unsafe { libc::getgroups(groups.len() as libc::c_int, groups.as_mut_ptr()) };
+    groups.truncate(count.max(0) as usize);
+    let primary = unsafe { libc::getgid() };
+    let mut ordered = vec![primary];
+    ordered.extend(groups.into_iter().filter(|group| *group != primary));
+    ordered.dedup();
+    ordered
+}
+
+pub fn kernel_release() -> String {
+    let mut name: libc::utsname = unsafe { std::mem::zeroed() };
+    if unsafe { libc::uname(&mut name) } != 0 {
+        return String::new();
+    }
+    unsafe { std::ffi::CStr::from_ptr(name.release.as_ptr()) }
+        .to_string_lossy()
+        .into_owned()
+}
+
 pub fn terminal_width(fd: i32) -> Option<usize> {
     let mut size: libc::winsize = unsafe { std::mem::zeroed() };
     let result = unsafe { libc::ioctl(fd, libc::TIOCGWINSZ, &mut size) };

@@ -450,7 +450,7 @@ fn slice<T: Clone>(items: &[T], offset: i64, length: Option<i64>) -> Vec<T> {
 
 fn tilde(shell: &Shell, user: &str) -> String {
     let found = match user {
-        "" => shell.get_variable("HOME"),
+        "" => shell.get_variable("HOME").or_else(sys::current_user_home),
         "+" => shell.get_variable("PWD"),
         "-" => shell.get_variable("OLDPWD"),
         _ => sys::user_home(user),

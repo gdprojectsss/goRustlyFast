@@ -148,7 +148,7 @@ fn cd_minus() {
 
 #[test]
 fn alias_and_unalias() {
-    let out = run("alias ll='echo aliased'\nll\nunalias ll\n");
+    let out = run("shopt -s expand_aliases\nalias ll='echo aliased'\nll\nunalias ll\n");
     assert!(out.contains("aliased"));
 }
 
@@ -275,7 +275,10 @@ fn builtin_in_pipeline() {
 
 #[test]
 fn alias_after_pipe() {
-    assert_eq!(run("alias up='tr a-z A-Z'\necho hi | up\n").trim(), "HI");
+    assert_eq!(
+        run("shopt -s expand_aliases\nalias up='tr a-z A-Z'\necho hi | up\n").trim(),
+        "HI"
+    );
 }
 
 #[test]
@@ -656,13 +659,21 @@ fn login_shell_reads_profile_then_rc() {
     std::fs::write(format!("{home}/.grfsh_profile"), "echo profile\n").unwrap();
     std::fs::write(format!("{home}/.config/grfsh/grfshrc"), "echo rc\n").unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_grfsh"))
-        .arg("-l")
+        .arg("-il")
         .env("HOME", home)
         .env_remove("XDG_CONFIG_HOME")
         .stdin(Stdio::null())
         .output()
         .expect("failed to run grfsh");
     assert_eq!(String::from_utf8_lossy(&output.stdout), "profile\nrc\n");
+    let output = Command::new(env!("CARGO_BIN_EXE_grfsh"))
+        .arg("-l")
+        .env("HOME", home)
+        .env_remove("XDG_CONFIG_HOME")
+        .stdin(Stdio::null())
+        .output()
+        .expect("failed to run grfsh");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "profile\n");
     let _ = std::fs::remove_dir_all(home);
 }
 
@@ -837,6 +848,7 @@ fn startup_files_writable_by_others_are_skipped() {
     std::fs::write(&rc, "echo rc-ran\n").unwrap();
     std::fs::set_permissions(&rc, std::fs::Permissions::from_mode(0o666)).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_grfsh"))
+        .arg("-i")
         .env("HOME", home)
         .env_remove("XDG_CONFIG_HOME")
         .stdin(Stdio::null())
@@ -864,4 +876,277 @@ fn help_lists_and_describes_builtins() {
     let (out, _, status) = run_command("help getopts");
     assert!(out.starts_with("getopts spec name [args]"));
     assert_eq!(status, 0);
+}
+
+struct Startup {
+    stdout: String,
+    stderr: String,
+    status: i32,
+}
+
+fn startup_home(name: &str) -> String {
+    let home = format!("/tmp/grfsh_startup_{name}_{}", std::process::id());
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(format!("{home}/.grfsh_profile"), "echo profile\n").unwrap();
+    std::fs::write(format!("{home}/.grfshrc"), "echo rc\n").unwrap();
+    home
+}
+
+fn start(home: &str, args: &[&str], input: &str) -> Startup {
+    start_with(home, args, input, |_| {})
+}
+
+fn start_with(
+    home: &str,
+    args: &[&str],
+    input: &str,
+    configure: impl FnOnce(&mut Command),
+) -> Startup {
+    use std::io::Write;
+    let mut command = Command::new(env!("CARGO_BIN_EXE_grfsh"));
+    command
+        .args(args)
+        .env("HOME", home)
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("GRFSH_AGENT")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    configure(&mut command);
+    let mut child = command.spawn().expect("failed to run grfsh");
+    let _ = child.stdin.take().unwrap().write_all(input.as_bytes());
+    let output = child.wait_with_output().unwrap();
+    Startup {
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        status: output.status.code().unwrap_or(-1),
+    }
+}
+
+#[test]
+fn login_shells_read_the_profile_with_commands_and_scripts() {
+    let home = startup_home("login");
+    let script = format!("{home}/script.sh");
+    std::fs::write(&script, "echo script $1\n").unwrap();
+    for args in [vec!["-l", "-c", "echo cmd"], vec!["-lc", "echo cmd"]] {
+        assert_eq!(start(&home, &args, "").stdout, "profile\ncmd\n");
+    }
+    assert_eq!(
+        start(&home, &["-l", &script, "x"], "").stdout,
+        "profile\nscript x\n"
+    );
+    let dashed = start_with(&home, &["-c", "echo $0"], "", |command| {
+        use std::os::unix::process::CommandExt;
+        command.arg0("-grfsh");
+    });
+    assert_eq!(dashed.stdout, "profile\n-grfsh\n");
+    assert_eq!(start(&home, &["-c", "echo cmd"], "").stdout, "cmd\n");
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn rc_is_read_only_by_interactive_shells() {
+    let home = startup_home("rc");
+    assert_eq!(start(&home, &[], "echo piped\n").stdout, "piped\n");
+    assert_eq!(start(&home, &["-i", "-c", "echo $-"], "").stdout, "rc\ni\n");
+    assert_eq!(start(&home, &["-ilc", "true"], "").stdout, "profile\nrc\n");
+    let quiet = start(
+        &home,
+        &["-il", "--norc", "--noprofile", "-c", "echo quiet"],
+        "",
+    );
+    assert_eq!(quiet.stdout, "quiet\n");
+    let custom = format!("{home}/custom");
+    std::fs::write(&custom, "echo custom\n").unwrap();
+    assert_eq!(
+        start(&home, &["-i", "--rcfile", &custom, "-c", "true"], "").stdout,
+        "custom\n"
+    );
+    let piped = start(&home, &["-i"], "echo from-stdin $-\n");
+    assert!(piped.stdout.contains("rc\n"));
+    assert!(piped.stdout.contains("from-stdin i"));
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn bash_style_option_clusters() {
+    let home = startup_home("options");
+    let traced = start(
+        &home,
+        &["-euxo", "pipefail", "-c", "false | true; echo no"],
+        "",
+    );
+    assert_eq!(traced.stdout, "");
+    assert_eq!(traced.status, 1);
+    assert!(traced.stderr.contains("+ false"));
+    let errexit = start(&home, &["-ce", "false; echo no", "name"], "");
+    assert_eq!((errexit.stdout.as_str(), errexit.status), ("", 1));
+    let later = start(&home, &["-c", "-e", "echo $0 $1", "zero", "one"], "");
+    assert_eq!(later.stdout, "zero one\n");
+    let stdin = start(&home, &["-s", "a", "b"], "echo $1 $2 $#\n");
+    assert_eq!(stdin.stdout, "a b 2\n");
+    let dash = start(&home, &["-", "a"], "");
+    assert_eq!(dash.status, 127);
+    assert!(dash.stderr.contains("a: No such file or directory"));
+    let ended = start(&home, &["--", "-c"], "");
+    assert!(ended.stderr.contains("-c: No such file or directory"));
+    let invalid = start(&home, &["-Q"], "");
+    assert_eq!(invalid.status, 2);
+    assert!(invalid.stderr.contains("-Q: invalid option"));
+    assert!(invalid.stderr.contains("usage:"));
+    let missing = start(&home, &["-c"], "");
+    assert_eq!(missing.status, 2);
+    assert!(missing.stderr.contains("-c: option requires an argument"));
+    let shopt = start(&home, &["-O", "nullglob", "-c", "shopt nullglob"], "");
+    assert!(shopt.stdout.starts_with("nullglob"));
+    assert!(shopt.stdout.trim_end().ends_with("on"));
+    let posix = start(&home, &["--posix", "--norc", "-c", "echo ok"], "");
+    assert_eq!(posix.stdout, "ok\n");
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn no_execute_checks_syntax_only() {
+    let home = startup_home("noexec");
+    let good = format!("{home}/good.sh");
+    let bad = format!("{home}/bad.sh");
+    std::fs::write(&good, "echo ran\n").unwrap();
+    std::fs::write(&bad, "echo ran\nfi\n").unwrap();
+    assert_eq!(start(&home, &["-n", &good], "").stdout, "");
+    let failed = start(&home, &["-n", &bad], "");
+    assert_eq!((failed.stdout.as_str(), failed.status), ("", 2));
+    assert!(failed.stderr.contains("line 2"));
+    assert_eq!(start(&home, &["-n", "-c", "echo ran"], "").stdout, "");
+    assert_eq!(start(&home, &["-n"], "echo ran\n").status, 0);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn environment_defaults_at_startup() {
+    let home = startup_home("environment");
+    let path = start_with(&home, &["-c", "echo $PATH; ls -d /"], "", |command| {
+        command.env_remove("PATH");
+    });
+    assert_eq!(
+        path.stdout,
+        "/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin\n/\n"
+    );
+    let level = start_with(
+        &home,
+        &["-c", "echo $SHLVL; env | grep ^SHLVL="],
+        "",
+        |command| {
+            command.env("SHLVL", "4");
+        },
+    );
+    assert_eq!(level.stdout, "5\nSHLVL=5\n");
+    let tilde = start_with(
+        &home,
+        &["-c", "echo ~; echo ${HOME-unset}"],
+        "",
+        |command| {
+            command.env_remove("HOME");
+        },
+    );
+    let lines: Vec<&str> = tilde.stdout.lines().collect();
+    assert!(lines[0].starts_with('/'));
+    assert_eq!(lines[1], "unset");
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn bash_compatible_shell_variables() {
+    let home = startup_home("variables");
+    let script = "echo \"$PS4|$GRFSH_VERSION|${BASH_VERSION-none}\"
+[[ $UID == $(id -u) && $EUID == $(id -u) ]] && echo ids
+[[ $BASHPID == $$ ]] && echo pid
+(( $(echo $BASHPID) != $$ )) && echo subshell
+[[ $OSTYPE && $HOSTTYPE && $MACHTYPE == $HOSTTYPE-*-$OSTYPE && $HOSTNAME ]] && echo platform
+[[ ${GROUPS[0]} == $(id -g) ]] && echo groups
+[[ $EPOCHSECONDS =~ ^[0-9]+$ && $EPOCHREALTIME =~ ^[0-9]+\\.[0-9]{6}$ ]] && echo epoch
+(( SRANDOM >= 0 )) && echo srandom
+env | grep -c -E '^(OSTYPE|PS4|GRFSH_VERSION)='";
+    let output = start(&home, &["-c", script], "");
+    assert_eq!(
+        output.stdout,
+        format!(
+            "+ |{}|none\nids\npid\nsubshell\nplatform\ngroups\nepoch\nsrandom\n0\n",
+            env!("CARGO_PKG_VERSION")
+        ),
+        "{}",
+        output.stderr
+    );
+    let readonly = start(&home, &["-c", "UID=0"], "");
+    assert!(readonly.stderr.contains("UID: readonly variable"));
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn aliases_are_interactive_unless_expand_aliases_is_set() {
+    let home = startup_home("aliases");
+    assert_eq!(start(&home, &["-c", "alias"], "").stdout, "");
+    let plain = start(&home, &["-c", "alias hi='echo alias'\nhi"], "");
+    assert!(plain.stderr.contains("hi: command not found"));
+    let enabled = start(
+        &home,
+        &["-c", "shopt -s expand_aliases\nalias hi='echo alias'\nhi"],
+        "",
+    );
+    assert_eq!(enabled.stdout, "alias\n");
+    let interactive = start(
+        &home,
+        &["-i", "--norc", "-c", "alias ls; shopt expand_aliases"],
+        "",
+    );
+    assert!(interactive.stdout.contains("ls --color=auto"));
+    assert!(interactive.stdout.trim_end().ends_with("on"));
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn json_covers_stdin_check_and_explain() {
+    let home = startup_home("json");
+    let script = format!("{home}/script.sh");
+    std::fs::write(&script, "echo hi\n").unwrap();
+    for (args, input) in [
+        (vec!["--json"], "echo piped\n"),
+        (vec!["--json", "--check", script.as_str()], ""),
+        (vec!["--json", "--explain", "echo explained"], ""),
+    ] {
+        let output = start(&home, &args, input);
+        assert!(
+            output.stdout.starts_with("{\"status\":0,\"stdout\":"),
+            "{args:?}: {}",
+            output.stdout
+        );
+        assert_eq!(output.stdout.lines().count(), 1);
+    }
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn unsafe_startup_directory_is_reported_once() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = startup_home("trust_once");
+    std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o777)).unwrap();
+    let output = start(&home, &["-il", "-c", "true"], "");
+    assert_eq!(output.stderr.matches("not loading").count(), 1);
+    assert_eq!(output.stdout, "");
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn cd_up_from_a_deleted_directory() {
+    let home = startup_home("deleted");
+    let script =
+        format!("mkdir -p {home}/a/b; cd {home}/a/b; rmdir ../b ../../a; cd ..; echo \"$? $PWD\"");
+    let output = start(&home, &["-c", &script], "");
+    assert_eq!(output.stdout, format!("0 {home}/a/b/..\n"));
+    assert!(
+        output
+            .stderr
+            .contains("cd: error retrieving current directory")
+    );
+    let _ = std::fs::remove_dir_all(&home);
 }

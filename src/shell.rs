@@ -30,6 +30,8 @@ pub struct ShellOptions {
     pub nullglob: bool,
     pub dotglob: bool,
     pub nocaseglob: bool,
+    pub expand_aliases: bool,
+    pub login_shell: bool,
 }
 
 impl ShellOptions {
@@ -107,10 +109,7 @@ pub struct Shell {
 impl Shell {
     pub fn new() -> Self {
         let mut shell = Shell {
-            aliases: HashMap::from([
-                ("ls".into(), "ls --color=auto".into()),
-                ("grep".into(), "grep --color=auto".into()),
-            ]),
+            aliases: HashMap::new(),
             variables: HashMap::new(),
             arrays: HashMap::new(),
             attributes: HashMap::new(),
@@ -160,7 +159,44 @@ impl Shell {
             ),
         };
         shell.init_working_directory();
+        shell.init_shell_variables();
         shell
+    }
+
+    fn init_shell_variables(&mut self) {
+        for (name, value) in startup_variables() {
+            if std::env::var_os(name).is_none() {
+                self.variables.insert(name.to_string(), value);
+            }
+        }
+        for name in ["UID", "EUID"] {
+            self.attributes.insert(
+                name.to_string(),
+                Attributes {
+                    readonly: true,
+                    ..Attributes::default()
+                },
+            );
+        }
+    }
+
+    pub fn enable_interactive_defaults(&mut self) {
+        self.interactive = true;
+        self.options.expand_aliases = true;
+        for command in ["ls", "grep"] {
+            self.aliases
+                .entry(command.to_string())
+                .or_insert_with(|| format!("{command} --color=auto"));
+        }
+    }
+
+    pub fn active_aliases(&self) -> &HashMap<String, String> {
+        static NONE: std::sync::OnceLock<HashMap<String, String>> = std::sync::OnceLock::new();
+        if self.options.expand_aliases {
+            &self.aliases
+        } else {
+            NONE.get_or_init(HashMap::new)
+        }
     }
 
     fn init_working_directory(&mut self) {
@@ -193,6 +229,15 @@ impl Shell {
             "LINENO" => return Some(self.current_line.to_string()),
             "SECONDS" => return Some(self.started.elapsed().as_secs().to_string()),
             "PPID" => return Some(crate::sys::parent_pid().to_string()),
+            "BASHPID" => return Some(sys::getpid().to_string()),
+            "UID" => return Some(sys::user_id().to_string()),
+            "EUID" => return Some(sys::effective_user_id().to_string()),
+            "SRANDOM" => return Some((random() & 0xffff_ffff).to_string()),
+            "EPOCHSECONDS" => return Some(epoch_time().as_secs().to_string()),
+            "EPOCHREALTIME" => {
+                let now = epoch_time();
+                return Some(format!("{}.{:06}", now.as_secs(), now.subsec_micros()));
+            }
             _ => {}
         }
         if let Ok(index) = name.parse::<usize>() {
@@ -240,6 +285,12 @@ impl Shell {
                 self.last_pipe_statuses
                     .iter()
                     .map(|status| status.to_string())
+                    .collect(),
+            ),
+            "GROUPS" => Some(
+                sys::group_ids()
+                    .iter()
+                    .map(|group| group.to_string())
                     .collect(),
             ),
             "FUNCNAME" => {
@@ -359,6 +410,45 @@ impl Shell {
     }
 }
 
+fn epoch_time() -> std::time::Duration {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+}
+
+fn operating_system() -> String {
+    let release = sys::kernel_release();
+    match std::env::consts::OS {
+        "macos" => format!("darwin{release}"),
+        "linux" if cfg!(target_env = "musl") => "linux-musl".into(),
+        "linux" => "linux-gnu".into(),
+        "freebsd" | "openbsd" | "netbsd" => format!("{}{release}", std::env::consts::OS),
+        other => other.into(),
+    }
+}
+
+fn machine_type(operating_system: &str) -> String {
+    let architecture = std::env::consts::ARCH;
+    let vendor = match (std::env::consts::OS, architecture) {
+        ("macos", _) => "apple",
+        (_, "x86_64" | "x86") => "pc",
+        _ => "unknown",
+    };
+    format!("{architecture}-{vendor}-{operating_system}")
+}
+
+fn startup_variables() -> Vec<(&'static str, String)> {
+    let operating_system = operating_system();
+    vec![
+        ("HOSTNAME", sys::hostname().unwrap_or_default()),
+        ("HOSTTYPE", std::env::consts::ARCH.to_string()),
+        ("MACHTYPE", machine_type(&operating_system)),
+        ("OSTYPE", operating_system),
+        ("PS4", "+ ".to_string()),
+        ("GRFSH_VERSION", env!("CARGO_PKG_VERSION").to_string()),
+    ]
+}
+
 fn random() -> u64 {
     use std::hash::{BuildHasher, Hasher};
     let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
@@ -405,10 +495,61 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_aliases() {
-        let shell = Shell::new();
+    fn default_aliases_only_in_interactive_shells() {
+        let mut shell = Shell::new();
+        assert!(shell.aliases.is_empty());
+        assert!(shell.active_aliases().is_empty());
+        shell.enable_interactive_defaults();
         assert_eq!(shell.aliases.get("ls").unwrap(), "ls --color=auto");
         assert_eq!(shell.aliases.get("grep").unwrap(), "grep --color=auto");
+        assert_eq!(shell.active_aliases().len(), 2);
+    }
+
+    #[test]
+    fn aliases_expand_only_with_expand_aliases() {
+        let mut shell = Shell::new();
+        shell.aliases.insert("ll".into(), "ls -l".into());
+        assert!(shell.active_aliases().is_empty());
+        shell.options.expand_aliases = true;
+        assert_eq!(shell.active_aliases().get("ll").unwrap(), "ls -l");
+    }
+
+    #[test]
+    fn dynamic_shell_variables() {
+        let shell = Shell::new();
+        let pid = std::process::id().to_string();
+        assert_eq!(shell.get_variable("BASHPID"), Some(pid));
+        assert_eq!(
+            shell.get_variable("UID"),
+            Some(unsafe { libc::getuid() }.to_string())
+        );
+        assert!(shell.is_readonly("EUID"));
+        let seconds: u64 = shell.get_variable("EPOCHSECONDS").unwrap().parse().unwrap();
+        assert!(seconds > 1_700_000_000);
+        let realtime = shell.get_variable("EPOCHREALTIME").unwrap();
+        assert_eq!(realtime.split('.').nth(1).map(str::len), Some(6));
+        assert!(
+            shell
+                .get_variable("SRANDOM")
+                .unwrap()
+                .parse::<u32>()
+                .is_ok()
+        );
+        assert!(!shell.special_array("GROUPS").unwrap().is_empty());
+    }
+
+    #[test]
+    fn platform_variables() {
+        let shell = Shell::new();
+        assert_eq!(shell.variables.get("PS4").map(String::as_str), Some("+ "));
+        assert_eq!(
+            shell.get_variable("GRFSH_VERSION").as_deref(),
+            Some(env!("CARGO_PKG_VERSION"))
+        );
+        assert!(!shell.variables.contains_key("BASH_VERSION"));
+        let machine = shell.get_variable("MACHTYPE").unwrap();
+        assert!(machine.starts_with(std::env::consts::ARCH));
+        assert!(machine.ends_with(&shell.get_variable("OSTYPE").unwrap()));
     }
 
     #[test]

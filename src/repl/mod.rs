@@ -15,6 +15,7 @@ use rustyline::error::ReadlineError;
 use rustyline::{Cmd, EditMode, Editor, EventHandler};
 
 use crate::builtins;
+use crate::cli::{self, Invocation, Mode};
 use crate::shell::{self, Flow, KeyBinding, Shell};
 use crate::signals;
 use crate::sys;
@@ -23,8 +24,6 @@ use crate::table;
 use completion::ShellNames;
 use helper::ShellHelper;
 use prompt::PromptState;
-
-const USAGE: &str = "usage: grfsh [-l] [-i] [--agent] [--json] [-c command [name [args...]]] [script [args...]]\n       grfsh --check script...\n       grfsh --explain command | --explain -f script\n       grfsh --serve socket | --client socket [-t seconds] command";
 
 fn install_panic_handler() {
     std::panic::set_hook(Box::new(|info| {
@@ -54,139 +53,207 @@ pub fn run() -> i32 {
     } else {
         args.remove(0)
     };
-    let mut login = invoked_as.starts_with('-');
-    let mut force_interactive = false;
-    let mut agent = crate::agent::requested();
-    let mut json = false;
-    while let Some(option) = args.first() {
-        match option.as_str() {
-            "-l" | "--login" => login = true,
-            "-i" => force_interactive = true,
-            "--agent" => agent = true,
-            "--json" => {
-                agent = true;
-                json = true;
+    let mut invocation = match cli::parse(&args) {
+        Ok(invocation) => invocation,
+        Err(error) => {
+            shell::error(&error.message);
+            if error.show_usage {
+                eprintln!("{}", cli::USAGE);
             }
-            _ => break,
+            return 2;
         }
-        args.remove(0);
-    }
-    let mut shell = Shell::new();
-    let runs_code = match args.first().map(String::as_str) {
-        Some("-c") => args.len() > 1,
-        Some("--serve") => {
-            agent = true;
-            false
-        }
-        Some(option) => !option.starts_with('-') || option == "-",
-        None => false,
     };
-    let mut capture = None;
-    if agent {
+    match invocation.mode {
+        Mode::Help => {
+            println!("{}", cli::USAGE);
+            return 0;
+        }
+        Mode::Version => {
+            println!("grfsh {}", env!("CARGO_PKG_VERSION"));
+            return 0;
+        }
+        _ => {}
+    }
+    invocation.login |= invoked_as.starts_with('-');
+    invocation.agent |= crate::agent::requested();
+    crate::startup::initialize_environment();
+    let mut shell = Shell::new();
+    if !invoked_as.is_empty() {
+        shell.arg0 = invoked_as;
+    }
+    if invocation.agent {
         crate::agent::prepare_environment();
         shell.agent = true;
-        if runs_code {
-            match crate::agent::Capture::begin(json) {
-                Ok(started) => capture = Some(started),
-                Err(error) => shell::error(format!("--agent: {}", sys::error_message(&error))),
-            }
+    }
+    let capture = begin_capture(&invocation);
+    let status = run_invocation(&mut shell, &invocation);
+    shell.last_status = status;
+    shell.run_exit_trap();
+    if let Some(capture) = capture {
+        report_capture(capture, shell.last_status, invocation.json);
+    }
+    shell.last_status
+}
+
+fn begin_capture(invocation: &Invocation) -> Option<crate::agent::Capture> {
+    let captured = match invocation.mode {
+        Mode::Command(_) | Mode::Script(_) | Mode::Check(_) | Mode::Explain(_) => true,
+        Mode::Standard => !invocation.interactive,
+        _ => false,
+    };
+    if !invocation.agent || !captured {
+        return None;
+    }
+    match crate::agent::Capture::begin(invocation.json) {
+        Ok(started) => Some(started),
+        Err(error) => {
+            shell::error(format!("--agent: {}", sys::error_message(&error)));
+            None
         }
     }
+}
 
-    let status = match args.first().map(String::as_str) {
-        Some("-h") | Some("--help") => {
-            println!("{USAGE}");
-            0
-        }
-        Some("--check") => crate::check::run(&args[1..]),
-        Some("--serve") => match args.get(1) {
-            Some(path) => crate::agent::serve(&mut shell, path),
+fn report_capture(capture: crate::agent::Capture, status: i32, json: bool) {
+    let outcome = capture.finish();
+    if json {
+        let directory = std::env::current_dir()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default();
+        let result = crate::agent::result_json(&outcome, status, &directory);
+        println!("{}", result.to_text());
+    } else {
+        crate::agent::print_plain(&outcome);
+    }
+}
+
+fn run_invocation(shell: &mut Shell, invocation: &Invocation) -> i32 {
+    match &invocation.mode {
+        Mode::Check(paths) => crate::check::run(paths),
+        Mode::Explain(args) => crate::agent::explain_arguments(shell, args),
+        Mode::Serve(args) => match args.first() {
+            Some(path) => crate::agent::serve(shell, path),
             None => {
                 shell::error("--serve: expected a socket path");
                 2
             }
         },
-        Some("--client") => match args.get(1) {
-            Some(path) => crate::agent::client(path, &args[2..], json),
+        Mode::Client(args) => match args.first() {
+            Some(path) => crate::agent::client(path, &args[1..], invocation.json),
             None => {
                 shell::error("--client: expected a socket path");
                 2
             }
         },
-        Some("--explain") => crate::agent::explain_arguments(&mut shell, &args[1..]),
-        Some("-V") | Some("--version") => {
-            println!("grfsh {}", env!("CARGO_PKG_VERSION"));
-            0
+        _ => run_shell(shell, invocation),
+    }
+}
+
+fn run_shell(shell: &mut Shell, invocation: &Invocation) -> i32 {
+    let reads_input = invocation.mode == Mode::Standard;
+    let interactive_shell = invocation.interactive || (reads_input && sys::isatty(0));
+    if let Err(status) = apply_options(shell, invocation) {
+        return status;
+    }
+    if interactive_shell {
+        if sys::isatty(0) {
+            shell.shell_pgid = sys::init_job_control();
+            sys::remember_terminal();
         }
-        Some("-c") => {
-            let Some(command) = args.get(1) else {
-                shell::error("-c: option requires an argument");
-                return 2;
-            };
-            if let Some(name) = args.get(2) {
-                shell.arg0 = name.clone();
-            }
-            shell.positional = args.iter().skip(3).cloned().collect();
-            let name = args.get(2).cloned().unwrap_or_default();
-            shell::set_location(Some(&name), 0);
-            shell.run_source(command);
+        shell.enable_interactive_defaults();
+    }
+    shell.options.login_shell = invocation.login;
+    load_startup_files(shell, invocation, interactive_shell);
+    if shell.flow == Flow::Exit {
+        return shell.last_status;
+    }
+    shell.positional = invocation.positional.clone();
+    match &invocation.mode {
+        Mode::Command(source) => run_command_string(shell, source, invocation),
+        Mode::Script(path) => run_script_operand(shell, path, invocation),
+        _ if interactive_shell => {
+            welcome_once();
+            load_plugins(shell);
+            interactive(shell);
             shell.last_status
         }
-        Some(option) if option.starts_with('-') && option != "-" => {
-            shell::error(format!("{option}: unknown option\n{USAGE}"));
-            2
+        _ if invocation.no_execute => {
+            let source = String::from_utf8_lossy(&sys::read_all(0)).into_owned();
+            crate::startup::check_syntax(&source)
         }
-        Some(name)
-            if !std::path::Path::new(name).exists()
-                && (builtins::is_builtin(name) || table::is_command(name)) =>
-        {
-            let words: Vec<String> = args
-                .iter()
-                .map(|word| format!("'{}'", word.replace('\'', "'\\''")))
-                .collect();
-            shell.run_source(&words.join(" "));
-            shell.last_status
-        }
-        Some(script) => run_script(&mut shell, script, &args[1..]),
-        None => {
-            if login {
-                add_system_paths();
-                load_file(&mut shell, &profile_path());
-            }
-            if shell.flow != Flow::Exit {
-                load_file(&mut shell, &rc_path());
-            }
-            if shell.flow == Flow::Exit {
-                return shell.last_status;
-            }
-            if force_interactive || sys::isatty(0) {
-                shell.shell_pgid = sys::init_job_control();
-                sys::remember_terminal();
-                shell.interactive = true;
-                welcome_once();
-                load_plugins(&mut shell);
-                interactive(&mut shell);
-            } else {
-                shell.run_lines(|| sys::read_line(0));
-            }
-            shell.last_status
-        }
-    };
-    shell.last_status = status;
-    shell.run_exit_trap();
-    if let Some(capture) = capture {
-        let outcome = capture.finish();
-        if json {
-            let directory = std::env::current_dir()
-                .map(|path| path.display().to_string())
-                .unwrap_or_default();
-            let result = crate::agent::result_json(&outcome, shell.last_status, &directory);
-            println!("{}", result.to_text());
-        } else {
-            crate::agent::print_plain(&outcome);
+        _ => shell.run_lines(|| sys::read_line(0)),
+    }
+}
+
+fn apply_options(shell: &mut Shell, invocation: &Invocation) -> Result<(), i32> {
+    let mut commands = Vec::new();
+    if !invocation.set_arguments.is_empty() {
+        let mut set = vec!["set".to_string()];
+        set.extend(invocation.set_arguments.iter().cloned());
+        commands.push(set);
+    }
+    commands.extend(invocation.shopt_arguments.iter().cloned());
+    for command in commands {
+        if builtins::run(shell, &command) != 0 {
+            return Err(2);
         }
     }
-    shell.last_status
+    Ok(())
+}
+
+fn load_startup_files(shell: &mut Shell, invocation: &Invocation, interactive: bool) {
+    if invocation.login && !invocation.no_profile {
+        add_system_paths();
+        load_file(shell, &profile_path());
+    }
+    if interactive && !invocation.no_rc && shell.flow != Flow::Exit {
+        let rc = invocation
+            .rc_file
+            .as_ref()
+            .map(PathBuf::from)
+            .unwrap_or_else(rc_path);
+        load_file(shell, &rc);
+    }
+}
+
+fn run_command_string(shell: &mut Shell, source: &str, invocation: &Invocation) -> i32 {
+    if let Some(name) = &invocation.name {
+        shell.arg0 = name.clone();
+    }
+    shell::set_location(Some(invocation.name.as_deref().unwrap_or_default()), 0);
+    if invocation.no_execute {
+        return crate::startup::check_syntax(source);
+    }
+    let mut lines = source.lines().map(String::from);
+    shell.run_lines(|| lines.next())
+}
+
+fn run_script_operand(shell: &mut Shell, path: &str, invocation: &Invocation) -> i32 {
+    let exists = std::path::Path::new(path).exists();
+    if !exists && (builtins::is_builtin(path) || table::is_command(path)) {
+        let words: Vec<String> = std::iter::once(path)
+            .chain(invocation.positional.iter().map(String::as_str))
+            .map(|word| format!("'{}'", word.replace('\'', "'\\''")))
+            .collect();
+        shell.run_source(&words.join(" "));
+        return shell.last_status;
+    }
+    if invocation.no_execute {
+        return check_script(path);
+    }
+    run_script(shell, path, &invocation.positional)
+}
+
+fn check_script(path: &str) -> i32 {
+    match std::fs::read_to_string(path) {
+        Ok(contents) => {
+            shell::set_location(Some(path), 0);
+            crate::startup::check_syntax(&contents)
+        }
+        Err(error) => {
+            shell::error(format!("{path}: {}", sys::error_message(&error)));
+            127
+        }
+    }
 }
 
 fn run_script(shell: &mut Shell, path: &str, args: &[String]) -> i32 {
@@ -207,8 +274,10 @@ fn run_script(shell: &mut Shell, path: &str, args: &[String]) -> i32 {
 
 fn home_dir() -> PathBuf {
     std::env::var("HOME")
+        .ok()
+        .or_else(sys::current_user_home)
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."))
+        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 fn history_path() -> PathBuf {
@@ -281,7 +350,7 @@ fn load_file(shell: &mut Shell, path: &std::path::Path) {
         return;
     }
     if let Err(problem) = crate::trust::check(path) {
-        shell::error(format!("not loading {problem}"));
+        warn_once(format!("not loading {problem}"));
         return;
     }
     let Ok(contents) = std::fs::read_to_string(path) else {
@@ -289,6 +358,17 @@ fn load_file(shell: &mut Shell, path: &std::path::Path) {
     };
     let mut lines = contents.lines().map(String::from);
     shell.run_lines(|| lines.next());
+}
+
+fn warn_once(message: String) {
+    static WARNED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    let Ok(mut warned) = WARNED.lock() else {
+        return;
+    };
+    if !warned.contains(&message) {
+        shell::error(&message);
+        warned.push(message);
+    }
 }
 
 fn interactive(shell: &mut Shell) {

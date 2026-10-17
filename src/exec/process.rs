@@ -160,7 +160,7 @@ impl Shell {
                 sys::close(given);
                 let status = match parser::parse_from_line(
                     source,
-                    &self.aliases,
+                    self.active_aliases(),
                     self.current_line.max(1),
                 ) {
                     Ok(list) => self.run_list_exec(&list),
@@ -230,13 +230,14 @@ impl Shell {
                 let _ = sys::dup2(write_end, 1);
                 sys::close(write_end);
                 let first_line = self.current_line.max(1);
-                let status = match parser::parse_from_line(source, &self.aliases, first_line) {
-                    Ok(list) => self.run_list_exec(&list),
-                    Err(error) => {
-                        shell::error(error);
-                        2
-                    }
-                };
+                let status =
+                    match parser::parse_from_line(source, self.active_aliases(), first_line) {
+                        Ok(list) => self.run_list_exec(&list),
+                        Err(error) => {
+                            shell::error(error);
+                            2
+                        }
+                    };
                 sys::exit_now(status)
             }
             Ok(pid) => {

@@ -20,7 +20,7 @@ const MAX_FUNCTION_DEPTH: usize = 1000;
 impl Shell {
     pub(crate) fn run_source(&mut self, source: &str) -> i32 {
         let first_line = self.current_line.max(1);
-        match parser::parse_from_line(source, &self.aliases, first_line) {
+        match parser::parse_from_line(source, self.active_aliases(), first_line) {
             Ok(list) => self.run_list(&list),
             Err(error) => {
                 self.report_parse_error(error);
@@ -42,7 +42,7 @@ impl Shell {
             if !buffer.ends_with('\n') {
                 buffer.push('\n');
             }
-            match parser::parse_from_line(&buffer, &self.aliases, chunk_start) {
+            match parser::parse_from_line(&buffer, self.active_aliases(), chunk_start) {
                 Err(error) if error.incomplete => continue,
                 Err(error) => self.report_parse_error(error),
                 Ok(list) => {
@@ -57,7 +57,7 @@ impl Shell {
             }
         }
         if !buffer.trim().is_empty() {
-            match parser::parse_from_line(&buffer, &self.aliases, chunk_start) {
+            match parser::parse_from_line(&buffer, self.active_aliases(), chunk_start) {
                 Ok(list) => {
                     self.run_list(&list);
                 }

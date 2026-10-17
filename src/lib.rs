@@ -1,6 +1,7 @@
 mod agent;
 mod builtins;
 mod check;
+mod cli;
 mod commands;
 mod directories;
 mod exec;
@@ -9,6 +10,7 @@ mod jobs;
 pub(crate) mod repl;
 mod shell;
 mod signals;
+mod startup;
 mod syntax;
 mod sys;
 mod table;

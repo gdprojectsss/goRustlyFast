@@ -1,0 +1,11 @@
+not expanded in scripts
+expand_aliases is off
+no default ls alias
+hello
+expand_aliases is on
+hello from function
+off again
++ 
+not interactive
+shell level
+--- exit 0
