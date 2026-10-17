@@ -1,10 +1,16 @@
+use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use crate::signals;
+
 const WAIT: Duration = Duration::from_millis(60);
 const FRESH: Duration = Duration::from_millis(1500);
+pub(super) const REDRAW_SIGNAL: libc::c_int = libc::SIGURG;
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub(crate) struct GitInfo {
@@ -29,6 +35,16 @@ pub(super) struct GitPrompt {
     info: Option<GitInfo>,
     updated: Option<Instant>,
     pending: Option<Pending>,
+    redraw: Arc<AtomicBool>,
+}
+
+fn inside_repository(directory: &str) -> bool {
+    if std::env::var_os("GIT_DIR").is_some() {
+        return true;
+    }
+    Path::new(directory)
+        .ancestors()
+        .any(|ancestor| ancestor.join(".git").exists())
 }
 
 fn query(directory: &str) -> Option<GitInfo> {
@@ -85,15 +101,11 @@ fn parse(status: &str) -> Option<GitInfo> {
 }
 
 impl GitPrompt {
-    fn collect(&mut self, block: bool) {
+    fn collect(&mut self, wait: Duration) {
         let Some(pending) = &self.pending else {
             return;
         };
-        let result = if block {
-            pending.receiver.recv().ok()
-        } else {
-            pending.receiver.recv_timeout(WAIT).ok()
-        };
+        let result = pending.receiver.recv_timeout(wait).ok();
         if let Some(info) = result {
             let pending = self.pending.take().expect("pending query");
             let _ = pending.handle.join();
@@ -104,33 +116,66 @@ impl GitPrompt {
         }
     }
 
+    fn spawn(&mut self, directory: &str) {
+        let (sender, receiver) = mpsc::channel();
+        let target = directory.to_string();
+        let shown = self.info.clone();
+        let redraw = Arc::clone(&self.redraw);
+        let handle = thread::spawn(move || {
+            let result = query(&target);
+            let changed = result != shown;
+            let _ = sender.send(result);
+            if changed && redraw.load(Ordering::SeqCst) {
+                signals::signal_main_thread(REDRAW_SIGNAL);
+            }
+        });
+        self.pending = Some(Pending {
+            directory: directory.to_string(),
+            receiver,
+            handle,
+        });
+    }
+
     pub(super) fn info(&mut self, directory: &str) -> Option<GitInfo> {
         if directory != self.directory {
             self.directory = directory.to_string();
             self.info = None;
             self.updated = None;
         }
+        if !inside_repository(directory) {
+            self.info = None;
+            return None;
+        }
         let fresh = self
             .updated
             .is_some_and(|updated| updated.elapsed() < FRESH);
         if !fresh && self.pending.is_none() {
-            let (sender, receiver) = mpsc::channel();
-            let target = directory.to_string();
-            let handle = thread::spawn(move || {
-                let _ = sender.send(query(&target));
-            });
-            self.pending = Some(Pending {
-                directory: directory.to_string(),
-                receiver,
-                handle,
-            });
+            self.spawn(directory);
         }
-        self.collect(false);
+        self.redraw.store(true, Ordering::SeqCst);
+        self.collect(WAIT);
+        if self.pending.is_none() {
+            self.redraw.store(false, Ordering::SeqCst);
+        }
         self.info.clone()
     }
 
-    pub(super) fn settle(&mut self) {
-        self.collect(true);
+    pub(super) fn waiting(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    pub(super) fn arrived(&mut self) -> bool {
+        let before = self.info.clone();
+        self.collect(Duration::ZERO);
+        self.pending.is_none() && self.info != before
+    }
+
+    pub(super) fn stop_redraw(&self) {
+        self.redraw.store(false, Ordering::SeqCst);
+    }
+
+    pub(super) fn invalidate(&mut self) {
+        self.updated = None;
     }
 }
 
@@ -171,11 +216,39 @@ mod tests {
             .to_string_lossy()
             .into_owned();
         prompt.info(&directory);
-        prompt.settle();
+        prompt.stop_redraw();
+        if prompt.waiting() {
+            prompt.collect(Duration::from_secs(10));
+        }
         assert!(
             prompt
                 .info(&directory)
                 .is_some_and(|info| !info.branch.is_empty())
         );
+    }
+
+    #[test]
+    fn no_query_outside_a_repository() {
+        let mut prompt = GitPrompt::default();
+        assert_eq!(prompt.info("/"), None);
+        assert!(!prompt.waiting());
+    }
+
+    #[test]
+    fn invalidated_results_are_queried_again() {
+        let mut prompt = GitPrompt::default();
+        let directory = std::env::current_dir()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        prompt.info(&directory);
+        prompt.stop_redraw();
+        prompt.collect(Duration::from_secs(10));
+        assert!(prompt.updated.is_some());
+        prompt.invalidate();
+        assert!(prompt.updated.is_none());
+        prompt.info(&directory);
+        prompt.stop_redraw();
+        assert!(prompt.waiting() || prompt.updated.is_some());
     }
 }

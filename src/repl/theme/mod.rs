@@ -279,6 +279,32 @@ fn rows(width: usize, columns: usize) -> usize {
     width.max(1).div_ceil(columns.max(1))
 }
 
+fn cursor_rows(width: usize, columns: usize) -> usize {
+    width / columns.max(1) + 1
+}
+
+fn occupied_rows(prompt: &str, line: &str, columns: usize) -> usize {
+    let prompt_lines: Vec<&str> = prompt.split('\n').collect();
+    let input_lines: Vec<&str> = line.split('\n').collect();
+    let mut widths: Vec<usize> = prompt_lines[..prompt_lines.len() - 1]
+        .iter()
+        .map(|prompt_line| display_width(prompt_line))
+        .collect();
+    let last_prompt = prompt_lines.last().map_or(0, |last| display_width(last));
+    widths.push(last_prompt + display_width(input_lines[0]));
+    widths.extend(input_lines[1..].iter().map(|input| display_width(input)));
+    let last = widths.pop().unwrap_or(0);
+    widths
+        .into_iter()
+        .map(|width| rows(width, columns))
+        .sum::<usize>()
+        + cursor_rows(last, columns)
+}
+
+pub(super) fn prompt_rows(prompt: &str, columns: usize) -> usize {
+    occupied_rows(prompt, "", columns)
+}
+
 pub(super) fn collapse(
     prompt: &str,
     line: &str,
@@ -286,17 +312,7 @@ pub(super) fn collapse(
     highlighted: &str,
     columns: usize,
 ) {
-    let prompt_lines: Vec<&str> = prompt.split('\n').collect();
-    let input_lines: Vec<&str> = line.split('\n').collect();
-    let mut total = 0;
-    for prompt_line in &prompt_lines[..prompt_lines.len() - 1] {
-        total += rows(display_width(prompt_line), columns);
-    }
-    let last_prompt = prompt_lines.last().map_or(0, |last| display_width(last));
-    total += rows(last_prompt + display_width(input_lines[0]), columns);
-    for input_line in &input_lines[1..] {
-        total += rows(display_width(input_line), columns);
-    }
+    let total = occupied_rows(prompt, line, columns);
     let mut out = std::io::stdout().lock();
     let _ = write!(out, "\x1b[{total}A\r\x1b[J{transient}{highlighted}\n");
     let _ = out.flush();
@@ -375,6 +391,16 @@ impl ThemeCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rows_count_the_line_the_cursor_wraps_to() {
+        assert_eq!(occupied_rows("❯ ", &"x".repeat(97), 100), 1);
+        assert_eq!(occupied_rows("❯ ", &"x".repeat(98), 100), 2);
+        assert_eq!(occupied_rows("~\n❯ ", &"x".repeat(98), 100), 3);
+        assert_eq!(occupied_rows(&"y".repeat(100), "", 100), 2);
+        assert_eq!(occupied_rows("~\n❯ ", "a\nb", 100), 3);
+        assert_eq!(prompt_rows("~\n❯ ", 100), 2);
+    }
 
     #[test]
     fn presets_exist() {

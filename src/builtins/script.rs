@@ -18,6 +18,9 @@ pub(super) fn source(shell: &mut Shell, args: &[String]) -> i32 {
             return 1;
         }
     };
+    if let Some(hint) = crate::repl::startup_file_hint(path, &contents) {
+        shell::error(hint);
+    }
 
     let saved_positional =
         (args.len() > 1).then(|| std::mem::replace(&mut shell.positional, args[1..].to_vec()));

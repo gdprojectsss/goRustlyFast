@@ -69,6 +69,11 @@ const TOPICS: &[(&str, &str, &str)] = &[
         "show what a command line expands to without running it",
     ),
     ("false", "false", "fail"),
+    (
+        "fc",
+        "fc [-e editor] [-lnr] [first [last]] | fc -s [old=new] [command]",
+        "list, edit or run again commands from the history",
+    ),
     ("fg", "fg [%job]", "bring a job to the foreground"),
     (
         "getopts",

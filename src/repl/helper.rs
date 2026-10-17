@@ -1,8 +1,10 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use rustyline::Context;
-use rustyline::completion::{Completer, FilenameCompleter, Pair};
+use rustyline::completion::{Completer, Pair};
 use rustyline::highlight::{CmdKind, Highlighter};
 use rustyline::hint::{Hint, Hinter};
 use rustyline::history::SearchDirection;
@@ -13,6 +15,9 @@ use crate::text::display_width;
 
 use super::completion::{self, ShellNames, Target};
 use super::highlight::{self, DIM, RESET};
+use super::keys;
+
+pub(super) const INTERRUPT_MARK: &str = "^C";
 
 pub(super) struct RightPrompt {
     pub colored: String,
@@ -37,7 +42,7 @@ impl Hint for ShellHint {
 }
 
 pub(super) struct ShellHelper {
-    file_completer: FilenameCompleter,
+    interrupted: Arc<AtomicBool>,
     names: ShellNames,
     right_prompt: Option<RightPrompt>,
     shown_right: RefCell<Option<(String, String)>>,
@@ -46,7 +51,7 @@ pub(super) struct ShellHelper {
 impl ShellHelper {
     pub(super) fn new() -> Self {
         ShellHelper {
-            file_completer: FilenameCompleter::new(),
+            interrupted: Arc::new(AtomicBool::new(false)),
             names: ShellNames::default(),
             right_prompt: None,
             shown_right: RefCell::new(None),
@@ -59,6 +64,10 @@ impl ShellHelper {
         self.names = names;
     }
 
+    pub(super) fn interrupted(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.interrupted)
+    }
+
     pub(super) fn set_right_prompt(&mut self, right_prompt: Option<RightPrompt>) {
         self.right_prompt = right_prompt;
     }
@@ -69,20 +78,6 @@ impl ShellHelper {
             .binary_search_by(|candidate| candidate.as_str().cmp(name))
             .is_ok()
     }
-
-    fn files(
-        &self,
-        line: &str,
-        position: usize,
-        context: &Context<'_>,
-        directories_only: bool,
-    ) -> rustyline::Result<(usize, Vec<Pair>)> {
-        let (start, mut pairs) = self.file_completer.complete(line, position, context)?;
-        if directories_only {
-            pairs.retain(|pair| pair.replacement.ends_with('/'));
-        }
-        Ok((start, pairs))
-    }
 }
 
 impl Completer for ShellHelper {
@@ -92,30 +87,23 @@ impl Completer for ShellHelper {
         &self,
         line: &str,
         position: usize,
-        context: &Context<'_>,
+        _context: &Context<'_>,
     ) -> rustyline::Result<(usize, Vec<Pair>)> {
         let request = completion::analyze(&line[..position]);
+        let raw = &line[request.start..position];
         let target = completion::target_with(&request, &self.names);
-        match target {
-            Target::Files => self.files(line, position, context, false),
-            Target::Directories => self.files(line, position, context, true),
+        let pairs = match target {
+            Target::Files => completion::files(raw, false),
+            Target::Directories => completion::files(raw, true),
             Target::WordsAndFiles(_) | Target::WordsAndDirectories(_) => {
                 let directories_only = matches!(target, Target::WordsAndDirectories(_));
-                let words = completion::candidates(&target, &request.current, &self.names);
-                let (start, files) = self.files(line, position, context, directories_only)?;
-                if start == request.start {
-                    Ok((start, words.into_iter().chain(files).collect()))
-                } else if words.is_empty() {
-                    Ok((start, files))
-                } else {
-                    Ok((request.start, words))
-                }
+                let mut words = completion::candidates(&target, &request.current, &self.names);
+                words.extend(completion::files(raw, directories_only));
+                words
             }
-            _ => Ok((
-                request.start,
-                completion::candidates(&target, &request.current, &self.names),
-            )),
-        }
+            _ => completion::candidates(&target, &request.current, &self.names),
+        };
+        Ok((request.start, completion::finish_single(pairs)))
     }
 }
 
@@ -128,6 +116,9 @@ impl Highlighter for ShellHelper {
     }
 
     fn highlight_hint<'h>(&self, hint: &'h str) -> Cow<'h, str> {
+        if hint == INTERRUPT_MARK {
+            return hint.into();
+        }
         if let Some((plain, colored)) = self.shown_right.borrow().as_ref()
             && plain == hint
         {
@@ -148,6 +139,9 @@ impl Hinter for ShellHelper {
     type Hint = ShellHint;
 
     fn hint(&self, line: &str, position: usize, context: &Context<'_>) -> Option<ShellHint> {
+        if !line.is_empty() {
+            keys::keep_prompt_on_screen();
+        }
         if position < line.len() {
             return None;
         }
@@ -187,6 +181,9 @@ impl Hinter for ShellHelper {
 
 impl Validator for ShellHelper {
     fn validate(&self, context: &mut ValidationContext) -> rustyline::Result<ValidationResult> {
+        if self.interrupted.load(Ordering::SeqCst) {
+            return Ok(ValidationResult::Valid(Some(INTERRUPT_MARK.into())));
+        }
         match parser::parse(context.input()) {
             Err(error) if error.incomplete => Ok(ValidationResult::Incomplete),
             _ => Ok(ValidationResult::Valid(None)),

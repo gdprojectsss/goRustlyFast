@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::repl::git::GitInfo;
 
@@ -121,28 +121,63 @@ fn find_upwards(start: &str, markers: &[&str]) -> bool {
     false
 }
 
-static VERSIONS: Mutex<Option<HashMap<&'static str, Option<String>>>> = Mutex::new(None);
+const VERSION_LIFETIME: Duration = Duration::from_secs(30);
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct VersionKey {
+    tool: &'static str,
+    path: String,
+    directory: String,
+}
+
+type VersionCache = HashMap<VersionKey, (Instant, Option<String>)>;
+
+static VERSIONS: Mutex<Option<VersionCache>> = Mutex::new(None);
+
+fn version_key(tool: &'static str, directory: &str) -> VersionKey {
+    VersionKey {
+        tool,
+        path: std::env::var("PATH").unwrap_or_default(),
+        directory: directory.to_string(),
+    }
+}
+
+fn cached_version(cache: &VersionCache, key: &VersionKey) -> Option<Option<String>> {
+    cache
+        .get(key)
+        .filter(|(checked, _)| checked.elapsed() < VERSION_LIFETIME)
+        .map(|(_, version)| version.clone())
+}
 
 fn tool_version(
     tool: &'static str,
+    directory: &str,
     args: &[&str],
     extract: fn(&str) -> Option<String>,
 ) -> Option<String> {
+    let key = version_key(tool, directory);
+    if let Some(version) = VERSIONS
+        .lock()
+        .ok()?
+        .as_ref()
+        .and_then(|cache| cached_version(cache, &key))
+    {
+        return version;
+    }
+    let version = Command::new(tool)
+        .args(args)
+        .current_dir(directory)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| extract(&String::from_utf8_lossy(&output.stdout)));
     let mut cache = VERSIONS.lock().ok()?;
     let cache = cache.get_or_insert_with(HashMap::new);
-    cache
-        .entry(tool)
-        .or_insert_with(|| {
-            let output = Command::new(tool)
-                .args(args)
-                .stdin(Stdio::null())
-                .stderr(Stdio::null())
-                .output()
-                .ok()
-                .filter(|output| output.status.success())?;
-            extract(&String::from_utf8_lossy(&output.stdout))
-        })
-        .clone()
+    cache.retain(|_, (checked, _)| checked.elapsed() < VERSION_LIFETIME);
+    cache.insert(key, (Instant::now(), version.clone()));
+    version
 }
 
 fn second_word(text: &str) -> Option<String> {
@@ -161,7 +196,7 @@ fn language(
     if !find_upwards(context.directory, markers) {
         return None;
     }
-    let version = tool_version(tool, args, extract)?;
+    let version = tool_version(tool, context.directory, args, extract)?;
     Some(labelled(
         icon(theme.icons, icons.0, icons.1, icons.2),
         &version,
@@ -298,6 +333,24 @@ mod tests {
         Theme {
             icons,
             ..Theme::preset("lean").unwrap()
+        }
+    }
+
+    #[test]
+    fn versions_are_cached_per_directory_and_path_for_a_while() {
+        let key = version_key("node", "/project");
+        let mut cache = VersionCache::new();
+        cache.insert(key.clone(), (Instant::now(), Some("20.1.0".into())));
+        assert_eq!(cached_version(&cache, &key), Some(Some("20.1.0".into())));
+        assert_eq!(cached_version(&cache, &version_key("node", "/other")), None);
+        let moved_path = VersionKey {
+            path: "/elsewhere/bin".into(),
+            ..key.clone()
+        };
+        assert_eq!(cached_version(&cache, &moved_path), None);
+        if let Some(old) = Instant::now().checked_sub(VERSION_LIFETIME * 2) {
+            cache.insert(key.clone(), (old, Some("18.0.0".into())));
+            assert_eq!(cached_version(&cache, &key), None);
         }
     }
 

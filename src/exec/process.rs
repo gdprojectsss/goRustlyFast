@@ -58,6 +58,10 @@ impl Shell {
             }
             ignored
         });
+        if self.interactive {
+            signals::set(libc::SIGTERM, signals::Disposition::Default);
+            signals::set(libc::SIGHUP, signals::Disposition::Default);
+        }
         signals::clear();
         self.interactive = false;
         self.forget_jobs();
@@ -314,6 +318,9 @@ impl Shell {
         if !stopped.is_empty() {
             let id = self.jobs.add(id, pgid, stopped, text, JobState::Stopped);
             eprintln!("\n[{id}]+  Stopped    {text}");
+            if self.interactive {
+                self.flow = Flow::Interrupted;
+            }
             return 128 + libc::SIGTSTP;
         }
         if interrupted && self.interactive {

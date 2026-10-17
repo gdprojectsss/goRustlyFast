@@ -26,7 +26,7 @@ input ──► syntax::lexer ──► syntax::parser ──► AST ──► e
 
 ## Interactive shell
 
-`src/repl/` builds on rustyline: the read loop and startup files (`mod.rs`), completion (`completion/`), highlighting, autosuggestions, key bindings, history expansion, the asynchronous git status used by the prompt (`git.rs`), and the theme engine (`theme/`) with its segments, renderer and the `configure-prompt` wizard.
+`src/repl/` builds on rustyline: startup files (`mod.rs`), the read loop with history saving and signal handling at the prompt (`session.rs`), completion (`completion/`), highlighting, autosuggestions, key bindings, history expansion and `fc` (`history.rs`), the asynchronous git status used by the prompt (`git.rs`), and the theme engine (`theme/`) with its segments, renderer and the `configure-prompt` wizard.
 
 ## Agent features
 

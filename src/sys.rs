@@ -343,6 +343,16 @@ pub fn signal_name(number: libc::c_int) -> Option<&'static str> {
         .map(|&(name, _)| name)
 }
 
+pub fn signal_description(signal: libc::c_int) -> String {
+    let text = unsafe { libc::strsignal(signal) };
+    if text.is_null() {
+        return format!("Signal {signal}");
+    }
+    unsafe { std::ffi::CStr::from_ptr(text) }
+        .to_string_lossy()
+        .into_owned()
+}
+
 pub const SIGNALS: &[(&str, libc::c_int)] = &[
     ("HUP", libc::SIGHUP),
     ("INT", libc::SIGINT),
@@ -443,6 +453,18 @@ pub fn disable_echo(fd: i32) -> Option<libc::termios> {
         libc::tcsetattr(fd, libc::TCSANOW, &quiet);
         Some(saved)
     }
+}
+
+pub fn terminal_state(fd: i32) -> Option<libc::termios> {
+    let mut state: libc::termios = unsafe { std::mem::zeroed() };
+    (unsafe { libc::tcgetattr(fd, &mut state) } == 0).then_some(state)
+}
+
+pub fn terminal_size(fd: i32) -> Option<(usize, usize)> {
+    let mut size: libc::winsize = unsafe { std::mem::zeroed() };
+    let result = unsafe { libc::ioctl(fd, libc::TIOCGWINSZ, &mut size) };
+    (result == 0 && size.ws_col > 0 && size.ws_row > 0)
+        .then(|| (usize::from(size.ws_col), usize::from(size.ws_row)))
 }
 
 pub fn restore_terminal(fd: i32, saved: &libc::termios) {
