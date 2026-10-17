@@ -10,12 +10,15 @@ use crate::syntax::ast::*;
 use crate::syntax::parser;
 use crate::sys;
 use crate::table;
-use crate::variables::{Array, Evaluated, Key, Saved, keyed_element};
+use crate::variables::{Array, Evaluated, Key, Saved};
 
+mod assign;
 mod coproc;
 mod process;
 mod redirect;
 mod select;
+
+pub(crate) use assign::subscript_close;
 
 const MAX_FUNCTION_DEPTH: usize = 1000;
 const SUBSHELL_TEXT: &str = "( ... )";
@@ -882,16 +885,43 @@ impl Shell {
         }
     }
 
-    fn evaluate_assignment(&mut self, assignment: &Assignment) -> Result<Evaluated, String> {
+    pub(crate) fn evaluate_assignment(
+        &mut self,
+        assignment: &Assignment,
+    ) -> Result<Evaluated, String> {
+        let evaluated = self.evaluate_declaration(assignment)?;
+        match evaluated {
+            Evaluated::Scalar {
+                name,
+                subscript: Some(subscript),
+                append,
+                value,
+                ..
+            } => Ok(Evaluated::Scalar {
+                key: Some(self.subscript_key(&name, &subscript)?),
+                name,
+                subscript: None,
+                append,
+                value,
+            }),
+            other => Ok(other),
+        }
+    }
+
+    pub(crate) fn evaluate_declaration(
+        &mut self,
+        assignment: &Assignment,
+    ) -> Result<Evaluated, String> {
         match &assignment.value {
             AssignedValue::Scalar(word) => {
-                let key = match &assignment.index {
-                    Some(index) => Some(self.array_key(&assignment.name, index)?),
+                let subscript = match &assignment.index {
+                    Some(index) => Some(expand::single(self, index)?),
                     None => None,
                 };
                 Ok(Evaluated::Scalar {
                     name: assignment.name.clone(),
-                    key,
+                    key: None,
+                    subscript,
                     append: assignment.append,
                     value: expand::single(self, &expand::assignment_tildes(word))?,
                 })
@@ -899,7 +929,7 @@ impl Shell {
             AssignedValue::Array(words) => Ok(Evaluated::Array {
                 name: assignment.name.clone(),
                 append: assignment.append,
-                elements: expand::words(self, words)?,
+                elements: self.evaluate_elements(words)?,
             }),
         }
     }
@@ -908,9 +938,26 @@ impl Shell {
         match evaluated {
             Evaluated::Scalar {
                 name,
+                key: None,
+                subscript: Some(subscript),
+                append,
+                value,
+            } => {
+                let key = self.subscript_key(&name, &subscript)?;
+                self.assign(Evaluated::Scalar {
+                    name,
+                    key: Some(key),
+                    subscript: None,
+                    append,
+                    value,
+                })
+            }
+            Evaluated::Scalar {
+                name,
                 key: Some(key),
                 append,
                 value,
+                ..
             } => {
                 let name = self.resolve_name(&name);
                 let value = if append {
@@ -919,6 +966,11 @@ impl Shell {
                         .get(&name)
                         .and_then(|array| array.get(&key))
                         .cloned()
+                        .or_else(|| {
+                            (key == Key::Index(0) && !self.arrays.contains_key(&name))
+                                .then(|| self.get_variable(&name))
+                                .flatten()
+                        })
                         .unwrap_or_default();
                     current + &value
                 } else {
@@ -931,6 +983,7 @@ impl Shell {
                 key: None,
                 append,
                 value,
+                ..
             } => {
                 let integer = self
                     .attributes
@@ -950,66 +1003,16 @@ impl Shell {
                 name,
                 append,
                 elements,
-            } => {
-                let name = self.resolve_name(&name);
-                if self.is_readonly(&name) {
-                    return Err(format!("{name}: readonly variable"));
-                }
-                let elements = self.resolve_indexed_keys(&name, elements)?;
-                let mut array = match self.arrays.remove(&name) {
-                    Some(existing) if append => existing,
-                    Some(existing) if existing.is_associative() => Array::associative(),
-                    _ if append => {
-                        Array::indexed(self.variables.get(&name).cloned().into_iter().collect())
-                    }
-                    _ => Array::indexed(Vec::new()),
-                };
-                let elements = if self.attributes.contains_key(&name) {
-                    elements
-                        .into_iter()
-                        .map(|element| match element.split_once("]=") {
-                            Some((key, value)) if key.starts_with('[') => self
-                                .transform_value(&name, value)
-                                .map(|value| format!("{key}]={value}")),
-                            _ => self.transform_value(&name, &element),
-                        })
-                        .collect::<Result<_, _>>()?
-                } else {
-                    elements
-                };
-                let extended = array
-                    .extend(elements)
-                    .map_err(|message| format!("{name}: {message}"));
-                self.set_array(&name, array)?;
-                extended
-            }
+            } => self.assign_elements(&name, append, elements),
         }
-    }
-
-    fn resolve_indexed_keys(
-        &mut self,
-        name: &str,
-        elements: Vec<String>,
-    ) -> Result<Vec<String>, String> {
-        if self.is_associative(name) {
-            return Ok(elements);
-        }
-        elements
-            .into_iter()
-            .map(|element| match keyed_element(&element) {
-                Some((key, value)) if key.trim().parse::<i64>().is_err() => {
-                    let index = expand::evaluate_arithmetic(self, key)?;
-                    Ok(format!("[{index}]={value}"))
-                }
-                _ => Ok(element),
-            })
-            .collect()
     }
 
     fn define_function(&mut self, name: &str, body: &Rc<Command>, source: &str) {
         self.functions.insert(name.to_string(), Rc::clone(body));
         let file = self.current_source();
         self.function_files.insert(name.to_string(), file);
+        self.function_lines
+            .insert(name.to_string(), self.current_line);
         self.function_sources
             .insert(name.to_string(), Rc::from(source));
         if self.is_function_exported(name) {
@@ -1021,6 +1024,11 @@ impl Shell {
         for assignment in assignments {
             let evaluated = match self.evaluate_assignment(assignment) {
                 Ok(evaluated) => evaluated,
+                Err(error) if error.ends_with("bad array subscript") => {
+                    shell::error(error);
+                    self.flow = Flow::Abort;
+                    return 1;
+                }
                 Err(error) => return self.expansion_failed(error),
             };
             if self.options.xtrace
@@ -1048,12 +1056,37 @@ impl Shell {
         let mut evaluated = Vec::with_capacity(assignments.len());
         let mut failure = None;
         for assignment in assignments {
-            match self.evaluate_assignment(assignment) {
+            if let Some(index) = &assignment.index {
+                shell::error(format!(
+                    "`{}[{}]': not a valid identifier",
+                    assignment.name,
+                    builtins::deparse::word(index)
+                ));
+                continue;
+            }
+            let result = match &assignment.value {
+                AssignedValue::Array(words) => Ok(Evaluated::Scalar {
+                    name: assignment.name.clone(),
+                    key: None,
+                    subscript: None,
+                    append: assignment.append,
+                    value: format!(
+                        "({})",
+                        words
+                            .iter()
+                            .map(builtins::deparse::word)
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    ),
+                }),
+                AssignedValue::Scalar(_) => self.evaluate_declaration(assignment),
+            };
+            match result {
                 Ok(Evaluated::Scalar {
                     name,
-                    key: None,
                     append,
                     value,
+                    ..
                 }) => {
                     if self.is_readonly(&name) {
                         shell::error(format!("{name}: readonly variable"));
@@ -1065,7 +1098,7 @@ impl Shell {
                         value
                     };
                     self.variables.remove(&name);
-                    unsafe { std::env::set_var(&name, &value) };
+                    crate::variables::set_environment(&name, &value);
                     evaluated.push((name, value));
                 }
                 Ok(_) => {}
@@ -1100,7 +1133,7 @@ impl Shell {
         };
         let mut declarations = Vec::with_capacity(simple.declarations.len());
         for declaration in &simple.declarations {
-            match self.evaluate_assignment(declaration) {
+            match self.evaluate_declaration(declaration) {
                 Ok(evaluated) => declarations.push(evaluated),
                 Err(error) => return self.expansion_failed(error),
             }
@@ -1287,9 +1320,10 @@ impl Shell {
             .cloned()
             .unwrap_or_else(|| self.current_source());
         self.push_frame(&argv[0], file, true);
-        let hidden = self.hide_function_traps();
+        let traced = self.options.functrace || self.traced_functions.contains(&argv[0]);
+        let hidden = self.hide_function_traps(traced);
         let loop_depth = std::mem::take(&mut self.loop_depth);
-        if self.options.functrace {
+        if traced {
             self.run_named_trap("DEBUG");
         }
         let status = self.run_command(body, false);
@@ -1313,12 +1347,12 @@ impl Shell {
         self.last_status
     }
 
-    fn hide_function_traps(&mut self) -> Vec<(String, String)> {
+    fn hide_function_traps(&mut self, traced: bool) -> Vec<(String, String)> {
         let mut hidden = Vec::new();
         for (name, inherited) in [
             ("ERR", self.options.errtrace),
-            ("DEBUG", self.options.functrace),
-            ("RETURN", self.options.functrace),
+            ("DEBUG", traced),
+            ("RETURN", traced),
         ] {
             if !inherited && let Some(command) = self.traps.remove(name) {
                 hidden.push((name.to_string(), command));
@@ -1376,13 +1410,13 @@ impl Shell {
             })
             .collect();
         for (name, value) in assignments {
-            unsafe { std::env::set_var(name, value) };
+            crate::variables::set_environment(name, value);
         }
         let status = action(self);
         for (name, shell_value, env_value) in saved {
             match env_value {
-                Some(value) => unsafe { std::env::set_var(&name, value) },
-                None => unsafe { std::env::remove_var(&name) },
+                Some(value) => crate::variables::set_environment(&name, &value),
+                None => crate::variables::remove_environment(&name),
             }
             if let Some(value) = shell_value {
                 self.variables.insert(name, value);

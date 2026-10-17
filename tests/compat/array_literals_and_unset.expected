@@ -1,0 +1,10 @@
+unset empty 0
+unset equals 0
+declare -a a=([5]="a" [6]="b" [100]="1" [101]="2")
+v2
+3
+4
+0
+a
+done
+--- exit 0

@@ -112,17 +112,28 @@ pub struct Frame {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum Element {
+    Plain(String),
+    Keyed {
+        subscript: String,
+        append: bool,
+        value: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Evaluated {
     Scalar {
         name: String,
         key: Option<Key>,
+        subscript: Option<String>,
         append: bool,
         value: String,
     },
     Array {
         name: String,
         append: bool,
-        elements: Vec<String>,
+        elements: Vec<Element>,
     },
 }
 
@@ -188,13 +199,13 @@ impl Array {
         }
     }
 
-    fn next_index(map: &BTreeMap<usize, String>) -> usize {
+    fn next_index_of(map: &BTreeMap<usize, String>) -> usize {
         map.keys().next_back().map_or(0, |last| last + 1)
     }
 
     fn resolve(map: &BTreeMap<usize, String>, index: i64) -> Option<usize> {
         if index < 0 {
-            usize::try_from(Self::next_index(map) as i64 + index).ok()
+            usize::try_from(Self::next_index_of(map) as i64 + index).ok()
         } else {
             Some(index as usize)
         }
@@ -257,41 +268,30 @@ impl Array {
         }
     }
 
-    pub fn extend(&mut self, elements: Vec<String>) -> Result<(), String> {
-        for element in elements {
-            match self {
-                Array::Indexed(map) => {
-                    if let Some((key, value)) = keyed_element(&element) {
-                        let position = key
-                            .parse()
-                            .map_err(|_| format!("{key}: bad array subscript"))?;
-                        map.insert(position, value.to_string());
-                    } else {
-                        let next = Self::next_index(map);
-                        map.insert(next, element);
-                    }
-                }
-                Array::Associative(map) => match keyed_element(&element) {
-                    Some(("", _)) => return Err("[]: bad array subscript".into()),
-                    Some((key, value)) => {
-                        map.insert(key.to_string(), value.to_string());
-                    }
-                    None => {
-                        return Err(format!(
-                            "{element}: must use a subscript when assigning an associative array"
-                        ));
-                    }
-                },
-            }
+    pub fn next_index(&self) -> i64 {
+        match self {
+            Array::Indexed(map) => Self::next_index_of(map) as i64,
+            Array::Associative(_) => 0,
         }
-        Ok(())
     }
 }
 
-pub fn keyed_element(element: &str) -> Option<(&str, &str)> {
-    let inner = element.strip_prefix('[')?;
-    let close = inner.find("]=")?;
-    Some((&inner[..close], &inner[close + 2..]))
+fn valid_environment_name(name: &str) -> bool {
+    !name.is_empty() && !name.contains(['=', '\0'])
+}
+
+pub fn set_environment(name: &str, value: &str) {
+    if !valid_environment_name(name) {
+        return;
+    }
+    let value = value.split('\0').next().unwrap_or_default();
+    unsafe { std::env::set_var(name, crate::bytes::to_os(value)) };
+}
+
+pub fn remove_environment(name: &str) {
+    if valid_environment_name(name) {
+        unsafe { std::env::remove_var(name) };
+    }
 }
 
 pub fn needs_ansi_c(text: &str) -> bool {
@@ -387,14 +387,14 @@ pub fn array_assignment(array: &Array) -> String {
 mod tests {
     use super::*;
 
-    fn strings(values: &[&str]) -> Vec<String> {
-        values.iter().map(|value| value.to_string()).collect()
-    }
-
     #[test]
     fn sparse_indexed_arrays() {
         let mut array = Array::indexed(Vec::new());
-        array.extend(strings(&["a", "[5]=f", "g"])).unwrap();
+        array.set(Key::Index(0), "a".into()).unwrap();
+        array.set(Key::Index(5), "f".into()).unwrap();
+        array
+            .set(Key::Index(array.next_index()), "g".into())
+            .unwrap();
         assert_eq!(array.keys(), ["0", "5", "6"]);
         assert_eq!(array.get(&Key::Index(-1)).map(String::as_str), Some("g"));
         assert_eq!(array.get(&Key::Index(3)), None);
@@ -405,17 +405,14 @@ mod tests {
     #[test]
     fn associative_arrays() {
         let mut array = Array::associative();
-        array
-            .extend(strings(&["[host]=db-1", "[port]=5432"]))
-            .unwrap();
+        array.set(Key::Name("host".into()), "db-1".into()).unwrap();
+        array.set(Key::Name("port".into()), "5432".into()).unwrap();
         array.set(Key::Name("user".into()), "admin".into()).unwrap();
         assert_eq!(array.keys(), ["port", "host", "user"]);
         assert_eq!(
             array.get(&Key::Name("port".into())).map(String::as_str),
             Some("5432")
         );
-        assert!(array.extend(strings(&["plain"])).is_err());
-        assert!(array.extend(strings(&["[]=empty"])).is_err());
     }
 
     #[test]

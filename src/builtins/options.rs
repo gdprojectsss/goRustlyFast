@@ -219,10 +219,9 @@ fn list_set_options(shell: &Shell, reusable: bool, out: &mut dyn Write) {
 }
 
 fn print_variables(shell: &Shell, out: &mut dyn Write) {
-    let mut variables: Vec<_> = shell.variables.iter().collect();
-    variables.sort();
-    for (name, value) in variables {
-        let _ = writeln!(out, "{name}='{value}'");
+    super::variables::print_plain_variables(shell, out);
+    if !shell.options.posix {
+        super::lookup::print_functions(shell, &[], false, out);
     }
 }
 
@@ -303,7 +302,7 @@ pub(crate) fn shopt_enabled(shell: &Shell, name: &str) -> bool {
     shopt_state(shell, name).unwrap_or(false)
 }
 
-fn shopt_state(shell: &Shell, name: &str) -> Option<bool> {
+pub(super) fn shopt_state(shell: &Shell, name: &str) -> Option<bool> {
     let mut options = shell.options;
     if let Some(flag) = shopt_flag(&mut options, name) {
         return Some(*flag);

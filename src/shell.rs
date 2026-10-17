@@ -170,6 +170,8 @@ pub struct Shell {
     pub function_stack: Vec<String>,
     pub call_stack: Vec<Frame>,
     pub function_files: HashMap<String, String>,
+    pub function_lines: HashMap<String, usize>,
+    pub traced_functions: std::collections::HashSet<String>,
     pub function_sources: HashMap<String, Rc<str>>,
     pub abbreviations: std::collections::BTreeMap<String, String>,
     pub key_bindings: Vec<(String, KeyBinding)>,
@@ -231,6 +233,8 @@ impl Shell {
             function_stack: Vec::new(),
             call_stack: Vec::new(),
             function_files: HashMap::new(),
+            function_lines: HashMap::new(),
+            traced_functions: std::collections::HashSet::new(),
             function_sources: HashMap::new(),
             abbreviations: std::collections::BTreeMap::new(),
             key_bindings: Vec::new(),
@@ -454,12 +458,12 @@ impl Shell {
             return false;
         };
         let value = format!("() {source}");
-        unsafe { std::env::set_var(Self::function_variable(name), value) };
+        crate::variables::set_environment(&Self::function_variable(name), &value);
         true
     }
 
     pub fn unexport_function(&mut self, name: &str) {
-        unsafe { std::env::remove_var(Self::function_variable(name)) };
+        crate::variables::remove_environment(&Self::function_variable(name));
     }
 
     pub fn is_function_exported(&self, name: &str) -> bool {
@@ -551,8 +555,8 @@ impl Shell {
             None => self.arrays.remove(&name),
         };
         match saved.environment {
-            Some(value) => unsafe { std::env::set_var(&name, value) },
-            None => unsafe { std::env::remove_var(&name) },
+            Some(value) => crate::variables::set_environment(&name, &value),
+            None => crate::variables::remove_environment(&name),
         }
         match saved.attributes {
             Some(attributes) => self.attributes.insert(name, attributes),
@@ -734,7 +738,7 @@ impl Shell {
         }
         if self.should_export(name) {
             self.variables.remove(name);
-            unsafe { std::env::set_var(name, crate::bytes::to_os(&value)) };
+            crate::variables::set_environment(name, &value);
         } else {
             self.variables.insert(name.into(), value);
         }
@@ -759,7 +763,7 @@ impl Shell {
             .or_else(|| std::env::var_os(&name).map(|value| crate::bytes::from_os(&value)));
         self.variables.remove(&name);
         match value {
-            Some(value) => unsafe { std::env::set_var(&name, crate::bytes::to_os(&value)) },
+            Some(value) => crate::variables::set_environment(&name, &value),
             None => self.attributes.entry(name).or_default().exported = true,
         }
     }
@@ -773,7 +777,7 @@ impl Shell {
             return;
         }
         if let Some(value) = crate::bytes::env_var(&name) {
-            unsafe { std::env::remove_var(&name) };
+            crate::variables::remove_environment(&name);
             self.variables.insert(name, value);
         }
     }
@@ -803,7 +807,7 @@ impl Shell {
         self.attributes.remove(name);
         self.arrays.remove(name);
         self.variables.remove(name);
-        unsafe { std::env::remove_var(name) };
+        crate::variables::remove_environment(name);
         true
     }
 

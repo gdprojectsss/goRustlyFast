@@ -162,6 +162,12 @@ pub fn parse_double_quoted_text(text: &str) -> Result<Word, ParseError> {
     Ok(Word { parts })
 }
 
+pub fn parse_unbroken_word(text: &str) -> Result<Word, ParseError> {
+    let mut lexer = Lexer::new(text);
+    lexer.final_input = true;
+    lexer.word_until(|_| false)
+}
+
 struct PendingDoc {
     index: usize,
     delim: String,

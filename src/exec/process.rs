@@ -171,7 +171,7 @@ impl Shell {
             sys::exit_now(1);
         }
         for (name, value) in assignments {
-            unsafe { std::env::set_var(name, value) };
+            crate::variables::set_environment(name, value);
         }
         let error = sys::execv(path, argv);
         if error.raw_os_error() == Some(libc::ENOEXEC) {

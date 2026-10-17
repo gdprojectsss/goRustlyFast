@@ -2,7 +2,7 @@ use std::io::Write;
 
 use crate::shell::{self, Shell};
 use crate::syntax::parser::is_name;
-use crate::variables::{Array, Attributes, Key, array_assignment, quote_value};
+use crate::variables::{Array, Attributes, Evaluated, Key, array_assignment, quote_value};
 
 use super::parse_count;
 
@@ -64,6 +64,8 @@ pub(super) fn unset(shell: &mut Shell, args: &[String]) -> i32 {
 fn remove_function(shell: &mut Shell, name: &str) {
     shell.functions.remove(name);
     shell.function_sources.remove(name);
+    shell.function_lines.remove(name);
+    shell.traced_functions.remove(name);
     shell.unexport_function(name);
 }
 
@@ -82,7 +84,7 @@ fn unset_one(shell: &mut Shell, name: &str, mode: &UnsetMode) -> bool {
     }
     let Some((array, key)) = shell::split_subscript(name) else {
         if !is_name(name) {
-            shell::error(format!("unset: '{name}': not a valid identifier"));
+            shell::error(format!("unset: `{name}': not a valid identifier"));
             return false;
         }
         if mode.reference {
@@ -95,7 +97,7 @@ fn unset_one(shell: &mut Shell, name: &str, mode: &UnsetMode) -> bool {
         return shell.unset_variable(name);
     };
     if !is_name(array) {
-        shell::error(format!("unset: '{name}': not a valid identifier"));
+        shell::error(format!("unset: `{name}': not a valid identifier"));
         return false;
     }
     let array = shell.resolve_name(array);
@@ -184,6 +186,7 @@ struct Flags {
     global: bool,
     functions: bool,
     function_names: bool,
+    trace: Option<bool>,
 }
 
 fn parse_flags(command: &str, args: &[String]) -> Result<(Flags, Vec<String>), String> {
@@ -220,6 +223,7 @@ fn parse_flags(command: &str, args: &[String]) -> Result<(Flags, Vec<String>), S
                 'p' => flags.print = true,
                 'g' => flags.global = true,
                 'f' => flags.functions = true,
+                't' => flags.trace = Some(enable),
                 'F' => {
                     flags.functions = true;
                     flags.function_names = true;
@@ -460,7 +464,7 @@ fn prepare_target(
     if shell.is_readonly(name) && (assigned || flags.add.changes_value()) {
         return Err(format!("{command}: {name}: readonly variable"));
     }
-    if first_local && !flags.add.indexed && !flags.add.associative {
+    if first_local {
         shell.variables.remove(name);
         shell.arrays.remove(name);
         let inherited = shell.attributes.remove(name).unwrap_or_default();
@@ -471,7 +475,8 @@ fn prepare_target(
         }
     }
     apply_value_attributes(shell, name, flags);
-    if flags.add.associative && !shell.is_associative(name) {
+    let creates_array = assigned || !matches!(command, "export" | "readonly");
+    if flags.add.associative && !shell.is_associative(name) && creates_array {
         if shell.arrays.contains_key(name) {
             return Err(format!(
                 "{command}: {name}: cannot convert indexed to associative array"
@@ -486,7 +491,7 @@ fn prepare_target(
                 .or_default()
                 .invisible = true;
         }
-    } else if flags.add.indexed && !shell.arrays.contains_key(name) {
+    } else if flags.add.indexed && !shell.arrays.contains_key(name) && creates_array {
         let existing: Vec<String> = shell.variables.remove(name).into_iter().collect();
         if !assigned && existing.is_empty() {
             shell
@@ -548,13 +553,217 @@ fn assign_reference(
     Ok(())
 }
 
+fn declaration_text(declaration: &Evaluated) -> String {
+    match declaration {
+        Evaluated::Scalar {
+            name,
+            subscript,
+            append,
+            value,
+            ..
+        } => {
+            let subscript = subscript
+                .as_ref()
+                .map_or_else(String::new, |subscript| format!("[{subscript}]"));
+            let operator = if *append { "+=" } else { "=" };
+            format!("{name}{subscript}{operator}{value}")
+        }
+        Evaluated::Array { name, .. } => format!("{name}=(...)"),
+    }
+}
+
+fn assignment_split(argument: &str) -> Option<(&str, Option<&str>, bool, &str)> {
+    let name_end = argument
+        .find(|character: char| !(character == '_' || character.is_ascii_alphanumeric()))?;
+    let name = &argument[..name_end];
+    let rest = &argument[name_end..];
+    let (subscript, rest) = match rest.strip_prefix('[') {
+        Some(inside) => {
+            let close = crate::exec::subscript_close(inside)?;
+            (Some(&inside[..close]), &inside[close + 1..])
+        }
+        None => (None, rest),
+    };
+    let (append, value) = match rest.strip_prefix("+=") {
+        Some(value) => (true, value),
+        None => (false, rest.strip_prefix('=')?),
+    };
+    Some((name, subscript, append, value))
+}
+
+fn is_compound(shell: &Shell, name: &str, value: &str, flags: &Flags) -> bool {
+    value.starts_with('(')
+        && value.ends_with(')')
+        && !flags.remove.indexed
+        && (flags.add.indexed
+            || flags.add.associative
+            || shell.arrays.contains_key(&shell.resolve_name(name)))
+}
+
+fn compound_declaration(
+    shell: &mut Shell,
+    name: &str,
+    argument: &str,
+) -> Result<Evaluated, String> {
+    let list = crate::syntax::parser::parse(argument).map_err(|error| error.to_string())?;
+    let assignment = list
+        .first()
+        .and_then(|item| item.first.commands.first())
+        .and_then(|command| match &command.kind {
+            crate::syntax::ast::CommandKind::Simple(simple) => simple.assignments.first().cloned(),
+            _ => None,
+        })
+        .filter(|assignment| assignment.name == name)
+        .ok_or_else(|| format!("`{argument}': not a valid identifier"))?;
+    shell.evaluate_declaration(&assignment)
+}
+
+fn dynamic_declaration(
+    shell: &mut Shell,
+    flags: &Flags,
+    argument: &str,
+) -> Result<Evaluated, String> {
+    let invalid = || format!("`{argument}': not a valid identifier");
+    let (name, subscript, append, value) = assignment_split(argument).ok_or_else(invalid)?;
+    if !is_name(name) {
+        return Err(invalid());
+    }
+    if subscript.is_none() && is_compound(shell, name, value, flags) {
+        return compound_declaration(shell, name, argument);
+    }
+    Ok(Evaluated::Scalar {
+        name: name.to_string(),
+        key: None,
+        subscript: subscript.map(String::from),
+        append,
+        value: value.to_string(),
+    })
+}
+
+fn print_requested(
+    shell: &Shell,
+    command: &str,
+    flags: &Flags,
+    names: Vec<String>,
+    declarations: &[Evaluated],
+    out: &mut dyn Write,
+) -> i32 {
+    let mut names = names;
+    names.extend(declarations.iter().map(declaration_text));
+    if command == "local" && !names.is_empty() {
+        let mut status = 0;
+        for name in names {
+            match local_names(shell)
+                .contains(&name)
+                .then(|| describe(shell, &name))
+            {
+                Some(Some(line)) => {
+                    let _ = writeln!(out, "{line}");
+                }
+                _ => {
+                    shell::error(format!("local: {name}: not found"));
+                    status = 1;
+                }
+            }
+        }
+        return status;
+    }
+    print_declarations(shell, command, flags, names, out)
+}
+
+fn local_names(shell: &Shell) -> Vec<String> {
+    let mut names: Vec<String> = shell
+        .locals
+        .last()
+        .map(|frame| frame.keys().cloned().collect())
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+fn set_quote(text: &str) -> String {
+    if crate::variables::needs_ansi_c(text) {
+        crate::variables::ansi_c_quote(text)
+    } else if text.is_empty()
+        || text.chars().any(|character| {
+            !(character.is_ascii_alphanumeric() || "_-./:@%+,=".contains(character))
+        })
+    {
+        crate::variables::single_quote(text)
+    } else {
+        text.to_string()
+    }
+}
+
+pub(crate) fn print_plain_variables(shell: &Shell, out: &mut dyn Write) {
+    let mut names: Vec<String> = shell
+        .variables
+        .keys()
+        .chain(shell.arrays.keys())
+        .cloned()
+        .chain(exported_names(shell))
+        .filter(|name| is_name(name))
+        .collect();
+    names.sort();
+    names.dedup();
+    for name in names {
+        if let Some(array) = shell.arrays.get(&name) {
+            let invisible = shell
+                .attributes
+                .get(&name)
+                .is_some_and(|attributes| attributes.invisible);
+            if !invisible {
+                let _ = writeln!(out, "{name}={}", array_assignment(array));
+            }
+            continue;
+        }
+        let value = shell
+            .variables
+            .get(&name)
+            .cloned()
+            .or_else(|| crate::bytes::env_var(&name));
+        if let Some(value) = value {
+            let _ = writeln!(out, "{name}={}", set_quote(&value));
+        }
+    }
+}
+
+fn print_locals(shell: &Shell, out: &mut dyn Write) -> i32 {
+    for name in local_names(shell) {
+        if let Some(line) = describe(shell, &name) {
+            let _ = writeln!(out, "{line}");
+        }
+    }
+    0
+}
+
+fn apply_trace(shell: &mut Shell, flags: &Flags, names: &[String]) -> i32 {
+    let mut status = 0;
+    for name in names {
+        if !shell.functions.contains_key(name) {
+            status = 1;
+            continue;
+        }
+        match flags.trace {
+            Some(true) => {
+                shell.traced_functions.insert(name.clone());
+            }
+            Some(false) => {
+                shell.traced_functions.remove(name);
+            }
+            None => {}
+        }
+    }
+    status
+}
+
 pub(super) fn declare(
     shell: &mut Shell,
     command: &str,
     args: &[String],
     out: &mut dyn Write,
 ) -> i32 {
-    let declarations = std::mem::take(&mut shell.pending_declarations);
+    let mut declarations = std::mem::take(&mut shell.pending_declarations);
     let (flags, names) = match parse_flags(command, args) {
         Ok(parsed) => parsed,
         Err(message) => {
@@ -575,20 +784,64 @@ pub(super) fn declare(
     if command == "readonly" && flags.functions && !names.is_empty() {
         return missing_functions(shell, command, &names);
     }
+    if flags.functions && flags.trace.is_some() && !flags.print {
+        return apply_trace(shell, &flags, &names);
+    }
     if flags.functions {
         return super::lookup::print_functions(shell, &names, flags.function_names, out);
     }
     let listing = names.is_empty() && declarations.is_empty();
-    if flags.print || (listing && (!flags.add.any() || command != "declare")) {
-        return print_declarations(shell, command, &flags, names, out);
+    let marks_attributes = matches!(command, "export" | "readonly");
+    if flags.print && !(marks_attributes && !listing) {
+        return print_requested(shell, command, &flags, names, &declarations, out);
+    }
+    if listing && command == "local" && !flags.add.any() {
+        return print_locals(shell, out);
+    }
+    if listing && matches!(command, "declare" | "typeset") && !flags.add.any() {
+        print_plain_variables(shell, out);
+        return super::lookup::print_functions(shell, &[], false, out);
     }
     if listing {
         return print_declarations(shell, command, &flags, Vec::new(), out);
     }
 
     let mut status = 0;
+    let mut plain = Vec::new();
+    for argument in names {
+        if !argument.contains('=') {
+            plain.push(argument);
+            continue;
+        }
+        match dynamic_declaration(shell, &flags, &argument) {
+            Ok(declaration) => declarations.push(declaration),
+            Err(message) => {
+                shell::error(format!("{command}: {message}"));
+                status = 1;
+            }
+        }
+    }
+    if shell.flow == crate::shell::Flow::Abort {
+        return 1;
+    }
     let mut failed: Vec<String> = Vec::new();
-    let targets: Vec<String> = names
+    if marks_attributes {
+        declarations.retain(|declaration| match declaration {
+            Evaluated::Scalar {
+                name,
+                subscript: Some(subscript),
+                ..
+            } => {
+                shell::error(format!(
+                    "{command}: `{name}[{subscript}]': not a valid identifier"
+                ));
+                status = 1;
+                false
+            }
+            _ => true,
+        });
+    }
+    let targets: Vec<String> = plain
         .iter()
         .cloned()
         .chain(
@@ -599,7 +852,7 @@ pub(super) fn declare(
         .collect();
     for name in &targets {
         if !is_name(name) {
-            shell::error(format!("{command}: '{name}': not a valid identifier"));
+            shell::error(format!("{command}: `{name}': not a valid identifier"));
             status = 1;
             failed.push(name.clone());
             continue;
@@ -620,8 +873,11 @@ pub(super) fn declare(
             continue;
         }
         let result = match &declaration {
-            crate::variables::Evaluated::Scalar {
-                key: None, value, ..
+            Evaluated::Scalar {
+                key: None,
+                subscript: None,
+                value,
+                ..
             } if shell.is_reference(&name) && (flags.add.nameref || !has_target(shell, &name)) => {
                 assign_reference(shell, command, &name, value)
             }
@@ -633,6 +889,9 @@ pub(super) fn declare(
             shell::error(message);
             status = 1;
             failed.push(name);
+            if shell.flow == crate::shell::Flow::Abort {
+                return status;
+            }
         }
     }
 
