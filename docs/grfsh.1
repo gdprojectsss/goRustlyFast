@@ -113,7 +113,10 @@ command or a JSON object with
 .B timeout
 and
 .B id
-fields, and each reply is a JSON line. State carries over between requests.
+fields, and each reply is a JSON line. State carries over between requests,
+which run one at a time with standard input from
+.IR /dev/null .
+SIGTERM, SIGHUP and SIGINT remove the socket before the server exits.
 .B exit
 stops the server.
 .TP
@@ -262,10 +265,15 @@ and
 and a pipe on standard input, replace on the lines listed by
 .BR search .
 .B \-n
-shows the change without writing.
+shows the change without writing. Text with line feeds also matches files
+with CRLF line endings, which are kept, and a block with an empty new side
+deletes the old lines.
 .TP
-.BI "write\-file \fR[\fP\-p\fR] [\fP\-a\fR]\fP " file
-Write standard input to a file atomically.
+.BI "write\-file \fR[\fP\-p\fR] [\fP\-a\fR] [\fP\-f\fR]\fP " file
+Write standard input to a file atomically. Empty input is refused, so a
+missing pipe cannot empty a file, unless
+.B \-f
+is given.
 .SH TABLE COMMANDS
 .TP
 .BR files " [path] [\-a] [\-r]"
@@ -275,8 +283,13 @@ List a directory as a table with name, type, size and modified columns.
 List running processes.
 .TP
 .BI "search \fR[\fP\-i\fR] [\fP\-F\fR] [\fP\-l\fR] [\fP\-g " glob "\fR]\fP " "pattern \fR[\fPpath...\fR]\fP"
-Search file contents, skipping hidden files, binary files and anything
-ignored by
+Search file contents for an extended regular expression in which
+.BR \ed ,
+.BR \ew ,
+.BR \es ,
+.B \eb
+and their upper case negations work on every system, skipping hidden
+files, binary files and anything ignored by
 .I .gitignore
 files. Prints
 .I path:line:text
@@ -296,17 +309,32 @@ Parse text from a pipe into a table.
 .TP
 .BI where " column op value"
 Keep rows that match. Operators are
-.BR == ", " != ", " =~ ", " !~ ", " eq ", " ne ", " lt ", " le ", " gt " and " ge ,
+.BR == ", " != ", " =~ ", " !~ ", " has ", " lacks ", " eq ", " ne ", " lt ", " le ", " gt " and " ge ,
 and conditions can be joined with
 .BR and " and " or .
-Values follow the column type, so sizes accept units such as
+.B =~
+and
+.B !~
+take an extended regular expression,
+.B has
+and
+.B lacks
+a substring in any case. Values follow the column type, so sizes accept
+units such as
 .B 10mb
 and dates accept ages such as
-.BR 2d .
+.BR 2d ,
+which means two days ago, and a value that does not fit is an error.
 .TP
 .BR sort\-by ", " select ", " reject ", " first ", " skip ", " reverse ", " count ", " get ", " group\-by ", " uniq\-by ", " math ", " update ", " to
 Reshape, aggregate or print tables. See
 .BR help .
+.B get \-0
+separates values with NUL bytes. Tables printed as text show control
+characters as escapes such as
+.B \ee
+and
+.BR \en .
 .SH ENVIRONMENT
 .TP
 .B CDPATH

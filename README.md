@@ -10,10 +10,10 @@
 <p>
   <a href="https://github.com/gdprojectsss/goRustlyFast/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/gdprojectsss/goRustlyFast/ci.yml?branch=main&style=flat-square&label=ci"></a>
   <a href="https://www.rust-lang.org"><img alt="Rust 2024 edition" src="https://img.shields.io/badge/rust-2024_edition-f97316?style=flat-square&logo=rust&logoColor=white"></a>
-  <a href="Cargo.toml"><img alt="Dependencies: 2" src="https://img.shields.io/badge/dependencies-2-22c55e?style=flat-square"></a>
+  <a href="Cargo.toml"><img alt="Direct dependencies: 2" src="https://img.shields.io/badge/direct_dependencies-2-22c55e?style=flat-square"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-6366f1?style=flat-square"></a>
   <a href="https://github.com/gdprojectsss/goRustlyFast/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/gdprojectsss/goRustlyFast?style=flat-square&color=22d3ee"></a>
-  <a href="https://github.com/gdprojectsss/goRustlyFast/releases"><img alt="Version 1.0" src="https://img.shields.io/badge/version-1.0-f97316?style=flat-square"></a>
+  <a href="https://github.com/gdprojectsss/goRustlyFast/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/gdprojectsss/goRustlyFast?style=flat-square&color=f97316&label=version"></a>
   <a href="https://grf.sh/docs/"><img alt="Docs" src="https://img.shields.io/badge/docs-grf.sh-0ea5e9?style=flat-square"></a>
 </p>
 
@@ -49,7 +49,7 @@ It also has a set of table commands. `files`, `procs` and `load` produce typed t
 
 For coding agents and CI jobs it has an agent mode: no pagers or prompts, output that stays within a budget, JSON results, a persistent session server, `timeout`, `explain` and exact file edits.
 
-It depends on two crates: `rustyline` for line editing and `libc` for processes and signals.
+It has two direct dependencies: `rustyline` for line editing and `libc` for processes and signals.
 
 ## Quick start
 
@@ -62,8 +62,8 @@ The script picks the release binary for your system, checks its SHA-256 sum and 
 | System | Command |
 | --- | --- |
 | Homebrew | `brew install gdprojectsss/tap/grfsh` |
-| Debian, Ubuntu | `sudo apt install ./grfsh_1.0.0_amd64.deb` from a [release](https://github.com/gdprojectsss/goRustlyFast/releases) |
-| Fedora, RHEL | `sudo dnf install ./grfsh-1.0.0.x86_64.rpm` from a release |
+| Debian, Ubuntu | `sudo apt install ./grfsh_<version>_amd64.deb` with the file from the [latest release](https://github.com/gdprojectsss/goRustlyFast/releases/latest) |
+| Fedora, RHEL | `sudo dnf install ./grfsh-<version>.x86_64.rpm` with the file from the latest release |
 | Arch Linux | `makepkg -si` in [`packaging/aur/grfsh-bin`](packaging/aur/grfsh-bin) or [`grfsh-git`](packaging/aur/grfsh-git), AUR packages coming |
 | Nix | `nix run github:gdprojectsss/goRustlyFast` |
 | Cargo | `cargo install grfsh` |
@@ -107,7 +107,7 @@ $ load servers.csv | where region == eu | to json
 [{"host":"web-1","region":"eu","cpu":72,"uptime_days":41},{"host":"web-2","region":"eu","cpu":18,"uptime_days":41}]
 
 $ ps aux | where %CPU gt 5 | select PID %CPU COMMAND
-$ files src -r | where name =~ .rs | math sum size
+$ files src -r | where name =~ '\.rs$' | math sum size
 $ load servers.csv | group-by region
 ```
 
@@ -117,11 +117,11 @@ $ load servers.csv | group-by region
 | `procs` | running processes with pid, ppid, cpu, mem, rss, name |
 | `load <file>` | reads `.csv`, `.tsv`, `.json`, `.jsonl`, anything else as lines |
 | `from csv\|tsv\|json\|jsonl\|ws\|lines` | parses text coming from a pipe |
-| `where <column> <op> <value> [and\|or ...]` | keeps matching rows, ops: `== != =~ !~ eq ne lt le gt ge` |
+| `where <column> <op> <value> [and\|or ...]` | keeps matching rows, ops: `== != =~ !~ has lacks eq ne lt le gt ge` |
 | `sort-by <column>... [-r]` | sorts by one or more columns |
 | `select` / `reject <column>...` | keeps or drops columns |
 | `first [n]`, `skip [n]`, `reverse` | slices rows |
-| `count`, `get <column>` | prints the row count or one column as plain lines |
+| `count`, `get [-0] <column>` | prints the row count or one column as plain lines, NUL separated with `-0` |
 | `group-by <column>` | counts rows per value |
 | `uniq-by <column>` | keeps the first row for each value |
 | `math sum\|avg\|min\|max\|median <column>` | aggregates a column, keeping sizes as sizes |
@@ -133,7 +133,9 @@ $ load servers.csv | group-by region
 
 <br>
 
-- Values follow the column type: `10mb` or `1.5 GB` for sizes, `2d`, `3h` or `2026-01-31` for dates, plain numbers for numbers.
+- Values follow the column type: `10mb` or `1.5 GB` for sizes, `2d`, `3h` or `2026-01-31` for dates, plain numbers for numbers. A value that does not fit the column is an error. An age means that long ago, so `where modified gt 2d` keeps files changed in the last two days.
+- `=~` and `!~` take an extended regular expression, case sensitive unless it starts with `(?i)`, and `\d \w \s \b` work everywhere. `has` and `lacks` match a substring, ignoring case. `and` and `or` join conditions only when a column and an operator follow, so `where 'name == rock and roll'` compares with the whole text.
+- Tables shown on a terminal or written as text, markdown or html show control characters as `\e`, `\n`, `\x07` and so on. `get` prints values exactly, and `get -0` separates them with NUL bytes for `xargs -0`.
 - `<` and `>` are redirections in every shell, so write `where size -gt 1mb` or quote the condition: `where 'size > 1mb'`.
 - Output from regular commands is parsed as JSON when it looks like JSON, otherwise as whitespace separated columns with a header line, which is what `ps`, `df` and `docker ps` print.
 - To run a system command that shares a name with a table command, use `command`, for example `command procs`.
@@ -164,10 +166,10 @@ src/main.rs: 2 replacements
 | `--agent` or `GRFSH_AGENT=1` | pagers become `cat`, colors and git prompts are off, and commands that try to read from the terminal fail at once |
 | output budget | long output keeps its first and last lines, the rest is saved to a file whose path is printed |
 | `--json` | status, stdout, stderr, duration, final directory and changed environment as one object |
-| `--serve socket`, `--client` | a shell that keeps its directory, variables and functions between requests, with per request timeouts |
+| `--serve socket`, `--client` | a shell that keeps its directory, variables and functions between requests, with per request timeouts; requests run one at a time with standard input from `/dev/null` |
 | `timeout` | stops the whole process group, works on macOS and with functions |
 | `explain`, `--explain` | shows each command after expansion without running it, and flags risky ones |
-| `replace`, `write-file` | exact, atomic edits that fail when the text is missing or appears twice |
+| `replace`, `write-file` | exact, atomic edits that fail when the text is missing or appears twice; `write-file` refuses empty input unless given `-f` |
 | `search`, `git-status`, `ports` | `.gitignore` aware search and status as tables |
 
 The [agent guide](https://grf.sh/docs/agents/) has the details, and [grf.sh/llms.txt](https://grf.sh/llms.txt) has the same instructions in a compact form for agents to read.

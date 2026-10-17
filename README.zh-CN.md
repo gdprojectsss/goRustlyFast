@@ -11,7 +11,7 @@
   <a href="https://github.com/gdprojectsss/goRustlyFast/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/gdprojectsss/goRustlyFast/ci.yml?branch=main&style=flat-square&label=ci"></a>
   <a href="https://www.rust-lang.org"><img alt="Rust 2024 edition" src="https://img.shields.io/badge/rust-2024_edition-f97316?style=flat-square&logo=rust&logoColor=white"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-6366f1?style=flat-square"></a>
-  <a href="https://github.com/gdprojectsss/goRustlyFast/releases"><img alt="版本 1.0" src="https://img.shields.io/badge/version-1.0-f97316?style=flat-square"></a>
+  <a href="https://github.com/gdprojectsss/goRustlyFast/releases"><img alt="最新版本" src="https://img.shields.io/github/v/release/gdprojectsss/goRustlyFast?style=flat-square&color=f97316&label=version"></a>
   <a href="https://grf.sh/zh-cn/docs/"><img alt="文档" src="https://img.shields.io/badge/docs-grf.sh-0ea5e9?style=flat-square"></a>
 </p>
 
@@ -44,7 +44,7 @@ grfsh 在常见场景下使用与 bash 兼容的语法：管道、重定向、`i
 
 对于编程代理和 CI 任务，它提供代理模式：不打开分页器、不等待输入、控制输出长度、以 JSON 返回结果，还有持久会话服务器、`timeout`、`explain` 和精确的文件编辑。
 
-它只依赖两个 crate：用于行编辑的 `rustyline` 和用于进程与信号的 `libc`。
+它只有两个直接依赖：用于行编辑的 `rustyline` 和用于进程与信号的 `libc`。
 
 ## 快速开始
 

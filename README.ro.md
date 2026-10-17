@@ -11,7 +11,7 @@
   <a href="https://github.com/gdprojectsss/goRustlyFast/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/gdprojectsss/goRustlyFast/ci.yml?branch=main&style=flat-square&label=ci"></a>
   <a href="https://www.rust-lang.org"><img alt="Rust 2024 edition" src="https://img.shields.io/badge/rust-2024_edition-f97316?style=flat-square&logo=rust&logoColor=white"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-6366f1?style=flat-square"></a>
-  <a href="https://github.com/gdprojectsss/goRustlyFast/releases"><img alt="Versiunea 1.0" src="https://img.shields.io/badge/version-1.0-f97316?style=flat-square"></a>
+  <a href="https://github.com/gdprojectsss/goRustlyFast/releases"><img alt="Ultima versiune" src="https://img.shields.io/github/v/release/gdprojectsss/goRustlyFast?style=flat-square&color=f97316&label=version"></a>
   <a href="https://grf.sh/docs/"><img alt="Documentatie" src="https://img.shields.io/badge/docs-grf.sh-0ea5e9?style=flat-square"></a>
 </p>
 
@@ -45,7 +45,7 @@ Mai are si un set de comenzi de tabel. `files`, `procs` si `load` scot tabele cu
 
 Pentru agenti de programare si joburi de CI are un mod pentru agenti: fara pager-e sau intrebari, output tinut in buget, rezultate JSON, un server de sesiune persistent, `timeout`, `explain` si editari exacte de fisiere.
 
-Depinde de doua crate-uri: `rustyline` pentru line editing si `libc` pentru procese si semnale.
+Are doua dependente directe: `rustyline` pentru line editing si `libc` pentru procese si semnale.
 
 ## Pornire rapida
 
