@@ -1,0 +1,25 @@
+echo B
+status=0
+hello world !!!
+ONE TWO ONE TWO THREE two one
+1
+2
+3
+4
+5
+left
+brace
+left
+paren
+here 3
+X echo X
+alias q='it'\''s'
+alias q='it'\''s'
+alias q='it'\''s'
+status=1
+status=2
+status=1
+status=2
+status=1
+status=0
+--- exit 0

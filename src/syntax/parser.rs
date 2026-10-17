@@ -77,6 +77,14 @@ pub struct Parser<'a> {
     aliases: Cow<'a, HashMap<String, String>>,
     failed: Option<ParseError>,
     always_extglob: bool,
+    alias_spans: Vec<AliasSpan>,
+    alias_eligible: Vec<usize>,
+}
+
+struct AliasSpan {
+    name: String,
+    start: usize,
+    end: usize,
 }
 
 pub fn is_function_name(name: &str) -> bool {
@@ -115,6 +123,8 @@ impl<'a> Parser<'a> {
             aliases: Cow::Owned(HashMap::new()),
             failed: None,
             always_extglob: false,
+            alias_spans: Vec::new(),
+            alias_eligible: Vec::new(),
         }
     }
 
@@ -159,6 +169,7 @@ impl<'a> Parser<'a> {
     }
 
     fn unit(&mut self) -> Result<Option<List>> {
+        self.forget_alias_positions(self.position);
         self.tokens.drain(..self.position);
         self.position = 0;
         if self.tokens.is_empty() {
@@ -468,6 +479,16 @@ impl<'a> Parser<'a> {
     }
 
     fn command_inner(&mut self) -> Result<Command> {
+        let mut expanded = false;
+        while self.expand_alias(true)? {
+            expanded = true;
+        }
+        if expanded && self.ends_command() {
+            return Ok(Command {
+                kind: CommandKind::Simple(SimpleCommand::default()),
+                redirects: Vec::new(),
+            });
+        }
         let kind = match self.peek().clone() {
             Token::Arithmetic(source) => {
                 self.next();
@@ -915,6 +936,7 @@ impl<'a> Parser<'a> {
     }
 
     fn loop_header(&mut self, keyword: &str) -> Result<(String, Option<Vec<Word>>)> {
+        self.expand_eligible_aliases()?;
         let variable = match self.next() {
             Token::Word(word) => word
                 .as_literal()
@@ -928,10 +950,15 @@ impl<'a> Parser<'a> {
         self.skip_newlines();
 
         let mut items = None;
+        self.expand_eligible_aliases()?;
         if self.is_keyword("in") {
             self.next();
             let mut words = Vec::new();
-            while let Token::Word(word) = self.peek().clone() {
+            loop {
+                self.expand_eligible_aliases()?;
+                let Token::Word(word) = self.peek().clone() else {
+                    break;
+                };
                 self.next();
                 words.push(word);
             }
@@ -1042,7 +1069,6 @@ impl<'a> Parser<'a> {
     fn simple(&mut self) -> Result<Command> {
         let mut simple = SimpleCommand::default();
         let mut redirects = Vec::new();
-        let mut expanded_aliases: Vec<String> = Vec::new();
 
         loop {
             if let Some(redirect) = self.redirect()? {
@@ -1063,22 +1089,16 @@ impl<'a> Parser<'a> {
                 simple.declarations.push(assignment);
                 continue;
             }
-            if simple.words.is_empty() {
-                if let Some(target) = assignment_target(&word) {
-                    self.next();
-                    let assignment = self.finish_assignment(target)?;
-                    simple.assignments.push(assignment);
-                    continue;
-                }
-                if let Some(name) = word.as_literal()
-                    && !expanded_aliases.iter().any(|existing| existing == name)
-                    && let Some(value) = self.aliases.get(name)
-                {
-                    expanded_aliases.push(name.to_string());
-                    let value = value.clone();
-                    self.splice_alias(&value)?;
-                    continue;
-                }
+            if simple.words.is_empty()
+                && let Some(target) = assignment_target(&word)
+            {
+                self.next();
+                let assignment = self.finish_assignment(target)?;
+                simple.assignments.push(assignment);
+                continue;
+            }
+            if self.expand_alias(simple.words.is_empty())? {
+                continue;
             }
             self.next();
             simple.words.push(word);
@@ -1093,24 +1113,116 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn splice_alias(&mut self, value: &str) -> Result<()> {
+    fn ends_command(&mut self) -> bool {
+        matches!(
+            self.peek(),
+            Token::Newline
+                | Token::Eof
+                | Token::Operator(";" | "&" | "&&" | "||" | "|" | ")" | ";;" | ";&" | ";;&")
+        )
+    }
+
+    fn expand_alias(&mut self, command_position: bool) -> Result<bool> {
+        if self.aliases.is_empty() {
+            return Ok(false);
+        }
+        let position = self.position;
+        let Token::Word(word) = self.peek() else {
+            return Ok(false);
+        };
+        let Some(name) = word.as_literal().map(str::to_string) else {
+            return Ok(false);
+        };
+        let name = name.as_str();
+        let eligible = command_position || self.alias_eligible.contains(&position);
+        let blocked = self.alias_spans.iter().any(|span| {
+            span.name == name && span.start <= position && position < span.end
+        });
+        if !eligible || blocked {
+            return Ok(false);
+        }
+        let Some(value) = self.aliases.get(name).cloned() else {
+            return Ok(false);
+        };
+        let name = name.to_string();
+        let count = self.splice_alias(&value)?;
+        self.alias_eligible.retain(|&index| index != position);
+        self.shift_alias_positions(position, count as isize - 1);
+        if count > 0 {
+            self.alias_eligible.push(position);
+        }
+        if value.ends_with([' ', '\t', '\n']) {
+            self.alias_eligible.push(position + count);
+        }
+        self.alias_spans.push(AliasSpan {
+            name,
+            start: position,
+            end: position + count,
+        });
+        Ok(true)
+    }
+
+    fn expand_eligible_aliases(&mut self) -> Result<()> {
+        while self.expand_alias(false)? {}
+        Ok(())
+    }
+
+    fn shift_alias_positions(&mut self, after: usize, delta: isize) {
+        let shift = |index: usize| (index as isize + delta).max(0) as usize;
+        for index in &mut self.alias_eligible {
+            if *index > after {
+                *index = shift(*index);
+            }
+        }
+        for span in &mut self.alias_spans {
+            if span.start > after {
+                span.start = shift(span.start);
+            }
+            if span.end > after {
+                span.end = shift(span.end);
+            }
+        }
+        let position = self.position;
+        self.alias_spans.retain(|span| span.end > position);
+        self.alias_eligible.retain(|&index| index >= position);
+    }
+
+    fn forget_alias_positions(&mut self, consumed: usize) {
+        self.alias_eligible.retain(|&index| index >= consumed);
+        self.alias_spans.retain(|span| span.end > consumed);
+        for index in &mut self.alias_eligible {
+            *index -= consumed;
+        }
+        for span in &mut self.alias_spans {
+            span.start = span.start.saturating_sub(consumed);
+            span.end -= consumed;
+        }
+    }
+
+    fn splice_alias(&mut self, value: &str) -> Result<usize> {
         let lexed = lexer::lex(value)?;
         let (start, end) = (
             self.tokens[self.position].start,
             self.tokens[self.position].end,
         );
-        let tokens: Vec<Spanned> = lexed
-            .tokens
-            .into_iter()
-            .filter(|spanned| !matches!(spanned.token, Token::Eof | Token::Heredoc { .. }))
-            .map(|spanned| Spanned {
-                token: spanned.token,
-                start,
-                end,
-            })
-            .collect();
+        let mut tokens = Vec::new();
+        for spanned in lexed.tokens {
+            let token = match spanned.token {
+                Token::Eof => continue,
+                Token::Heredoc { fd, index } => {
+                    let body = lexed.heredocs.get(index).cloned().unwrap_or_default();
+                    Token::Heredoc {
+                        fd,
+                        index: self.lexer.adopt_heredoc(body),
+                    }
+                }
+                token => token,
+            };
+            tokens.push(Spanned { token, start, end });
+        }
+        let count = tokens.len();
         self.tokens.splice(self.position..=self.position, tokens);
-        Ok(())
+        Ok(count)
     }
 }
 
