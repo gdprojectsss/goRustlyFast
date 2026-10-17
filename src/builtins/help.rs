@@ -179,8 +179,8 @@ const TOPICS: &[(&str, &str, &str)] = &[
     ("wait", "wait [-n] [%job]", "wait for background jobs"),
     (
         "write-file",
-        "write-file [-p] [-a] [-v] file < text",
-        "write standard input to a file atomically",
+        "write-file [-p] [-a] [-v] [-f] file < text",
+        "write standard input to a file atomically (empty input needs -f)",
     ),
     (
         "z",
@@ -206,7 +206,7 @@ const TOPICS: &[(&str, &str, &str)] = &[
     (
         "search",
         "search [-i] [-F] [-H] [-l] [-g glob] pattern [path...]",
-        "search file contents, skipping .gitignore'd, hidden and binary files",
+        "search files by extended regex (\\d \\w \\s \\b work), skipping ignored, hidden and binary files",
     ),
     (
         "load",
@@ -226,7 +226,7 @@ const TOPICS: &[(&str, &str, &str)] = &[
     (
         "where",
         "where column op value [and|or ...]",
-        "keep matching rows",
+        "keep matching rows: =~ !~ regex, has lacks substring, modified gt 2d is newer than 2 days",
     ),
     ("sort-by", "sort-by column... [-r]", "sort rows"),
     ("select", "select column...", "keep columns"),
@@ -235,7 +235,11 @@ const TOPICS: &[(&str, &str, &str)] = &[
     ("skip", "skip [n]", "drop the first n rows"),
     ("reverse", "reverse", "reverse the rows"),
     ("count", "count", "print the number of rows"),
-    ("get", "get column", "print one column as plain lines"),
+    (
+        "get",
+        "get [-0] column",
+        "print one column as plain lines, or NUL separated with -0",
+    ),
     ("group-by", "group-by column", "count rows per value"),
     ("uniq-by", "uniq-by column", "keep the first row per value"),
     (

@@ -67,9 +67,25 @@ impl Table {
         };
         let mut table = Table::new(unique_names(header));
         for record in records {
+            if record.len() > table.columns.len() {
+                table.add_columns(record.len());
+            }
             table.push(record.iter().map(|field| Value::infer(field)).collect());
         }
         table
+    }
+
+    fn add_columns(&mut self, count: usize) {
+        while self.columns.len() < count {
+            let mut name = format!("column{}", self.columns.len() + 1);
+            while self.columns.contains(&name) {
+                name.push('_');
+            }
+            self.columns.push(name);
+        }
+        for row in &mut self.rows {
+            row.resize(count, Value::Nothing);
+        }
     }
 
     pub(crate) fn from_whitespace(text: &str) -> Table {

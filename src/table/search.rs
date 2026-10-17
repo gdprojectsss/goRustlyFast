@@ -1,8 +1,8 @@
-use std::ffi::CString;
 use std::path::{Path, PathBuf};
 
 use super::Table;
 use super::ignore::{self, RuleSet};
+use super::regex::Regex;
 use super::value::Value;
 use crate::expand::glob;
 
@@ -12,7 +12,7 @@ const LONGEST_TEXT: usize = 400;
 
 enum Matcher {
     Fixed { needle: String, nocase: bool },
-    Regex(Box<libc::regex_t>),
+    Regex(Regex),
 }
 
 impl Matcher {
@@ -25,16 +25,7 @@ impl Matcher {
             };
             return Ok(Matcher::Fixed { needle, nocase });
         }
-        let source = CString::new(pattern).map_err(|_| "invalid pattern".to_string())?;
-        let mut flags = libc::REG_EXTENDED | libc::REG_NOSUB;
-        if nocase {
-            flags |= libc::REG_ICASE;
-        }
-        let mut compiled: Box<libc::regex_t> = Box::new(unsafe { std::mem::zeroed() });
-        if unsafe { libc::regcomp(&mut *compiled, source.as_ptr(), flags) } != 0 {
-            return Err(format!("invalid regular expression '{pattern}'"));
-        }
-        Ok(Matcher::Regex(compiled))
+        Regex::new(pattern, nocase).map(Matcher::Regex)
     }
 
     fn matches(&self, line: &str) -> bool {
@@ -44,17 +35,7 @@ impl Matcher {
                 nocase: true,
             } => line.to_lowercase().contains(needle.as_str()),
             Matcher::Fixed { needle, .. } => line.contains(needle.as_str()),
-            Matcher::Regex(compiled) => CString::new(line).is_ok_and(|subject| unsafe {
-                libc::regexec(&**compiled, subject.as_ptr(), 0, std::ptr::null_mut(), 0) == 0
-            }),
-        }
-    }
-}
-
-impl Drop for Matcher {
-    fn drop(&mut self) {
-        if let Matcher::Regex(compiled) = self {
-            unsafe { libc::regfree(&mut **compiled) };
+            Matcher::Regex(regex) => regex.is_match(line),
         }
     }
 }
@@ -127,13 +108,14 @@ impl Search {
         let mut hits = Vec::new();
         for root in &self.roots {
             let path = Path::new(root);
-            let metadata = std::fs::metadata(path).map_err(|error| format!("{root}: {error}"))?;
+            let metadata = std::fs::metadata(path)
+                .map_err(|error| format!("{root}: {}", crate::sys::error_message(&error)))?;
             if metadata.is_file() {
                 self.file(path, root.clone(), &mut hits);
                 continue;
             }
-            let absolute =
-                std::fs::canonicalize(path).map_err(|error| format!("{root}: {error}"))?;
+            let absolute = std::fs::canonicalize(path)
+                .map_err(|error| format!("{root}: {}", crate::sys::error_message(&error)))?;
             let mut sets = ignore::enclosing_sets(&absolute);
             let display = if root == "." {
                 String::new()

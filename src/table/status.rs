@@ -53,16 +53,9 @@ pub(super) fn parse_porcelain(text: &str) -> Table {
     table
 }
 
-pub(super) fn git_status(args: &[String]) -> Result<Table, String> {
+fn git(args: &[&str], paths: &[String]) -> Result<String, String> {
     let mut command = Command::new("git");
-    command.args(["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
-    if args.iter().any(|argument| argument == "--ignored") {
-        command.arg("--ignored");
-    }
-    let paths: Vec<&String> = args
-        .iter()
-        .filter(|argument| !argument.starts_with('-'))
-        .collect();
+    command.args(args);
     if !paths.is_empty() {
         command.arg("--").args(paths);
     }
@@ -70,14 +63,69 @@ pub(super) fn git_status(args: &[String]) -> Result<Table, String> {
         .stdin(Stdio::null())
         .env("GIT_OPTIONAL_LOCKS", "0")
         .output()
-        .map_err(|error| format!("could not run git: {error}"))?;
+        .map_err(|error| format!("could not run git: {}", crate::sys::error_message(&error)))?;
     if !output.status.success() {
         let message = String::from_utf8_lossy(&output.stderr);
         return Err(message.trim().trim_start_matches("fatal: ").to_string());
     }
-    Ok(parse_porcelain(&String::from_utf8_lossy(&output.stdout)))
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
+pub(super) fn relative_to(path: &str, prefix: &str) -> String {
+    let base: Vec<&str> = prefix.split('/').filter(|part| !part.is_empty()).collect();
+    let parts: Vec<&str> = path.split('/').collect();
+    let common = base
+        .iter()
+        .zip(&parts)
+        .take_while(|(left, right)| left == right)
+        .count();
+    let mut relative: Vec<&str> = vec![".."; base.len() - common];
+    relative.extend(&parts[common..]);
+    let joined = relative.join("/");
+    if joined.is_empty() {
+        ".".into()
+    } else {
+        joined
+    }
+}
+
+fn relative_paths(table: &mut Table, prefix: &str) {
+    if prefix.is_empty() {
+        return;
+    }
+    for row in &mut table.rows {
+        for index in [0, 4] {
+            if let Value::Text(path) = &row[index] {
+                row[index] = Value::Text(relative_to(path, prefix));
+            }
+        }
+    }
+}
+
+pub(super) fn git_status(args: &[String]) -> Result<Table, String> {
+    let mut ignored = false;
+    let mut paths = Vec::new();
+    let mut arguments = args.iter();
+    while let Some(argument) = arguments.next() {
+        match argument.as_str() {
+            "--ignored" => ignored = true,
+            "--" => paths.extend(arguments.by_ref().cloned()),
+            flag if flag.starts_with('-') && flag.len() > 1 => {
+                return Err(format!("unknown flag '{flag}'"));
+            }
+            path => paths.push(path.to_string()),
+        }
+    }
+    let mut status = vec!["status", "--porcelain=v1", "-z", "--untracked-files=all"];
+    if ignored {
+        status.push("--ignored");
+    }
+    let output = git(&status, &paths)?;
+    let prefix = git(&["rev-parse", "--show-prefix"], &[])?;
+    let mut table = parse_porcelain(&output);
+    relative_paths(&mut table, prefix.trim_end_matches('\n'));
+    Ok(table)
+}
 fn port_table() -> Table {
     Table::new(vec![
         "protocol".into(),
@@ -223,6 +271,11 @@ pub(super) fn ports(args: &[String]) -> Result<Table, String> {
             let (pid, process) = owners.get(&inode).cloned().unwrap_or((-1, String::new()));
             rows.insert((port, protocol, address, pid, process));
         }
+        if rows.iter().any(|row| row.3 < 0) && !is_root() {
+            crate::shell::error(
+                "ports: not running as root, so the owners of some ports are unknown (run with sudo to see them)",
+            );
+        }
         let mut table = port_table();
         for (port, protocol, address, pid, process) in rows {
             let known = pid >= 0;
@@ -245,12 +298,21 @@ pub(super) fn ports(args: &[String]) -> Result<Table, String> {
         return Ok(table);
     }
     let output = Command::new("lsof")
-        .args(["-nP", "-iTCP", "-sTCP:LISTEN"])
+        .args(["-nP", "+c", "0", "-iTCP", "-sTCP:LISTEN"])
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output()
-        .map_err(|error| format!("could not run lsof: {error}"))?;
+        .map_err(|error| format!("could not run lsof: {}", crate::sys::error_message(&error)))?;
+    if !is_root() {
+        crate::shell::error(
+            "ports: not running as root, so only ports opened by your own processes are listed (run with sudo to see all)",
+        );
+    }
     Ok(parse_lsof(&String::from_utf8_lossy(&output.stdout)))
+}
+
+fn is_root() -> bool {
+    unsafe { libc::geteuid() == 0 }
 }
 
 #[cfg(test)]
@@ -269,6 +331,14 @@ mod tests {
         assert_eq!(table.rows[0][2], Value::Bool(false));
         assert_eq!(table.rows[0][3], Value::Bool(true));
         assert_eq!(table.rows[2][4], Value::Text("old.rs".into()));
+    }
+
+    #[test]
+    fn paths_become_relative_to_the_current_directory() {
+        assert_eq!(relative_to("src/table/a.rs", "src/"), "table/a.rs");
+        assert_eq!(relative_to("README.md", "src/table/"), "../../README.md");
+        assert_eq!(relative_to("src/main.rs", "src/table/"), "../main.rs");
+        assert_eq!(relative_to("src/table", "src/table/"), ".");
     }
 
     #[test]
