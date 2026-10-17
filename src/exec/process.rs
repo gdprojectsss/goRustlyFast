@@ -201,7 +201,9 @@ impl Shell {
                     return String::new();
                 }
             };
-            return match std::fs::read_to_string(&path) {
+            return match crate::sandbox::check_read(&path)
+                .and_then(|()| std::fs::read_to_string(&path))
+            {
                 Ok(mut text) => {
                     while text.ends_with('\n') {
                         text.pop();

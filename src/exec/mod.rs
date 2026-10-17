@@ -186,6 +186,10 @@ impl Shell {
     }
 
     pub(crate) fn handle_signals(&mut self) {
+        if crate::sandbox::expired() {
+            self.last_status = 124;
+            self.flow = Flow::Interrupted;
+        }
         if self.agent && crate::agent::timed_out() {
             self.last_status = 124;
             self.flow = Flow::Interrupted;
@@ -791,6 +795,12 @@ impl Shell {
             bypass_functions = true;
         }
 
+        if crate::sandbox::refuses(
+            &argv,
+            !bypass_functions && self.functions.contains_key(&argv[0]),
+        ) {
+            return 126;
+        }
         if argv[0] == "exec" {
             return self.exec_builtin(&argv[1..], &assignments, redirects);
         }

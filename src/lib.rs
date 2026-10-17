@@ -7,6 +7,7 @@ mod exec;
 mod expand;
 mod jobs;
 pub(crate) mod repl;
+mod sandbox;
 mod shell;
 mod signals;
 mod syntax;
@@ -53,6 +54,10 @@ pub mod fuzzing {
     pub fn arithmetic(text: &str) {
         let mut shell = crate::shell::Shell::new();
         let _ = crate::expand::evaluate_arithmetic(&mut shell, text);
+    }
+
+    pub fn run(data: &[u8]) {
+        crate::sandbox::run_untrusted(data);
     }
 
     pub fn data(text: &str) {

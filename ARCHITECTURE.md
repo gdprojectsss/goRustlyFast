@@ -47,4 +47,5 @@ input ──► syntax::lexer ──► syntax::parser ──► AST ──► e
 - `tests/compat.rs` compares `tests/compat/*.sh` with recorded bash 5 output.
 - `tests/interactive.rs` drives the shell through a pseudo terminal.
 - `tests/agent.rs` covers agent mode, the session server and the editing and search tools.
-- `fuzz/` holds the cargo-fuzz targets.
+- `tests/differential` holds cases that `scripts/differential.sh` runs under bash 5 and grfsh, and `scripts/spec-tests.sh` runs the Oils spec tests.
+- `fuzz/` holds the cargo-fuzz targets. The `run` target executes its input inside the sandbox in `src/sandbox.rs`, which the hooks in `sys::fork`, `sys::open`, `sys::execv`, `sys::kill` and `run_simple` consult; it does nothing unless the fuzz harness enables it.
