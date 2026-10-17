@@ -1,0 +1,18 @@
+0027
+u=rwx,g=rx,o=
+umask 0027
+umask -S u=rwx,g=rx,o=
+0007
+0006
+0777
+0033
+0022
+0002
+0002
+status 1
+status 1
+status 2
+status 1
+0007
+0022
+--- exit 0

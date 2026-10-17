@@ -378,6 +378,7 @@ impl Explainer<'_> {
             let symbol = match redirect.kind {
                 RedirectKind::In => "<",
                 RedirectKind::Out => ">",
+                RedirectKind::Clobber => ">|",
                 RedirectKind::Append => ">>",
                 RedirectKind::ReadWrite => "<>",
                 RedirectKind::DuplicateIn => "<&",
@@ -402,8 +403,10 @@ impl Explainer<'_> {
                 },
                 quote(&target)
             );
-            if matches!(redirect.kind, RedirectKind::Out | RedirectKind::OutAndError)
-                && !target.starts_with("/dev/")
+            if matches!(
+                redirect.kind,
+                RedirectKind::Out | RedirectKind::OutAndError | RedirectKind::Clobber
+            ) && !target.starts_with("/dev/")
                 && Path::new(&target).is_file()
             {
                 text.push_str(", overwriting the existing file");

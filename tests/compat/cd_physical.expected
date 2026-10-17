@@ -1,0 +1,13 @@
+logical pwd keeps the link
+pwd -L keeps the link
+pwd -P resolves the link
+cd .. is logical
+cd -P sets a physical PWD
+cd -P .. leaves the real parent
+set -P makes cd physical
+set -P makes pwd physical
+bad cd option status 2
+bad pwd option status 2
+missing directory status 1
+cd -- works
+--- exit 0

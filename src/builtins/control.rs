@@ -41,3 +41,68 @@ pub(super) fn loop_control(shell: &mut Shell, command: &str, args: &[String]) ->
     };
     0
 }
+
+pub(super) fn let_command(shell: &mut Shell, args: &[String]) -> i32 {
+    if args.is_empty() {
+        shell::error("let: expression expected");
+        return 1;
+    }
+    let mut last = 0;
+    for expression in args {
+        match crate::expand::evaluate_arithmetic(shell, expression) {
+            Ok(value) => last = value,
+            Err(message) => {
+                shell::error(format!("let: {message}"));
+                return 1;
+            }
+        }
+    }
+    i32::from(last == 0)
+}
+
+type Frame = (String, usize, Option<String>);
+
+fn caller_frames(shell: &Shell) -> Vec<Frame> {
+    let mut frames: Vec<Frame> = shell.call_frames.iter().rev().cloned().collect();
+    let sourced = shell
+        .call_frames
+        .iter()
+        .filter(|(name, _, _)| name == "source")
+        .count();
+    if shell.source_stack.len() > sourced {
+        frames.push(("main".to_string(), 0, None));
+    }
+    frames
+}
+
+fn source_name(source: &Option<String>) -> String {
+    source.clone().unwrap_or_else(|| "NULL".into())
+}
+
+pub(super) fn caller(shell: &Shell, args: &[String], out: &mut dyn std::io::Write) -> i32 {
+    let frames = caller_frames(shell);
+    let Some(argument) = args.first() else {
+        let Some((_, line, source)) = frames.first() else {
+            return 1;
+        };
+        let _ = writeln!(out, "{line} {}", source_name(source));
+        return 0;
+    };
+    let Ok(frame) = argument.parse::<usize>() else {
+        let problem = if argument.starts_with('-') {
+            "invalid option"
+        } else {
+            "invalid number"
+        };
+        shell::error(format!("caller: {argument}: {problem}"));
+        eprintln!("caller: usage: caller [expr]");
+        return 2;
+    };
+    match (frames.get(frame), frames.get(frame + 1)) {
+        (Some((_, line, source)), Some((name, _, _))) => {
+            let _ = writeln!(out, "{line} {name} {}", source_name(source));
+            0
+        }
+        _ => 1,
+    }
+}

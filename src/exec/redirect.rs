@@ -59,7 +59,13 @@ impl Shell {
         };
         let (source, owned) = match redirect.kind {
             RedirectKind::In => (open(libc::O_RDONLY)?, true),
-            RedirectKind::Out | RedirectKind::OutAndError => {
+            RedirectKind::Out | RedirectKind::OutAndError | RedirectKind::Clobber => {
+                if redirect.kind != RedirectKind::Clobber
+                    && self.options.noclobber
+                    && std::path::Path::new(&target).is_file()
+                {
+                    return Err(format!("{target}: cannot overwrite existing file"));
+                }
                 (open(libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC)?, true)
             }
             RedirectKind::Append | RedirectKind::AppendAndError => {

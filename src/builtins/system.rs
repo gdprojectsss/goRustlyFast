@@ -24,33 +24,132 @@ fn symbolic(mask: u32) -> String {
     format!("u={},g={},o={}", class(6), class(3), class(0))
 }
 
-pub(super) fn umask(args: &[String], out: &mut dyn Write) -> i32 {
-    match args {
-        [] => {
-            let _ = writeln!(out, "{:04o}", current_umask());
-            0
-        }
-        [flag] if flag == "-S" => {
-            let _ = writeln!(out, "{}", symbolic(current_umask()));
-            0
-        }
-        [value] => match u32::from_str_radix(value, 8) {
-            Ok(mask) if mask <= 0o777 => {
-                unsafe {
-                    libc::umask(mask as libc::mode_t);
-                }
-                0
+fn permission_bits(letters: &str, current: u32, mask: u32) -> Result<u32, char> {
+    let mut bits = 0;
+    for letter in letters.chars() {
+        bits |= match letter {
+            'r' => 0o444,
+            'w' => 0o222,
+            'x' | 'X' => 0o111,
+            's' | 't' => 0,
+            'u' => copy_class(current, 6),
+            'g' => copy_class(current, 3),
+            'o' => copy_class(current, 0),
+            other => return Err(other),
+        };
+    }
+    Ok(bits & mask)
+}
+
+fn copy_class(permissions: u32, shift: u32) -> u32 {
+    (permissions >> shift & 0o7) * 0o111
+}
+
+fn apply_symbolic(mode: &str, mask: u32) -> Result<u32, String> {
+    let mut permissions = !mask & 0o777;
+    for clause in mode.split(',') {
+        let who_end = clause
+            .find(|character: char| !"ugoa".contains(character))
+            .unwrap_or(clause.len());
+        let who = clause[..who_end].chars().fold(0, |bits, letter| {
+            bits | match letter {
+                'u' => 0o700,
+                'g' => 0o070,
+                'o' => 0o007,
+                _ => 0o777,
             }
-            _ => {
-                shell::error(format!("umask: {value}: octal number out of range"));
-                1
+        });
+        let who = if who == 0 { 0o777 } else { who };
+        let mut rest = &clause[who_end..];
+        if rest.is_empty() {
+            return Err("` ': invalid symbolic mode operator".into());
+        }
+        while let Some(operator) = rest.chars().next() {
+            if !"+-=".contains(operator) {
+                return Err(format!("`{operator}': invalid symbolic mode operator"));
             }
-        },
-        _ => {
-            shell::error("umask: usage: umask [-S] [mode]");
-            2
+            let letters_end = rest[1..]
+                .find(|character: char| "+-=".contains(character))
+                .map_or(rest.len(), |offset| offset + 1);
+            let bits = permission_bits(&rest[1..letters_end], permissions, who)
+                .map_err(|letter| format!("`{letter}': invalid symbolic mode character"))?;
+            permissions = match operator {
+                '+' => permissions | bits,
+                '-' => permissions & !bits,
+                _ => (permissions & !who) | bits,
+            };
+            rest = &rest[letters_end..];
         }
     }
+    Ok(!permissions & 0o777)
+}
+
+fn set_umask(mask: u32) {
+    unsafe {
+        libc::umask(mask as libc::mode_t);
+    }
+}
+
+fn parse_mode(value: &str) -> Result<u32, String> {
+    if value.starts_with(|character: char| character.is_ascii_digit()) {
+        return match u32::from_str_radix(value, 8) {
+            Ok(mask) if mask <= 0o777 => Ok(mask),
+            _ => Err(format!("{value}: octal number out of range")),
+        };
+    }
+    apply_symbolic(value, current_umask())
+}
+
+pub(super) fn umask(args: &[String], out: &mut dyn Write) -> i32 {
+    let mut symbolic_output = false;
+    let mut reusable = false;
+    let mut index = 0;
+    while let Some(argument) = args.get(index) {
+        if argument == "--" {
+            index += 1;
+            break;
+        }
+        if argument.len() < 2 || !argument.starts_with('-') {
+            break;
+        }
+        for letter in argument[1..].chars() {
+            match letter {
+                'S' => symbolic_output = true,
+                'p' => reusable = true,
+                other => {
+                    shell::error(format!("umask: -{other}: invalid option"));
+                    eprintln!("umask: usage: umask [-p] [-S] [mode]");
+                    return 2;
+                }
+            }
+        }
+        index += 1;
+    }
+    if let Some(value) = args.get(index) {
+        return match parse_mode(value) {
+            Ok(mask) => {
+                set_umask(mask);
+                0
+            }
+            Err(message) => {
+                shell::error(format!("umask: {message}"));
+                1
+            }
+        };
+    }
+    let mask = current_umask();
+    let shown = if symbolic_output {
+        symbolic(mask)
+    } else {
+        format!("{mask:04o}")
+    };
+    let prefix = match (reusable, symbolic_output) {
+        (true, true) => "umask -S ",
+        (true, false) => "umask ",
+        _ => "",
+    };
+    let _ = writeln!(out, "{prefix}{shown}");
+    0
 }
 
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
@@ -215,5 +314,14 @@ mod tests {
     fn symbolic_umask() {
         assert_eq!(symbolic(0o022), "u=rwx,g=rx,o=rx");
         assert_eq!(symbolic(0o077), "u=rwx,g=,o=");
+    }
+
+    #[test]
+    fn symbolic_modes_change_the_mask() {
+        assert_eq!(apply_symbolic("u=rwx,g=rx,o=", 0o022), Ok(0o027));
+        assert_eq!(apply_symbolic("g+w", 0o027), Ok(0o007));
+        assert_eq!(apply_symbolic("o-r,a+x", 0o002), Ok(0o006));
+        assert_eq!(apply_symbolic("u=g", 0o022), Ok(0o222));
+        assert!(apply_symbolic("x=r", 0o022).is_err());
     }
 }

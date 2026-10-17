@@ -1,0 +1,9 @@
+library from PATH: one two
+library from PATH: 
+only in cwd
+library from cwd
+library from cwd
+missing status 1
+directory status 1
+no argument status 2
+--- exit 0

@@ -1,0 +1,48 @@
+keyword
+function
+builtin
+builtin
+status 1
+if is a shell keyword
+greet is a function
+greet () 
+{ 
+    echo "hello $1"
+}
+keyword
+keyword
+keyword
+keyword
+keyword
+keyword
+keyword
+keyword
+path only status 0
+skip functions status 1
+missing status 1
+bad option status 2
+no names status 0
+greet
+echo
+if
+command -v missing status 1
+greet
+command -v mixed status 0
+greet is a function
+greet () 
+{ 
+    echo "hello $1"
+}
+echo is a shell builtin
+if is a shell keyword
+command -V missing status 1
+command -v empty status 0
+bare command status 0
+command skips functions status 127
+text
+default path
+ll is aliased to `ls -l'
+alias
+alias ll='ls -l'
+ll is aliased to `ls -l'
+--- exit 0

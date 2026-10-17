@@ -1,0 +1,21 @@
+same line
+failglob status 0
+[] 1
+pattern ignores case
+case ignores case
+regex ignores case
+case matters again
+g/*.txt
+g/A.TXT
+g/A.TXT g/sub
+g/.hidden g/A.TXT g/sub
+g/sub/deep/x.txt g/sub/y.txt
+g/ g/A.TXT g/sub g/sub/deep g/sub/deep/x.txt g/sub/y.txt
+g/ g/sub/ g/sub/deep/
+g/sub/y.txt
+none
+without lastpipe []
+with lastpipe [hi]
+count 3
+1 0 3 3
+--- exit 0

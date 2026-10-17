@@ -24,7 +24,49 @@ fn logical_path(working_directory: &str, target: &str) -> PathBuf {
     out
 }
 
+const CD_USAGE: &str = "cd: usage: cd [-L|[-P [-e]]] [-@] [dir]";
+const GETCWD_FAILED: &str =
+    "error retrieving current directory: getcwd: cannot access parent directories";
+
+struct CdFlags {
+    physical: bool,
+}
+
+fn parse_cd_flags<'a>(shell: &Shell, args: &'a [String]) -> Result<(CdFlags, &'a [String]), char> {
+    let mut flags = CdFlags {
+        physical: shell.options.physical,
+    };
+    let mut index = 0;
+    while let Some(argument) = args.get(index) {
+        if argument == "--" {
+            index += 1;
+            break;
+        }
+        if argument.len() < 2 || !argument.starts_with('-') {
+            break;
+        }
+        for letter in argument[1..].chars() {
+            match letter {
+                'L' => flags.physical = false,
+                'P' => flags.physical = true,
+                'e' | '@' => {}
+                other => return Err(other),
+            }
+        }
+        index += 1;
+    }
+    Ok((flags, &args[index..]))
+}
+
 pub(super) fn cd(shell: &mut Shell, args: &[String], out: &mut dyn Write) -> i32 {
+    let (flags, args) = match parse_cd_flags(shell, args) {
+        Ok(parsed) => parsed,
+        Err(letter) => {
+            shell::error(format!("cd: -{letter}: invalid option"));
+            eprintln!("{CD_USAGE}");
+            return 2;
+        }
+    };
     let target = match args.first().map(String::as_str) {
         None => match shell.get_variable("HOME") {
             Some(home) => home,
@@ -51,7 +93,7 @@ pub(super) fn cd(shell: &mut Shell, args: &[String], out: &mut dyn Write) -> i32
             let candidate = crate::bytes::to_path(base).join(crate::bytes::to_path(&target));
             if candidate.is_dir() {
                 let candidate = crate::bytes::from_path(&candidate);
-                let status = change_directory(shell, &candidate);
+                let status = change_directory_with(shell, &candidate, &flags);
                 if status == 0 {
                     let _ = writeln!(out, "{}", working_directory(shell));
                 }
@@ -59,11 +101,38 @@ pub(super) fn cd(shell: &mut Shell, args: &[String], out: &mut dyn Write) -> i32
             }
         }
     }
-    change_directory(shell, &target)
+    change_directory_with(shell, &target, &flags)
 }
 
 pub(crate) fn change_directory(shell: &mut Shell, target: &str) -> i32 {
+    let flags = CdFlags {
+        physical: shell.options.physical,
+    };
+    change_directory_with(shell, target, &flags)
+}
+
+fn physical_destination(target: &str) -> Result<String, i32> {
+    if let Err(error) = std::env::set_current_dir(crate::bytes::to_path(target)) {
+        shell::error(format!("cd: {target}: {}", sys::error_message(&error)));
+        return Err(1);
+    }
+    match std::env::current_dir() {
+        Ok(path) => Ok(crate::bytes::from_path(&path)),
+        Err(error) => {
+            eprintln!("chdir: {GETCWD_FAILED}: {}", sys::error_message(&error));
+            Err(0)
+        }
+    }
+}
+
+fn change_directory_with(shell: &mut Shell, target: &str, flags: &CdFlags) -> i32 {
     let previous = working_directory(shell);
+    if flags.physical {
+        return match physical_destination(target) {
+            Ok(destination) => finish_change(shell, previous, destination),
+            Err(status) => status,
+        };
+    }
     let logical = logical_path(&previous, target);
     let destination = if std::env::set_current_dir(&logical).is_ok() {
         logical
@@ -84,7 +153,10 @@ pub(crate) fn change_directory(shell: &mut Shell, target: &str) -> i32 {
             crate::bytes::to_path(&previous).join(crate::bytes::to_path(target))
         })
     };
-    let destination = crate::bytes::from_path(&destination);
+    finish_change(shell, previous, crate::bytes::from_path(&destination))
+}
+
+fn finish_change(shell: &mut Shell, previous: String, destination: String) -> i32 {
     shell.export_variable("OLDPWD", Some(&previous));
     shell.export_variable("PWD", Some(&destination));
     if shell.interactive && destination != previous {
@@ -137,9 +209,41 @@ fn working_directory(shell: &Shell) -> String {
         .unwrap_or_else(|| "/".into())
 }
 
-pub(super) fn pwd(shell: &Shell, out: &mut dyn Write) -> i32 {
-    let _ = writeln!(out, "{}", working_directory(shell));
-    0
+pub(super) fn pwd(shell: &Shell, args: &[String], out: &mut dyn Write) -> i32 {
+    let mut physical = shell.options.physical;
+    for argument in args {
+        if argument == "--" {
+            break;
+        }
+        if argument.len() < 2 || !argument.starts_with('-') {
+            continue;
+        }
+        for letter in argument[1..].chars() {
+            match letter {
+                'L' => physical = false,
+                'P' => physical = true,
+                other => {
+                    shell::error(format!("pwd: -{other}: invalid option"));
+                    eprintln!("pwd: usage: pwd [-LP]");
+                    return 2;
+                }
+            }
+        }
+    }
+    if !physical {
+        let _ = writeln!(out, "{}", working_directory(shell));
+        return 0;
+    }
+    match std::env::current_dir() {
+        Ok(path) => {
+            let _ = writeln!(out, "{}", path.to_string_lossy());
+            0
+        }
+        Err(error) => {
+            eprintln!("pwd: {GETCWD_FAILED}: {}", sys::error_message(&error));
+            1
+        }
+    }
 }
 
 fn display_path(shell: &Shell, path: &str) -> String {

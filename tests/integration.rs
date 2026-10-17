@@ -792,7 +792,7 @@ fn nounset_reports_and_exits() {
     let (out, error, status) = run_command("set -u; echo ${fine:-ok}; echo $missing; echo never");
     assert_eq!(out.trim(), "ok");
     assert!(error.contains("missing: unbound variable"));
-    assert_eq!(status, 1);
+    assert_eq!(status, 127);
 }
 
 #[test]
@@ -1028,11 +1028,11 @@ fn hooks_run_on_directory_change() {
 fn check_reports_problems_without_running() {
     let path = write_fixture(
         "check.sh",
-        "touch /tmp/grfsh_check_should_not_exist\nenable -n echo\nmystery-tool --go\n",
+        "touch /tmp/grfsh_check_should_not_exist\nbind -x echo\nmystery-tool --go\n",
     );
     let _ = std::fs::remove_file("/tmp/grfsh_check_should_not_exist");
     let (out, status) = run_args(&["--check", &path]);
-    assert!(out.contains(":2: error: 'enable' is not supported"));
+    assert!(out.contains(":2: error: 'bind' is not supported"));
     assert!(out.contains(":3: warning: 'mystery-tool'"));
     assert_eq!(status, 1);
     assert!(!std::path::Path::new("/tmp/grfsh_check_should_not_exist").exists());
@@ -1172,7 +1172,10 @@ fn login_shells_read_the_profile_with_commands_and_scripts() {
 fn rc_is_read_only_by_interactive_shells() {
     let home = startup_home("rc");
     assert_eq!(start(&home, &[], "echo piped\n").stdout, "piped\n");
-    assert_eq!(start(&home, &["-i", "-c", "echo $-"], "").stdout, "rc\ni\n");
+    assert_eq!(
+        start(&home, &["-i", "-c", "echo $-"], "").stdout,
+        "rc\nhiBHc\n"
+    );
     assert_eq!(start(&home, &["-ilc", "true"], "").stdout, "profile\nrc\n");
     let quiet = start(
         &home,
@@ -1188,7 +1191,7 @@ fn rc_is_read_only_by_interactive_shells() {
     );
     let piped = start(&home, &["-i"], "echo from-stdin $-\n");
     assert!(piped.stdout.contains("rc\n"));
-    assert!(piped.stdout.contains("from-stdin i"));
+    assert!(piped.stdout.contains("from-stdin hiBHs"));
     let _ = std::fs::remove_dir_all(&home);
 }
 
@@ -1372,4 +1375,36 @@ fn cd_up_from_a_deleted_directory() {
             .contains("cd: error retrieving current directory")
     );
     let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn help_points_to_the_docs_and_covers_time() {
+    let (out, _, status) = run_command("help");
+    assert!(out.contains("https://grf.sh/docs/"), "{out}");
+    assert_eq!(status, 0);
+    let (out, _, _) = run_command("help time timeout");
+    assert!(out.starts_with("time [-p] pipeline"), "{out}");
+    assert!(out.contains("--preserve-status"), "{out}");
+}
+
+#[test]
+fn verbose_and_noexec_options_in_scripts() {
+    let directory = std::env::temp_dir().join(format!("grfsh_options_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let script = directory.join("options.sh");
+    std::fs::write(
+        &script,
+        "set -v\necho shown\nset +v\nset -n\necho skipped\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_grfsh"))
+        .arg(&script)
+        .output()
+        .expect("failed to run grfsh");
+    std::fs::remove_dir_all(&directory).ok();
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "shown\n");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "echo shown\nset +v\n"
+    );
 }

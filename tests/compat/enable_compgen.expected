@@ -1,0 +1,36 @@
+file
+enable -n echo
+builtin
+bracket status 0
+status 1
+61
+enable .
+enable :
+enable break
+f1
+f2
+fob
+foo
+fa
+echo
+then
+      22
+alpha
+alto
+x
+y
+status 0
+status 1
+<ab>
+<ac>
+ab
+b
+ab
+ac
+a
+fob
+exit
+DIR/file1
+DIR/sub
+DIR/file1
+--- exit 0

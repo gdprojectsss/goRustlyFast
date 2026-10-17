@@ -217,12 +217,21 @@ pub(super) fn run(shell: &Shell, command: &str, args: &[String]) -> i32 {
     }
 }
 
-pub(crate) fn regex_match(text: &str, pattern: &str) -> Result<Option<Vec<String>>, String> {
+pub(crate) fn regex_match_case(
+    text: &str,
+    pattern: &str,
+    ignore_case: bool,
+) -> Result<Option<Vec<String>>, String> {
+    let flags = if ignore_case {
+        libc::REG_EXTENDED | libc::REG_ICASE
+    } else {
+        libc::REG_EXTENDED
+    };
     let pattern = CString::new(pattern).map_err(|_| "invalid regular expression".to_string())?;
     let subject = CString::new(text).map_err(|_| "invalid text".to_string())?;
     unsafe {
         let mut compiled: libc::regex_t = std::mem::zeroed();
-        if libc::regcomp(&mut compiled, pattern.as_ptr(), libc::REG_EXTENDED) != 0 {
+        if libc::regcomp(&mut compiled, pattern.as_ptr(), flags) != 0 {
             return Err("invalid regular expression".into());
         }
         let groups = MAX_GROUPS;
@@ -300,11 +309,11 @@ mod tests {
 
     #[test]
     fn regular_expressions() {
-        let groups = regex_match("v1.42.0", r"^v([0-9]+)\.([0-9]+)")
+        let groups = regex_match_case("v1.42.0", r"^v([0-9]+)\.([0-9]+)", false)
             .unwrap()
             .unwrap();
         assert_eq!(groups, ["v1.42", "1", "42"]);
-        assert_eq!(regex_match("abc", "^x").unwrap(), None);
-        assert!(regex_match("abc", "(").is_err());
+        assert_eq!(regex_match_case("abc", "^x", false).unwrap(), None);
+        assert!(regex_match_case("abc", "(", false).is_err());
     }
 }

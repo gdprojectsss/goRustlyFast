@@ -169,6 +169,7 @@ fn run_shell(shell: &mut Shell, invocation: &Invocation) -> i32 {
         return shell.last_status;
     }
     shell.positional = invocation.positional.clone();
+    shell.reading_stdin = !matches!(invocation.mode, Mode::Command(_) | Mode::Script(_));
     match &invocation.mode {
         Mode::Command(source) => run_command_string(shell, source, invocation),
         Mode::Script(path) => run_script_operand(shell, path, invocation),
@@ -179,7 +180,7 @@ fn run_shell(shell: &mut Shell, invocation: &Invocation) -> i32 {
             shell.last_status
         }
         _ if invocation.no_execute => {
-            let source = String::from_utf8_lossy(&sys::read_all(0)).into_owned();
+            let source = crate::bytes::decode(&sys::read_all(0));
             crate::startup::check_syntax(&source)
         }
         _ => shell.run_lines(|| sys::read_line(0)),
@@ -221,6 +222,7 @@ fn run_command_string(shell: &mut Shell, source: &str, invocation: &Invocation) 
     if let Some(name) = &invocation.name {
         shell.arg0 = name.clone();
     }
+    shell.command_string = true;
     shell::set_location(Some(invocation.name.as_deref().unwrap_or_default()), 0);
     if invocation.no_execute {
         return crate::startup::check_syntax(source);

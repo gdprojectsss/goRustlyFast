@@ -1,0 +1,6 @@
+local outside a function: 1
+local inside: 2
+substitution status 1
+subshell status 1
+before
+--- exit 1

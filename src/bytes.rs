@@ -200,10 +200,6 @@ fn raw_sequence(bytes: &[u8]) -> Option<u8> {
     }
 }
 
-pub(crate) fn complete_characters(bytes: &[u8]) -> usize {
-    decode(&bytes[..incomplete_tail(bytes)]).chars().count()
-}
-
 fn incomplete_tail(bytes: &[u8]) -> usize {
     let start = bytes.len().saturating_sub(3);
     for index in start..bytes.len() {
@@ -306,13 +302,6 @@ mod tests {
             }
         }
         assert_eq!(output, b"x\xff\xfey");
-    }
-
-    #[test]
-    fn complete_characters_wait_for_whole_sequences() {
-        assert_eq!(complete_characters("é".as_bytes()), 1);
-        assert_eq!(complete_characters(b"a\xc3"), 1);
-        assert_eq!(complete_characters(b"\xff\xfe"), 2);
     }
 
     #[test]

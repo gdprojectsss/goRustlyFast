@@ -49,6 +49,10 @@ pub fn expand(pattern: &str, options: GlobOptions) -> Option<Vec<String>> {
             for base in &paths {
                 if !last {
                     next.push(base.clone());
+                } else if !base.is_empty() && base != "/" {
+                    let base = base.trim_end_matches('/');
+                    let marker = if pattern.ends_with('/') { "" } else { "/" };
+                    next.push(format!("{base}{marker}"));
                 }
                 descendants(base, last, options, &mut next);
             }

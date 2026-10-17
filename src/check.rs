@@ -984,7 +984,7 @@ mod tests {
 
     #[test]
     fn unknown_and_unsupported_commands() {
-        let findings = check("echo start\nmystery-tool --flag\nenable -n echo\n");
+        let findings = check("echo start\nmystery-tool --flag\nbind -x echo\n");
         assert_eq!(findings.len(), 2);
         assert_eq!(findings[0].0, 2);
         assert!(!findings[0].1);

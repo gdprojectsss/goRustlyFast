@@ -344,6 +344,63 @@ impl Shell {
             }
         }
     }
+
+    pub(crate) fn run_lastpipe(&mut self, commands: &[Command], text: &str) -> i32 {
+        let Some((last, first)) = commands.split_last() else {
+            return 0;
+        };
+        let mut pipes = Vec::with_capacity(first.len());
+        for _ in first {
+            match sys::pipe() {
+                Ok(pipe) => pipes.push(pipe),
+                Err(error) => {
+                    close_pipes(&pipes);
+                    shell::error(format!("pipe: {}", sys::error_message(&error)));
+                    return 1;
+                }
+            }
+        }
+        let mut pids = Vec::with_capacity(first.len());
+        for (index, command) in first.iter().enumerate() {
+            match sys::fork() {
+                Ok(0) => {
+                    self.enter_child(None, true);
+                    if index > 0 {
+                        let _ = sys::dup2(pipes[index - 1].0, 0);
+                    }
+                    let _ = sys::dup2(pipes[index].1, 1);
+                    close_pipes(&pipes);
+                    self.pipe_to_table = table::consumes_tables(&commands[index + 1]);
+                    let status = self.run_command(command, true);
+                    sys::exit_now(status)
+                }
+                Ok(pid) => pids.push(pid),
+                Err(error) => {
+                    shell::error(format!("fork: {}", sys::error_message(&error)));
+                    break;
+                }
+            }
+        }
+        let reader = pipes.last().map_or(-1, |pipe| pipe.0);
+        let saved = vec![(0, sys::save_fd(0))];
+        let _ = sys::dup2(reader, 0);
+        close_pipes(&pipes);
+        let last_status = self.run_command(last, false);
+        sys::restore_fds(saved);
+        let pgid = pids.first().copied().unwrap_or(0);
+        self.wait_foreground(pgid, pids, text);
+        self.pipe_statuses.push(last_status);
+        if self.options.pipefail {
+            self.pipe_statuses
+                .iter()
+                .rev()
+                .copied()
+                .find(|status| *status != 0)
+                .unwrap_or(0)
+        } else {
+            last_status
+        }
+    }
 }
 
 fn close_pipes(pipes: &[(i32, i32)]) {
