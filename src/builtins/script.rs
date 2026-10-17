@@ -24,8 +24,7 @@ pub(super) fn source(shell: &mut Shell, args: &[String]) -> i32 {
     shell.source_depth += 1;
     shell.source_stack.push(path.clone());
     let line = shell.current_line;
-    let mut lines = contents.lines().map(String::from);
-    let status = shell.run_lines(|| lines.next());
+    let status = shell.run_text(&contents);
     shell.current_line = line;
     shell.source_stack.pop();
     shell.source_depth -= 1;
@@ -295,7 +294,7 @@ fn assign_fields(shell: &mut Shell, names: &[String], line: &str) {
 
 const OPTION_NAMES: &[&str] = &["errexit", "nounset", "xtrace", "pipefail", "vi"];
 
-fn option_flag<'a>(options: &'a mut ShellOptions, name: &str) -> Option<&'a mut bool> {
+pub(crate) fn option_flag<'a>(options: &'a mut ShellOptions, name: &str) -> Option<&'a mut bool> {
     match name {
         "errexit" | "e" => Some(&mut options.errexit),
         "nounset" | "u" => Some(&mut options.nounset),
@@ -369,11 +368,12 @@ pub(super) fn set(shell: &mut Shell, args: &[String], out: &mut dyn Write) -> i3
     0
 }
 
-const SHOPT_NAMES: &[&str] = &["dotglob", "globstar", "nocaseglob", "nullglob"];
+const SHOPT_NAMES: &[&str] = &["dotglob", "extglob", "globstar", "nocaseglob", "nullglob"];
 
 fn shopt_flag<'a>(options: &'a mut ShellOptions, name: &str) -> Option<&'a mut bool> {
     match name {
         "dotglob" => Some(&mut options.dotglob),
+        "extglob" => Some(&mut options.extglob),
         "globstar" => Some(&mut options.globstar),
         "nocaseglob" => Some(&mut options.nocaseglob),
         "nullglob" => Some(&mut options.nullglob),
@@ -407,7 +407,10 @@ pub(super) fn shopt(shell: &mut Shell, args: &[String], out: &mut dyn Write) -> 
             continue;
         };
         match setting {
-            Some(value) => *flag = value,
+            Some(value) => {
+                *flag = value;
+                crate::expand::glob::set_extglob(shell.options.extglob);
+            }
             None => {
                 if !*flag {
                     status = 1;

@@ -1,0 +1,14 @@
+errexit off: 1
+test errexit off: 1
+nounset off
+nounset on
+test nounset on
+pipefail on
+unknown: 1
+negated
+nested
+grouped
+double negation: 0
+double negation false: 1
+single negation: 1
+--- exit 0

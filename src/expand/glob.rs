@@ -1,4 +1,20 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use crate::syntax::ast::Anchor;
+
+mod pattern;
+
+pub use pattern::Pattern;
+
+static EXTGLOB: AtomicBool = AtomicBool::new(false);
+
+pub fn extglob() -> bool {
+    EXTGLOB.load(Ordering::Relaxed)
+}
+
+pub fn set_extglob(enabled: bool) {
+    EXTGLOB.store(enabled, Ordering::Relaxed);
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct GlobOptions {
@@ -113,8 +129,13 @@ fn join(base: &str, name: &str) -> String {
     }
 }
 
+fn extended_start(chars: &[char], index: usize) -> bool {
+    matches!(chars[index], '@' | '+' | '!') && chars.get(index + 1) == Some(&'(')
+}
+
 pub fn has_magic(pattern: &str) -> bool {
     let chars: Vec<char> = pattern.chars().collect();
+    let extended = extglob();
     let mut index = 0;
     while index < chars.len() {
         match chars[index] {
@@ -127,6 +148,7 @@ pub fn has_magic(pattern: &str) -> bool {
             {
                 return true;
             }
+            _ if extended && extended_start(&chars, index) => return true,
             _ => {}
         }
         index += 1;
@@ -150,214 +172,101 @@ pub fn unescape(pattern: &str) -> String {
 }
 
 pub fn matches_pattern(pattern: &str, text: &str) -> bool {
-    let pattern_chars: Vec<char> = pattern.chars().collect();
-    let text_chars: Vec<char> = text.chars().collect();
-    let (mut pattern_index, mut text_index) = (0, 0);
-    let mut star: Option<(usize, usize)> = None;
-
-    while text_index < text_chars.len() {
-        if pattern_index < pattern_chars.len() {
-            match pattern_chars[pattern_index] {
-                '*' => {
-                    star = Some((pattern_index, text_index));
-                    pattern_index += 1;
-                    continue;
-                }
-                '?' => {
-                    pattern_index += 1;
-                    text_index += 1;
-                    continue;
-                }
-                '[' => match bracket(&pattern_chars, pattern_index, text_chars[text_index]) {
-                    Some((true, next)) => {
-                        pattern_index = next;
-                        text_index += 1;
-                        continue;
-                    }
-                    Some((false, _)) => {}
-                    None if text_chars[text_index] == '[' => {
-                        pattern_index += 1;
-                        text_index += 1;
-                        continue;
-                    }
-                    None => {}
-                },
-                '\\' if pattern_index + 1 < pattern_chars.len() => {
-                    if pattern_chars[pattern_index + 1] == text_chars[text_index] {
-                        pattern_index += 2;
-                        text_index += 1;
-                        continue;
-                    }
-                }
-                character if character == text_chars[text_index] => {
-                    pattern_index += 1;
-                    text_index += 1;
-                    continue;
-                }
-                _ => {}
-            }
-        }
-        match star {
-            Some((star_pattern_index, star_text_index)) => {
-                pattern_index = star_pattern_index + 1;
-                text_index = star_text_index + 1;
-                star = Some((star_pattern_index, star_text_index + 1));
-            }
-            None => return false,
-        }
-    }
-
-    while pattern_chars.get(pattern_index) == Some(&'*') {
-        pattern_index += 1;
-    }
-    pattern_index == pattern_chars.len()
+    Pattern::new(pattern, extglob()).matches(text)
 }
 
-fn character_class(name: &str) -> Option<fn(char) -> bool> {
-    Some(match name {
-        "alpha" => char::is_alphabetic,
-        "digit" => |character: char| character.is_ascii_digit(),
-        "alnum" => char::is_alphanumeric,
-        "space" => char::is_whitespace,
-        "blank" => |character: char| character == ' ' || character == '\t',
-        "upper" => char::is_uppercase,
-        "lower" => char::is_lowercase,
-        "punct" => |character: char| character.is_ascii_punctuation(),
-        "xdigit" => |character: char| character.is_ascii_hexdigit(),
-        "cntrl" => char::is_control,
-        "print" => |character: char| !character.is_control(),
-        "graph" => |character: char| !character.is_control() && !character.is_whitespace(),
-        _ => return None,
-    })
-}
-
-fn bracket(pattern_chars: &[char], start: usize, target: char) -> Option<(bool, usize)> {
-    let mut index = start + 1;
-    let negate = matches!(pattern_chars.get(index), Some('!' | '^'));
-    if negate {
-        index += 1;
-    }
-    let mut matched = false;
-    let mut first = true;
-    while index < pattern_chars.len() {
-        let mut member = pattern_chars[index];
-        if member == ']' && !first {
-            return Some((matched != negate, index + 1));
-        }
-        first = false;
-        if member == '[' && pattern_chars.get(index + 1) == Some(&':') {
-            let name_start = index + 2;
-            if let Some(length) = pattern_chars[name_start..]
-                .windows(2)
-                .position(|pair| pair == [':', ']'])
-            {
-                let name: String = pattern_chars[name_start..name_start + length]
-                    .iter()
-                    .collect();
-                if let Some(test) = character_class(&name) {
-                    if test(target) {
-                        matched = true;
-                    }
-                    index = name_start + length + 2;
-                    continue;
-                }
-            }
-        }
-        if member == '\\' && index + 1 < pattern_chars.len() {
-            index += 1;
-            member = pattern_chars[index];
-        }
-        if index + 2 < pattern_chars.len()
-            && pattern_chars[index + 1] == '-'
-            && pattern_chars[index + 2] != ']'
-        {
-            if member <= target && target <= pattern_chars[index + 2] {
-                matched = true;
-            }
-            index += 3;
-        } else {
-            if member == target {
-                matched = true;
-            }
-            index += 1;
-        }
-    }
-    None
-}
-
-fn boundaries(text: &str) -> Vec<usize> {
-    text.char_indices()
-        .map(|(index, _)| index)
-        .chain(std::iter::once(text.len()))
-        .collect()
+pub fn matches_extended(pattern: &str, text: &str) -> bool {
+    Pattern::new(pattern, true).matches(text)
 }
 
 pub fn remove_prefix(text: &str, pattern: &str, longest: bool) -> String {
-    let cuts = boundaries(text);
-    let mut candidates: Box<dyn Iterator<Item = &usize>> = if longest {
-        Box::new(cuts.iter().rev())
-    } else {
-        Box::new(cuts.iter())
-    };
-    match candidates.find(|&&cut| matches_pattern(pattern, &text[..cut])) {
-        Some(&cut) => text[cut..].to_string(),
+    let compiled = Pattern::new(pattern, extglob());
+    let chars: Vec<char> = text.chars().collect();
+    match compiled.match_ends(&chars, 0, longest) {
+        Some(end) => chars[end..].iter().collect(),
         None => text.to_string(),
     }
 }
 
 pub fn remove_suffix(text: &str, pattern: &str, longest: bool) -> String {
-    let cuts = boundaries(text);
-    let mut candidates: Box<dyn Iterator<Item = &usize>> = if longest {
-        Box::new(cuts.iter())
-    } else {
-        Box::new(cuts.iter().rev())
-    };
-    match candidates.find(|&&cut| matches_pattern(pattern, &text[cut..])) {
-        Some(&cut) => text[..cut].to_string(),
+    let compiled = Pattern::new(pattern, extglob());
+    let chars: Vec<char> = text.chars().collect();
+    match compiled.suffix_start(&chars, longest) {
+        Some(start) => chars[..start].iter().collect(),
         None => text.to_string(),
     }
 }
 
-pub fn replace(text: &str, pattern: &str, replacement: &str, all: bool, anchor: Anchor) -> String {
-    if pattern.is_empty() {
-        return text.to_string();
+fn replace_literal(
+    text: &str,
+    literal: &str,
+    replacement: &str,
+    all: bool,
+    anchor: Anchor,
+) -> String {
+    match anchor {
+        Anchor::Start => match text.strip_prefix(literal) {
+            Some(rest) => format!("{replacement}{rest}"),
+            None => text.to_string(),
+        },
+        Anchor::End => match text.strip_suffix(literal) {
+            Some(rest) => format!("{rest}{replacement}"),
+            None => text.to_string(),
+        },
+        Anchor::Anywhere if all => text.replace(literal, replacement),
+        Anchor::Anywhere => text.replacen(literal, replacement, 1),
     }
-    let cuts = boundaries(text);
-    let mut out = String::new();
+}
+
+fn replace_anywhere(chars: &[char], compiled: &Pattern, replacement: &str, all: bool) -> String {
+    let first = compiled.first_char();
+    let mut out = String::with_capacity(chars.len());
     let mut position = 0;
-    while position < cuts.len() {
-        let start = cuts[position];
-        if anchor == Anchor::Start && start != 0 {
-            break;
-        }
-        let found = cuts[position..].iter().rev().find(|&&end| {
-            (anchor != Anchor::End || end == text.len())
-                && matches_pattern(pattern, &text[start..end])
-        });
-        match found {
-            Some(&end) if end > start => {
+    while position < chars.len() {
+        let candidate = first.is_none_or(|first| chars[position] == first);
+        let end = if candidate {
+            compiled.match_ends(chars, position, true)
+        } else {
+            None
+        };
+        match end {
+            Some(end) if end > position => {
                 out.push_str(replacement);
-                position = cuts
-                    .iter()
-                    .position(|&cut| cut == end)
-                    .unwrap_or(cuts.len());
+                position = end;
                 if !all {
-                    out.push_str(&text[end..]);
+                    out.extend(&chars[position..]);
                     return out;
                 }
             }
             _ => {
-                if let Some(&next) = cuts.get(position + 1) {
-                    out.push_str(&text[start..next]);
-                }
+                out.push(chars[position]);
                 position += 1;
             }
         }
     }
-    if position < cuts.len() {
-        out.push_str(&text[cuts[position]..]);
-    }
     out
+}
+
+pub fn replace(text: &str, pattern: &str, replacement: &str, all: bool, anchor: Anchor) -> String {
+    let compiled = Pattern::new(pattern, extglob());
+    if compiled.is_empty() && anchor == Anchor::Anywhere {
+        return text.to_string();
+    }
+    if let Some(literal) = compiled.literal() {
+        return replace_literal(text, &literal, replacement, all, anchor);
+    }
+    let chars: Vec<char> = text.chars().collect();
+    match anchor {
+        Anchor::Start => match compiled.match_ends(&chars, 0, true) {
+            Some(end) => format!("{replacement}{}", chars[end..].iter().collect::<String>()),
+            None => text.to_string(),
+        },
+        Anchor::End => match compiled.suffix_start(&chars, true) {
+            Some(start) => format!("{}{replacement}", chars[..start].iter().collect::<String>()),
+            None => text.to_string(),
+        },
+        Anchor::Anywhere => replace_anywhere(&chars, &compiled, replacement, all),
+    }
 }
 
 #[cfg(test)]
@@ -535,5 +444,35 @@ mod tests {
         );
         assert_eq!(replace("aaa", "a*", "x", false, Anchor::Anywhere), "x");
         assert_eq!(replace("hello", "l", "", true, Anchor::Anywhere), "heo");
+        assert_eq!(replace("abc", "", "X", false, Anchor::Start), "Xabc");
+        assert_eq!(replace("abc", "", "X", false, Anchor::End), "abcX");
+        assert_eq!(replace("aXbXc", "X*", "", false, Anchor::End), "a");
+        assert_eq!(
+            replace("aXbXc", "[a-c]", ".", true, Anchor::Anywhere),
+            ".X.X."
+        );
+        assert_eq!(replace("hello", "h*l", "H", false, Anchor::Start), "Ho");
+        assert_eq!(replace("hello", "l*o", "O", false, Anchor::End), "heO");
+    }
+
+    #[test]
+    fn replacement_is_fast_on_long_text() {
+        let text = "a".repeat(20_000);
+        let started = std::time::Instant::now();
+        assert_eq!(
+            replace(&text, "a", "b", true, Anchor::Anywhere).len(),
+            20_000
+        );
+        assert_eq!(
+            replace(&text, "[ab]", "c", true, Anchor::Anywhere).len(),
+            20_000
+        );
+        assert_eq!(
+            replace(&text, "b", "c", true, Anchor::Anywhere).len(),
+            20_000
+        );
+        assert_eq!(replace(&text, "a*a", "c", true, Anchor::Anywhere), "c");
+        assert_eq!(remove_suffix(&text, "a*", false), text[..19_999]);
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
     }
 }

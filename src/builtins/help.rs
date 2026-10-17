@@ -135,7 +135,7 @@ const TOPICS: &[(&str, &str, &str)] = &[
     (
         "shopt",
         "shopt [-s | -u | -q] [name ...]",
-        "glob options: globstar nullglob dotglob nocaseglob",
+        "glob options: globstar nullglob dotglob nocaseglob extglob",
     ),
     (
         "source",

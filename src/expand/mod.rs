@@ -164,7 +164,7 @@ fn expand_into(shell: &mut Shell, word: &Word, fields: &mut Fields) -> Result<()
                 fields.quoted(&path);
             }
             WordPart::Arithmetic { expression, .. } => {
-                let value = arithmetic(shell, expression)?;
+                let value = aborting_arithmetic(shell, expression)?;
                 fields.quoted(&value.to_string());
             }
         }
@@ -183,6 +183,11 @@ pub fn evaluate_arithmetic(shell: &mut Shell, text: &str) -> Result<i64, String>
 pub fn arithmetic(shell: &mut Shell, expression: &Word) -> Result<i64, String> {
     let text = single(shell, expression)?;
     arith::eval(shell, &text)
+}
+
+fn aborting_arithmetic(shell: &mut Shell, expression: &Word) -> Result<i64, String> {
+    let text = single(shell, expression)?;
+    arith::eval(shell, &text).inspect_err(|_| shell.flow = crate::shell::Flow::Abort)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -412,9 +417,9 @@ fn apply(
             Ok(value.map(|text| transform(shell, name, *letter, text)))
         }
         ParameterOperation::Substring { offset, length } => {
-            let offset = arithmetic(shell, offset)?;
+            let offset = aborting_arithmetic(shell, offset)?;
             let length = match length {
-                Some(word) => Some(arithmetic(shell, word)?),
+                Some(word) => Some(aborting_arithmetic(shell, word)?),
                 None => None,
             };
             Ok(match value {
@@ -532,7 +537,10 @@ impl Fields {
         }
         let mut copied = 0;
         for (index, character) in text.char_indices() {
-            if matches!(character, '*' | '?' | '[' | ']' | '\\') {
+            if matches!(
+                character,
+                '*' | '?' | '[' | ']' | '\\' | '(' | ')' | '|' | '@' | '+' | '!'
+            ) {
                 self.pattern.push_str(&text[copied..index]);
                 self.pattern.push('\\');
                 copied = index;

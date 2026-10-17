@@ -8,7 +8,7 @@ const MAX_GROUPS: usize = 32;
 
 pub(crate) const UNARY: &[&str] = &[
     "-e", "-a", "-f", "-d", "-r", "-w", "-x", "-s", "-L", "-h", "-p", "-S", "-b", "-c", "-n", "-z",
-    "-t", "-v", "-O", "-G", "-N", "-k", "-u", "-g",
+    "-t", "-v", "-O", "-G", "-N", "-k", "-u", "-g", "-o",
 ];
 pub(crate) const BINARY: &[&str] = &[
     "=", "==", "!=", "<", ">", "-eq", "-ne", "-lt", "-le", "-gt", "-ge", "-nt", "-ot", "-ef",
@@ -47,8 +47,17 @@ pub(crate) fn unary(shell: &Shell, operator: &str, operand: &str) -> bool {
         "-z" => operand.is_empty(),
         "-t" => operand.parse().is_ok_and(sys::isatty),
         "-v" => shell.get_variable(operand).is_some(),
+        "-o" => option_enabled(shell, operand),
         _ => false,
     }
+}
+
+fn option_enabled(shell: &Shell, name: &str) -> bool {
+    if name == "emacs" {
+        return shell.interactive && !shell.options.vi;
+    }
+    let mut options = shell.options;
+    name.len() > 1 && super::script::option_flag(&mut options, name).is_some_and(|enabled| *enabled)
 }
 
 fn integer(text: &str) -> Result<i64, String> {

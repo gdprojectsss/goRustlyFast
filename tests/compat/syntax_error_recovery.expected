@@ -1,0 +1,8 @@
+start
+e1
+eval status 2
+s1
+source status 2
+no noclobber
+before
+--- exit 2

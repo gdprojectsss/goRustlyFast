@@ -1,6 +1,7 @@
 use crate::expand;
 use crate::shell::{self, Shell};
-use crate::syntax::ast::{Redirect, RedirectKind};
+use crate::syntax::ast::{Redirect, RedirectKind, Word};
+use crate::syntax::lexer;
 use crate::sys;
 
 impl Shell {
@@ -52,6 +53,9 @@ impl Shell {
         redirect: &Redirect,
         saved: &mut Vec<(i32, Option<i32>)>,
     ) -> Result<(), String> {
+        if let Some(variable) = &redirect.variable {
+            return self.redirect_named(variable, redirect);
+        }
         let target = expand::single(self, &redirect.target)?;
         let open = |flags| {
             sys::open(&target, flags)
@@ -97,6 +101,71 @@ impl Shell {
             sys::dup2(redirect.fd, 2).map_err(|error| sys::error_message(&error))?;
         }
         Ok(())
+    }
+}
+
+impl Shell {
+    fn named_fd_word(variable: &str) -> Result<Word, String> {
+        lexer::parse_double_quoted_text(&format!("${{{variable}}}")).map_err(|error| error.message)
+    }
+
+    fn redirect_named(&mut self, variable: &str, redirect: &Redirect) -> Result<(), String> {
+        let target = expand::single(self, &redirect.target)?;
+        let duplicate = matches!(
+            redirect.kind,
+            RedirectKind::DuplicateIn | RedirectKind::DuplicateOut
+        );
+        if duplicate && target == "-" {
+            let value = expand::single(self, &Self::named_fd_word(variable)?)?;
+            let fd: i32 = value
+                .trim()
+                .parse()
+                .map_err(|_| format!("{variable}: ambiguous redirect"))?;
+            sys::close(fd);
+            return Ok(());
+        }
+        let open = |flags| {
+            sys::open(&target, flags)
+                .map_err(|error| format!("{target}: {}", sys::error_message(&error)))
+        };
+        let (source, owned) = match redirect.kind {
+            RedirectKind::In => (open(libc::O_RDONLY)?, true),
+            RedirectKind::Out | RedirectKind::OutAndError => {
+                (open(libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC)?, true)
+            }
+            RedirectKind::Append | RedirectKind::AppendAndError => {
+                (open(libc::O_WRONLY | libc::O_CREAT | libc::O_APPEND)?, true)
+            }
+            RedirectKind::ReadWrite => (open(libc::O_RDWR | libc::O_CREAT)?, true),
+            RedirectKind::Heredoc => (temp(target.as_bytes())?, true),
+            RedirectKind::HereString => (temp(format!("{target}\n").as_bytes())?, true),
+            RedirectKind::DuplicateIn | RedirectKind::DuplicateOut => {
+                let fd = target
+                    .parse()
+                    .map_err(|_| format!("{target}: bad file descriptor"))?;
+                (fd, false)
+            }
+        };
+        let fd = unsafe { libc::fcntl(source, libc::F_DUPFD, 10) };
+        if owned {
+            sys::close(source);
+        }
+        if fd < 0 {
+            return Err(format!("{target}: bad file descriptor"));
+        }
+        self.assign_named_fd(variable, fd)
+    }
+
+    fn assign_named_fd(&mut self, variable: &str, fd: i32) -> Result<(), String> {
+        let Some((name, index)) = variable
+            .strip_suffix(']')
+            .and_then(|rest| rest.split_once('['))
+        else {
+            return self.try_set_variable(variable, &fd.to_string());
+        };
+        let index = lexer::parse_double_quoted_text(index).map_err(|error| error.message)?;
+        let key = self.array_key(name, &index)?;
+        self.set_element(name, key, &fd.to_string())
     }
 }
 

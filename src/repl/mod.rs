@@ -201,8 +201,7 @@ fn run_script(shell: &mut Shell, path: &str, args: &[String]) -> i32 {
     shell.source_stack.push(path.to_string());
     shell.positional = args.to_vec();
     shell::set_location(Some(path), 0);
-    let mut lines = contents.lines().map(String::from);
-    shell.run_lines(|| lines.next())
+    shell.run_text(&contents)
 }
 
 fn home_dir() -> PathBuf {
@@ -287,8 +286,7 @@ fn load_file(shell: &mut Shell, path: &std::path::Path) {
     let Ok(contents) = std::fs::read_to_string(path) else {
         return;
     };
-    let mut lines = contents.lines().map(String::from);
-    shell.run_lines(|| lines.next());
+    shell.run_text(&contents);
 }
 
 fn interactive(shell: &mut Shell) {

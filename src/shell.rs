@@ -17,6 +17,7 @@ pub enum Flow {
     Return,
     Exit,
     Interrupted,
+    Abort,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -30,6 +31,7 @@ pub struct ShellOptions {
     pub nullglob: bool,
     pub dotglob: bool,
     pub nocaseglob: bool,
+    pub extglob: bool,
 }
 
 impl ShellOptions {

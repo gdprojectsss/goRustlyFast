@@ -130,6 +130,7 @@ pub struct Redirect {
     pub fd: i32,
     pub kind: RedirectKind,
     pub target: Word,
+    pub variable: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -185,6 +186,15 @@ pub enum CommandKind {
         body: List,
     },
     FunctionDefinition {
+        name: String,
+        body: Rc<Command>,
+    },
+    Select {
+        variable: String,
+        items: Option<Vec<Word>>,
+        body: List,
+    },
+    Coproc {
         name: String,
         body: Rc<Command>,
     },

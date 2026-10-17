@@ -57,9 +57,10 @@ fn visit_words(list: &List, visit: &mut impl FnMut(&crate::syntax::ast::Word)) {
                 visit_words(condition, visit);
                 visit_words(body, visit);
             }
-            CommandKind::For { body, .. } | CommandKind::ArithmeticFor { body, .. } => {
-                visit_words(body, visit)
-            }
+            CommandKind::For { body, .. }
+            | CommandKind::ArithmeticFor { body, .. }
+            | CommandKind::Select { body, .. } => visit_words(body, visit),
+            CommandKind::Coproc { .. } => {}
             CommandKind::Case { arms, .. } => {
                 arms.iter().for_each(|arm| visit_words(&arm.body, visit))
             }
@@ -99,10 +100,47 @@ fn random_input_never_panics() {
     }
 }
 
+fn with_large_stack(test: fn()) {
+    std::thread::Builder::new()
+        .stack_size(512 << 20)
+        .spawn(test)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
 #[test]
 fn deep_nesting_is_handled() {
-    let nested = format!("{}echo hi{}", "( ".repeat(200), " )".repeat(200));
-    assert!(parser::parse(&nested).is_ok());
-    let braces = format!("echo {}x{}", "{a,".repeat(50), "}".repeat(50));
-    assert!(parser::parse(&braces).is_ok());
+    with_large_stack(|| {
+        let nested = format!("{}echo hi{}", "( ".repeat(200), " )".repeat(200));
+        assert!(parser::parse(&nested).is_ok());
+        let braces = format!("echo {}x{}", "{a,".repeat(50), "}".repeat(50));
+        assert!(parser::parse(&braces).is_ok());
+    });
+}
+
+#[test]
+fn excessive_nesting_is_a_syntax_error() {
+    with_large_stack(|| {
+        for source in [
+            format!("{}echo hi{}", "( ".repeat(100_000), " )".repeat(100_000)),
+            format!("echo $(({}1{}))", "(".repeat(100_000), ")".repeat(100_000)),
+            format!("echo {}x{}", "${x:-".repeat(10_000), "}".repeat(10_000)),
+            format!("echo {}x{}", "$(echo ".repeat(5_000), ")".repeat(5_000)),
+            "{ ".repeat(10_000),
+            format!(
+                "{}echo{}",
+                "if true; then ".repeat(10_000),
+                "; fi".repeat(10_000)
+            ),
+        ] {
+            let result = parser::parse(&source);
+            if source.starts_with("echo $((") {
+                assert!(result.is_ok());
+                continue;
+            }
+            let error = result.unwrap_err();
+            assert!(!error.incomplete, "{}", &source[..20]);
+        }
+    });
 }
