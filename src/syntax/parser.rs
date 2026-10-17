@@ -694,16 +694,22 @@ impl<'a> Parser<'a> {
         let mut end = start;
         let mut depth = 0usize;
         loop {
+            let token_start = self.start();
+            if depth == 0 && end != start && token_start > end {
+                break;
+            }
             match self.peek() {
-                Token::Eof | Token::Newline => {
-                    return Err(ParseError::incomplete("expected ']]'"));
-                }
+                Token::Eof => return Err(ParseError::incomplete("expected ']]'")),
+                Token::Newline if depth == 0 => break,
                 Token::Word(word) if depth == 0 && word.as_literal() == Some("]]") => break,
                 Token::Operator("&&" | "||") if depth == 0 => break,
                 Token::Operator("(") => depth += 1,
                 Token::Operator(")") if depth == 0 => break,
                 Token::Operator(")") => depth -= 1,
-                _ => {}
+                Token::Operator("|") if depth == 0 && end != start => {}
+                Token::Word(_) | Token::Newline => {}
+                _ if depth > 0 => {}
+                _ => return Err(self.unexpected()),
             }
             end = self.current().end;
             self.next();
@@ -778,6 +784,11 @@ impl<'a> Parser<'a> {
             self.next();
             let right = if operator == "=~" {
                 self.regex_operand()?
+            } else if matches!(operator.as_str(), "==" | "=" | "!=") {
+                self.lexer.pattern_operand = true;
+                let word = self.condition_word();
+                self.lexer.pattern_operand = false;
+                word?
             } else {
                 self.condition_word()?
             };

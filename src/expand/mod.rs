@@ -31,11 +31,7 @@ pub fn words(shell: &mut Shell, words: &[Word]) -> Result<Vec<String>, String> {
             let expanded = argument_tildes(expanded);
             let expanded = expanded.as_ref();
             let mut fields = Fields::new(true);
-            fields.glob_options = glob::GlobOptions {
-                dotglob: shell.options.dotglob,
-                nocase: shell.options.nocaseglob,
-                globstar: shell.options.globstar,
-            };
+            fields.glob_options = glob::options(shell);
             fields.nullglob = shell.options.nullglob;
             fields.noglob = shell.options.noglob;
             fields.failglob = shell.options.failglob;
@@ -48,29 +44,49 @@ pub fn words(shell: &mut Shell, words: &[Word]) -> Result<Vec<String>, String> {
 }
 
 pub fn pattern(shell: &mut Shell, word: &Word) -> Result<String, String> {
+    glob::configure_locale(shell);
     let mut fields = Fields::new(false);
     fields.pattern_mode = true;
     expand_into(shell, word, &mut fields)?;
     Ok(fields.pattern)
 }
 
+fn push_regex_literal(out: &mut String, text: &str) {
+    for character in text.chars() {
+        if "\\^$.|?*+()[]{}".contains(character) {
+            out.push('\\');
+        }
+        out.push(character);
+    }
+}
+
+fn quoted_expansion(part: &WordPart) -> bool {
+    matches!(
+        part,
+        WordPart::Parameter { quoted: true, .. }
+            | WordPart::Indirect { quoted: true, .. }
+            | WordPart::Indices { quoted: true, .. }
+            | WordPart::Names { quoted: true, .. }
+            | WordPart::CommandSubstitution { quoted: true, .. }
+            | WordPart::Arithmetic { quoted: true, .. }
+    )
+}
+
 pub fn regex(shell: &mut Shell, word: &Word) -> Result<String, String> {
     let mut out = String::new();
     for part in &word.parts {
         match part {
-            WordPart::Quoted(text) => {
-                for character in text.chars() {
-                    if "\\^$.|?*+()[]{}".contains(character) {
-                        out.push('\\');
-                    }
-                    out.push(character);
-                }
-            }
+            WordPart::Quoted(text) => push_regex_literal(&mut out, text),
             other => {
                 let piece = Word {
                     parts: vec![other.clone()],
                 };
-                out.push_str(&single(shell, &piece)?);
+                let expanded = single(shell, &piece)?;
+                if quoted_expansion(other) {
+                    push_regex_literal(&mut out, &expanded);
+                } else {
+                    out.push_str(&expanded);
+                }
             }
         }
     }
@@ -798,6 +814,7 @@ struct Fields {
 
 pub(crate) const DEFAULT_IFS: &str = " \t\n";
 pub(crate) const NO_MATCH: &str = "no match: ";
+pub(crate) const INTERRUPTED: &str = "interrupted";
 
 pub(crate) fn split_ifs(text: &str, ifs: &str, limit: Option<usize>) -> Vec<String> {
     let white = |character: char| ifs.contains(character) && character.is_whitespace();
@@ -847,7 +864,7 @@ impl Fields {
         if self.split || self.pattern_mode {
             self.pattern.push_str(text);
         }
-        if self.split && glob::has_magic(text) {
+        if self.split && (text.contains('[') || glob::has_magic(text)) {
             self.glob = true;
         }
     }
@@ -913,17 +930,17 @@ impl Fields {
         self.break_field();
         let mut out = Vec::new();
         for (text, pattern, glob) in self.done {
-            let glob = glob && !self.noglob;
+            let glob = glob && !self.noglob && glob::has_magic(&pattern);
             match glob
-                .then(|| glob::expand(&pattern, self.glob_options))
+                .then(|| glob::expand(&pattern, &self.glob_options))
                 .flatten()
             {
                 Some(matches) => out.extend(matches),
+                None if glob && glob::interrupted() => return Err(INTERRUPTED.to_string()),
                 None if glob && self.nullglob => {}
                 None if glob && self.failglob => {
                     return Err(format!("{NO_MATCH}{}", glob::unescape(&pattern)));
                 }
-                None if glob => out.push(glob::unescape(&pattern)),
                 None => out.push(text),
             }
         }

@@ -98,15 +98,23 @@ pub fn lex(source: &str) -> Result<Lexed, ParseError> {
     })
 }
 
-fn escape_bracket_spaces(text: &str) -> String {
+fn quote_group_blanks(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut quote = None;
-    let mut bracket = false;
+    let mut depth = 0usize;
     let mut chars = text.chars().peekable();
     while let Some(character) = chars.next() {
         match (quote, character) {
             (Some(open), _) if character == open => quote = None,
-            (None, '\'' | '"') if !bracket => quote = Some(character),
+            (Some('"'), '\\') => {
+                out.push(character);
+                if let Some(next) = chars.next() {
+                    out.push(next);
+                }
+                continue;
+            }
+            (Some(_), _) => {}
+            (None, '\'' | '"') => quote = Some(character),
             (None, '\\') => {
                 out.push(character);
                 if let Some(next) = chars.next() {
@@ -114,9 +122,14 @@ fn escape_bracket_spaces(text: &str) -> String {
                 }
                 continue;
             }
-            (None, '[') => bracket = true,
-            (None, ']') => bracket = false,
-            (None, ' ' | '\t') if bracket => out.push('\\'),
+            (None, '(') => depth += 1,
+            (None, ')') => depth = depth.saturating_sub(1),
+            (None, ' ' | '\t' | '\n') if depth > 0 => {
+                out.push('\'');
+                out.push(character);
+                out.push('\'');
+                continue;
+            }
             _ => {}
         }
         out.push(character);
@@ -125,7 +138,7 @@ fn escape_bracket_spaces(text: &str) -> String {
 }
 
 pub fn parse_regex_word(text: &str) -> Result<Word, ParseError> {
-    let escaped = escape_bracket_spaces(text.trim());
+    let escaped = quote_group_blanks(text.trim());
     let mut lexer = Lexer::new(&escaped);
     let word = lexer.word_until(|character| character == ' ' || character == '\t')?;
     if lexer.position < lexer.chars.len() {
@@ -166,6 +179,7 @@ pub struct Lexer<'a> {
     pub(crate) final_input: bool,
     pub(crate) extglob: bool,
     pub(crate) condition: bool,
+    pub(crate) pattern_operand: bool,
     pub(crate) depth: usize,
     pub(crate) warnings: Vec<ParseError>,
 }
@@ -261,6 +275,7 @@ impl<'a> Lexer<'a> {
             final_input: false,
             extglob: crate::expand::glob::extglob(),
             condition: false,
+            pattern_operand: false,
             depth: 0,
             warnings: Vec::new(),
         }
@@ -677,7 +692,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn starts_extglob(&mut self, character: char) -> bool {
-        (self.extglob || self.condition)
+        (self.extglob || self.pattern_operand)
             && matches!(character, '@' | '?' | '*' | '+' | '!')
             && self.peek_at(1) == Some('(')
     }
@@ -1406,6 +1421,7 @@ mod tests {
     fn extended_patterns_in_conditions() {
         let mut lexer = Lexer::new("@(a|b c) +(x)");
         lexer.condition = true;
+        lexer.pattern_operand = true;
         let first = lexer.next_token().unwrap();
         assert!(
             matches!(first.token, Token::Word(ref word) if word.as_literal() == Some("@(a|b c)"))

@@ -719,9 +719,15 @@ impl Shell {
     }
 
     fn expansion_failed(&mut self, error: String) -> i32 {
+        if error == expand::INTERRUPTED {
+            return 128 + libc::SIGINT;
+        }
         let unmatched_glob = error.starts_with(expand::NO_MATCH);
         shell::error(error);
-        if unmatched_glob {
+        if unmatched_glob && self.options.errexit && !self.interactive {
+            self.last_status = 1;
+            self.flow = Flow::Exit;
+        } else if unmatched_glob {
             self.flow = Flow::Interrupted;
         } else if !self.interactive && self.flow != Flow::Abort {
             self.flow = Flow::Exit;

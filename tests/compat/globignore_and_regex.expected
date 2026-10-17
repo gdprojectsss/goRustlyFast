@@ -1,0 +1,10 @@
+.hidden a.txt
+all ignored: [ ]
+a.txt b.txt c.log
+paren space
+quoted literal
+unquoted regex
+class
+*\*.txt
+done
+--- exit 0

@@ -629,7 +629,7 @@ pub(super) fn compgen(shell: &mut Shell, args: &[String], out: &mut dyn Write) -
     }
     if let Some(pattern) = &completion.glob {
         candidates
-            .extend(crate::expand::glob::expand(pattern, Default::default()).unwrap_or_default());
+            .extend(crate::expand::glob::expand(pattern, &Default::default()).unwrap_or_default());
     }
     if let Some(words) = &completion.words {
         let ifs = shell

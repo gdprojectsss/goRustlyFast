@@ -25,7 +25,7 @@ mod variables;
 
 pub(crate) use directory::change_directory;
 pub(crate) use lookup::{DEFAULT_PATH, is_active, path_matches, strip_prefixes};
-pub(crate) use options::default_stored_shopts;
+pub(crate) use options::{default_stored_shopts, shopt_enabled};
 pub(crate) use variables::attribute_letters;
 
 const BUILTINS: &[&str] = &[

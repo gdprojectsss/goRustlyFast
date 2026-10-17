@@ -299,6 +299,10 @@ fn shopt_flag<'a>(options: &'a mut ShellOptions, name: &str) -> Option<&'a mut b
     })
 }
 
+pub(crate) fn shopt_enabled(shell: &Shell, name: &str) -> bool {
+    shopt_state(shell, name).unwrap_or(false)
+}
+
 fn shopt_state(shell: &Shell, name: &str) -> Option<bool> {
     let mut options = shell.options;
     if let Some(flag) = shopt_flag(&mut options, name) {
