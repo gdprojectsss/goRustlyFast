@@ -11,12 +11,9 @@ use crate::table;
 
 enum Trigger {
     Command(&'static str),
-    Keyword(&'static str),
     Flag(&'static str, char),
     Argument(&'static str, &'static str),
-    ArgumentContaining(&'static str, &'static str),
     Variable(&'static str),
-    ExtendedGlob,
 }
 
 struct Unsupported {
@@ -29,26 +26,8 @@ const fn entry(trigger: Trigger, message: &'static str) -> Unsupported {
 }
 
 const UNSUPPORTED: &[Unsupported] = &[
-    entry(
-        Trigger::Command("let"),
-        "use $(( )) or (( )) arithmetic instead",
-    ),
-    entry(Trigger::Command("coproc"), "coprocesses are not supported"),
-    entry(Trigger::Keyword("coproc"), "coprocesses are not supported"),
-    entry(Trigger::Keyword("select"), "select menus are not supported"),
-    entry(Trigger::Command("enable"), "builtins cannot be toggled"),
-    entry(
-        Trigger::Command("caller"),
-        "call stack inspection is not supported",
-    ),
-    entry(Trigger::Command("compgen"), "use complete -W or -C instead"),
     entry(Trigger::Command("bind"), "use bindkey instead"),
-    entry(Trigger::Command("disown"), "jobs cannot be disowned yet"),
     entry(Trigger::Command("suspend"), "suspend is not supported"),
-    entry(
-        Trigger::Command("fc"),
-        "use history and !-expansion instead",
-    ),
     entry(
         Trigger::Flag("declare", 'n'),
         "name references are not supported",
@@ -62,14 +41,6 @@ const UNSUPPORTED: &[Unsupported] = &[
         "name references are not supported",
     ),
     entry(
-        Trigger::Argument("trap", "DEBUG"),
-        "DEBUG traps are not supported",
-    ),
-    entry(
-        Trigger::Argument("trap", "RETURN"),
-        "RETURN traps are not supported",
-    ),
-    entry(
         Trigger::Flag("set", 'a'),
         "set -a (allexport) is not supported",
     ),
@@ -78,28 +49,12 @@ const UNSUPPORTED: &[Unsupported] = &[
         "set -o allexport is not supported",
     ),
     entry(
-        Trigger::Flag("set", 'f'),
-        "set -f (noglob) is not supported",
-    ),
-    entry(
-        Trigger::Argument("set", "noglob"),
-        "set -o noglob is not supported",
-    ),
-    entry(
-        Trigger::ArgumentContaining("printf", "%("),
-        "printf %(format)T dates are not supported",
-    ),
-    entry(
         Trigger::Variable("BASH_VERSINFO"),
-        "BASH_VERSINFO is not set in grfsh",
+        "grfsh does not set BASH_VERSINFO, since it is not bash",
     ),
     entry(
         Trigger::Variable("BASH_LINENO"),
         "BASH_LINENO is not set in grfsh",
-    ),
-    entry(
-        Trigger::ExtendedGlob,
-        "extended glob patterns are not supported",
     ),
 ];
 
@@ -155,18 +110,6 @@ fn warning(line: usize, message: String) -> Finding {
     }
 }
 
-fn extended_globs_supported() -> bool {
-    ["echo @(a|b)\n", "[[ a == @(a|b) ]]\n"]
-        .iter()
-        .any(|probe| parser::parse(&format!("shopt -s extglob\n{probe}")).is_ok())
-}
-
-fn has_extended_glob(line: &str) -> bool {
-    ["@(", "+(", "!(", "?(", "*("]
-        .iter()
-        .any(|pattern| line.contains(pattern))
-}
-
 fn word_text(word: &Word) -> Option<String> {
     word.parts
         .iter()
@@ -192,9 +135,6 @@ fn command_matches(trigger: &Trigger, name: &str, args: &[String]) -> bool {
         }
         Trigger::Argument(command, expected) => {
             command == name && args.iter().any(|argument| argument == expected)
-        }
-        Trigger::ArgumentContaining(command, needle) => {
-            command == name && args.iter().any(|argument| argument.contains(needle))
         }
         _ => false,
     }
@@ -229,7 +169,7 @@ fn code_of(line: &str) -> Option<&str> {
     (!code.trim_start().starts_with('#')).then_some(code)
 }
 
-fn text_findings(lines: &mut [String], extended_globs: bool) -> Vec<Finding> {
+fn text_findings(lines: &mut [String]) -> Vec<Finding> {
     let mut findings = Vec::new();
     for (index, line) in lines.iter_mut().enumerate() {
         let Some(code) = code_of(line) else {
@@ -237,10 +177,8 @@ fn text_findings(lines: &mut [String], extended_globs: bool) -> Vec<Finding> {
         };
         let number = index + 1;
         for unsupported in UNSUPPORTED {
-            let pattern = match unsupported.trigger {
-                Trigger::Variable(pattern) => pattern,
-                Trigger::ExtendedGlob if !extended_globs => "shopt -s extglob",
-                _ => continue,
+            let Trigger::Variable(pattern) = unsupported.trigger else {
+                continue;
             };
             if code.contains(pattern) {
                 let message = if unsupported.message.contains(pattern) {
@@ -248,12 +186,7 @@ fn text_findings(lines: &mut [String], extended_globs: bool) -> Vec<Finding> {
                 } else {
                     format!("{} ({pattern})", unsupported.message)
                 };
-                let variable = matches!(unsupported.trigger, Trigger::Variable(_));
-                findings.push(Finding {
-                    line: number,
-                    error: !variable,
-                    message,
-                });
+                findings.push(warning(number, message));
             }
         }
         for (pattern, hint) in ZSH_FILES {
@@ -336,17 +269,7 @@ struct Script {
     last_line: usize,
 }
 
-fn describe(error: &ParseError, line_text: &str, extended_globs: bool) -> String {
-    let first = first_word(line_text);
-    let keyword = UNSUPPORTED
-        .iter()
-        .find(|unsupported| matches!(unsupported.trigger, Trigger::Keyword(word) if word == first));
-    if let Some(unsupported) = keyword {
-        return format!("{} ({first})", unsupported.message);
-    }
-    if !extended_globs && has_extended_glob(line_text) {
-        return "extended glob patterns are not supported".into();
-    }
+fn describe(error: &ParseError) -> String {
     if error.incomplete {
         format!("unexpected end of file: {}", error.message)
     } else {
@@ -360,7 +283,6 @@ fn report_syntax_error(
     line: usize,
     lines: &[String],
     after_error: bool,
-    extended_globs: bool,
 ) {
     let line_text = lines.get(line.saturating_sub(1)).map_or("", String::as_str);
     if after_error && CLOSERS.contains(&first_word(line_text)) {
@@ -372,10 +294,7 @@ fn report_syntax_error(
     {
         return;
     }
-    findings.push(self::error(
-        line,
-        describe(error, line_text, extended_globs),
-    ));
+    findings.push(self::error(line, describe(error)));
 }
 
 fn joined(lines: &[String]) -> String {
@@ -404,8 +323,7 @@ fn exit_before(lines: &[String], error_line: usize) -> Option<Script> {
         if !matches!(first_word(line), "exit" | "exec") {
             continue;
         }
-        let Ok(list) = parser::parse_from_line(&joined(&lines[..=index]), &HashMap::new(), 1)
-        else {
+        let Ok(list) = parser::parse_with_extglob(&joined(&lines[..=index])) else {
             continue;
         };
         let script = until_exit(list, lines.len());
@@ -416,12 +334,12 @@ fn exit_before(lines: &[String], error_line: usize) -> Option<Script> {
     None
 }
 
-fn parse_script(lines: &[String], findings: &mut Vec<Finding>, extended_globs: bool) -> Script {
+fn parse_script(lines: &[String], findings: &mut Vec<Finding>) -> Script {
     let mut lines = lines.to_vec();
     let mut after_error = false;
     loop {
         let text = joined(&lines);
-        let problem = match parser::parse_from_line(&text, &HashMap::new(), 1) {
+        let problem = match parser::parse_with_extglob(&text) {
             Ok(list) => return until_exit(list, lines.len()),
             Err(problem) => problem,
         };
@@ -433,14 +351,7 @@ fn parse_script(lines: &[String], findings: &mut Vec<Finding>, extended_globs: b
             Some(offset) if problem.incomplete && problem.message.contains("quote") => offset + 1,
             _ => error_line,
         };
-        report_syntax_error(
-            findings,
-            &problem,
-            line,
-            &lines,
-            after_error,
-            extended_globs,
-        );
+        report_syntax_error(findings, &problem, line, &lines, after_error);
         after_error = true;
         if problem.incomplete
             || error_line == 0
@@ -889,10 +800,9 @@ pub fn check_script(
     path_commands: &[String],
     script_directory: Option<&Path>,
 ) -> Vec<Finding> {
-    let extended_globs = extended_globs_supported();
     let mut lines: Vec<String> = source.lines().map(String::from).collect();
-    let mut findings = text_findings(&mut lines, extended_globs);
-    let script = parse_script(&lines, &mut findings, extended_globs);
+    let mut findings = text_findings(&mut lines);
+    let script = parse_script(&lines, &mut findings);
     findings.retain(|finding| finding.line <= script.last_line);
 
     let known = known_names(path_commands, &script.list);
@@ -999,10 +909,6 @@ mod tests {
     fn syntax_errors_and_text_patterns() {
         let findings = check("if true; then\n  echo ok\n");
         assert!(findings[0].2.contains("unexpected end of file"));
-        if !extended_globs_supported() {
-            let findings = check("shopt -s extglob\n");
-            assert!(findings[0].2.contains("extended glob"));
-        }
     }
 
     #[test]
@@ -1100,14 +1006,12 @@ mod tests {
         let messages = |source: &str| -> Vec<String> {
             check(source).into_iter().map(|finding| finding.2).collect()
         };
-        assert!(messages("trap 'echo x' DEBUG\n")[0].contains("DEBUG traps"));
+        assert!(messages("trap 'echo x' DEBUG\n").is_empty());
         assert!(messages("declare -rn ref=x\n")[0].contains("name references"));
         assert!(messages("echo ${BASH_VERSINFO[0]}\n")[0].contains("BASH_VERSINFO"));
-        assert!(messages("printf '%(%Y)T' -1\n")[0].contains("printf"));
-        let select = messages("select x in a b; do echo $x; done\n");
-        if !select.is_empty() {
-            assert!(select[0].contains("select menus"), "{select:?}");
-        }
+        assert!(messages("printf '%(%Y)T' -1\n").is_empty());
+        assert!(messages("select x in a b; do echo $x; done\n").is_empty());
+        assert!(messages("shopt -s extglob\necho @(a|b)\n").is_empty());
     }
 
     #[test]

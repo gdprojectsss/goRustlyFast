@@ -35,8 +35,22 @@ pub fn parse_from_line(
     aliases: &HashMap<String, String>,
     first_line: usize,
 ) -> Result<List> {
+    parse_lines(source, aliases, first_line, false)
+}
+
+pub fn parse_with_extglob(source: &str) -> Result<List> {
+    parse_lines(source, &HashMap::new(), 1, true)
+}
+
+fn parse_lines(
+    source: &str,
+    aliases: &HashMap<String, String>,
+    first_line: usize,
+    always_extglob: bool,
+) -> Result<List> {
     let mut parser = Parser::new(Lexer::new(source).starting_at_line(first_line));
     parser.aliases = Cow::Borrowed(aliases);
+    parser.always_extglob = always_extglob;
     let mut list = Vec::new();
     while let Some(unit) = parser.next_unit()? {
         list.extend(unit);
@@ -62,6 +76,7 @@ pub struct Parser<'a> {
     position: usize,
     aliases: Cow<'a, HashMap<String, String>>,
     failed: Option<ParseError>,
+    always_extglob: bool,
 }
 
 pub fn is_function_name(name: &str) -> bool {
@@ -99,6 +114,7 @@ impl<'a> Parser<'a> {
             position: 0,
             aliases: Cow::Owned(HashMap::new()),
             failed: None,
+            always_extglob: false,
         }
     }
 
@@ -149,7 +165,7 @@ impl<'a> Parser<'a> {
             self.lexer.release_consumed();
         }
         self.lexer.condition = false;
-        self.lexer.extglob = crate::expand::glob::extglob();
+        self.lexer.extglob = self.always_extglob || crate::expand::glob::extglob();
         loop {
             match self.peek() {
                 Token::Newline => {
