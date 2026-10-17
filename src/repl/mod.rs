@@ -246,7 +246,7 @@ fn run_script_operand(shell: &mut Shell, path: &str, invocation: &Invocation) ->
 }
 
 fn check_script(path: &str) -> i32 {
-    match std::fs::read_to_string(path) {
+    match crate::bytes::read_file(path) {
         Ok(contents) => {
             shell::set_location(Some(path), 0);
             crate::startup::check_syntax(&contents)
@@ -274,8 +274,8 @@ fn run_script(shell: &mut Shell, path: &str, args: &[String]) -> i32 {
 }
 
 fn home_dir() -> PathBuf {
-    std::env::var("HOME")
-        .ok()
+    std::env::var_os("HOME")
+        .map(|home| crate::bytes::from_os(&home))
         .or_else(sys::current_user_home)
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
@@ -335,8 +335,10 @@ fn add_system_paths() {
     if listed.is_empty() {
         return;
     }
-    let current = std::env::var("PATH").unwrap_or_default();
-    unsafe { std::env::set_var("PATH", system_path(&listed, &current)) };
+    let current = std::env::var_os("PATH")
+        .map(|path| crate::bytes::from_os(&path))
+        .unwrap_or_default();
+    unsafe { std::env::set_var("PATH", crate::bytes::to_os(&system_path(&listed, &current))) };
 }
 
 fn profile_path() -> PathBuf {

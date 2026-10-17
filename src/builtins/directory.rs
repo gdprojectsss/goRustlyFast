@@ -81,7 +81,7 @@ pub(crate) fn change_directory(shell: &mut Shell, target: &str) -> i32 {
                 "cd: error retrieving current directory: getcwd: cannot access parent directories: {}",
                 sys::error_message(&error)
             ));
-            Path::new(&previous).join(target)
+            crate::bytes::to_path(&previous).join(crate::bytes::to_path(target))
         })
     };
     let destination = crate::bytes::from_path(&destination);
