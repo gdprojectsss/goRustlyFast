@@ -652,8 +652,12 @@ fn has_target(shell: &Shell, name: &str) -> bool {
 }
 
 pub(super) fn shift(shell: &mut Shell, args: &[String]) -> i32 {
-    let count = match parse_count("shift", args, 1) {
-        Ok(count) => count.max(0) as usize,
+    let count = match parse_count(shell, "shift", args, 1) {
+        Ok(count) if count >= 0 => count as usize,
+        Ok(count) => {
+            shell::error(format!("shift: {count}: shift count out of range"));
+            return 1;
+        }
         Err(code) => return code,
     };
     if count > shell.positional.len() {

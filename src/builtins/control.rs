@@ -3,37 +3,56 @@ use crate::shell::{self, Flow, Shell};
 use super::parse_count;
 
 pub(super) fn exit(shell: &mut Shell, args: &[String]) -> i32 {
-    let code = match parse_count("exit", args, shell.last_status) {
-        Ok(code) => code,
+    match parse_count(shell, "exit", args, i64::from(shell.last_status)) {
+        Ok(code) => {
+            shell.flow = Flow::Exit;
+            (code & 0xff) as i32
+        }
         Err(code) => code,
-    };
-    shell.flow = Flow::Exit;
-    code & 0xff
+    }
 }
 
 pub(super) fn return_from(shell: &mut Shell, args: &[String]) -> i32 {
-    if shell.locals.is_empty() && shell.source_depth == 0 {
-        shell::error("return: can only be used in a function or sourced script");
-        return 1;
+    let code = parse_count(shell, "return", args, i64::from(shell.last_status));
+    if let Err(status) = code
+        && shell.flow != Flow::Normal
+    {
+        return status;
     }
-    let code = parse_count("return", args, shell.last_status).unwrap_or(2);
+    if shell.locals.is_empty() && shell.source_depth == 0 {
+        shell::error("return: can only `return' from a function or sourced script");
+        return 2;
+    }
     shell.flow = Flow::Return;
-    code & 0xff
+    code.map_or(2, |code| (code & 0xff) as i32)
 }
 
 pub(super) fn loop_control(shell: &mut Shell, command: &str, args: &[String]) -> i32 {
     if shell.loop_depth == 0 {
-        shell::error(format!("{command}: only meaningful in a loop"));
+        shell::error(format!(
+            "{command}: only meaningful in a `for', `while', or `until' loop"
+        ));
+        return 0;
+    }
+    let count = match parse_count(shell, command, args, 1) {
+        Ok(count) => count,
+        Err(code) => {
+            if shell.flow == Flow::Normal {
+                shell.flow = if shell.interactive {
+                    Flow::Abort
+                } else {
+                    Flow::Exit
+                };
+            }
+            return code;
+        }
+    };
+    if count < 1 {
+        shell::error(format!("{command}: {count}: loop count out of range"));
+        shell.flow = Flow::Break(shell.loop_depth);
         return 1;
     }
-    let count = match parse_count(command, args, 1) {
-        Ok(count) if count >= 1 => count as u32,
-        Ok(_) => {
-            shell::error(format!("{command}: loop count out of range"));
-            return 1;
-        }
-        Err(code) => return code,
-    };
+    let count = count.min(i64::from(shell.loop_depth)) as u32;
     shell.flow = if command == "break" {
         Flow::Break(count)
     } else {

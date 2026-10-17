@@ -20,6 +20,29 @@ mod select;
 const MAX_FUNCTION_DEPTH: usize = 1000;
 const SUBSHELL_TEXT: &str = "( ... )";
 
+thread_local! {
+    static PARSE_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+struct NestedParse;
+
+impl NestedParse {
+    fn enter() -> Self {
+        PARSE_DEPTH.with(|depth| depth.set(depth.get() + 1));
+        NestedParse
+    }
+
+    fn outermost() -> bool {
+        PARSE_DEPTH.with(|depth| depth.get() <= 1)
+    }
+}
+
+impl Drop for NestedParse {
+    fn drop(&mut self) {
+        PARSE_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+    }
+}
+
 impl Shell {
     pub(crate) fn run_source(&mut self, source: &str) -> i32 {
         let first_line = self.current_line.max(1);
@@ -55,6 +78,7 @@ impl Shell {
         file: bool,
         verbose: Option<&std::cell::Cell<bool>>,
     ) -> i32 {
+        let _nested = NestedParse::enter();
         if crate::stack::exhausted() {
             shell::error("maximum nesting depth exceeded");
             self.last_status = 2;
@@ -85,9 +109,9 @@ impl Shell {
             }
             match self.flow {
                 Flow::Normal => {}
-                Flow::Abort => self.flow = Flow::Normal,
-                Flow::Exit | Flow::Return => return self.last_status,
-                _ if file => self.flow = Flow::Normal,
+                Flow::Abort if NestedParse::outermost() => self.flow = Flow::Normal,
+                Flow::Exit | Flow::Return | Flow::Abort => return self.last_status,
+                _ if file && self.loop_depth == 0 => self.flow = Flow::Normal,
                 _ => return self.last_status,
             }
         }
@@ -438,7 +462,10 @@ impl Shell {
                     self.run_condition(condition);
                     if self.flow != Flow::Normal {
                         status = self.last_status;
-                        break;
+                        if self.loop_should_exit() {
+                            break;
+                        }
+                        continue;
                     }
                     if (self.last_status == 0) == *until {
                         break;
@@ -1195,11 +1222,13 @@ impl Shell {
             .unwrap_or_else(|| self.current_source());
         self.push_frame(&argv[0], file, true);
         let hidden = self.hide_function_traps();
+        let loop_depth = std::mem::take(&mut self.loop_depth);
         if self.options.functrace {
             self.run_named_trap("DEBUG");
         }
         let status = self.run_command(body, false);
         self.last_status = status;
+        self.loop_depth = loop_depth;
         if self.flow == Flow::Return {
             self.flow = Flow::Normal;
         }

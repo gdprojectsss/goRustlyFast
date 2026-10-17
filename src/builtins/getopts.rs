@@ -10,6 +10,27 @@ pub(super) fn run(shell: &mut Shell, args: &[String]) -> i32 {
         shell::error("getopts: usage: getopts optstring name [arg ...]");
         return 2;
     };
+    let status = parse_next(shell, specification, name, rest);
+    if crate::syntax::parser::is_name(name) {
+        return status;
+    }
+    shell::error(format!("getopts: `{name}': not a valid identifier"));
+    1
+}
+
+fn set_name(shell: &mut Shell, name: &str, value: &str) {
+    if crate::syntax::parser::is_name(name) {
+        shell.set_variable(name, value);
+    }
+}
+
+fn report(shell: &Shell, message: String) {
+    if shell.get_variable("OPTERR").as_deref() != Some("0") {
+        shell::error(message);
+    }
+}
+
+fn parse_next(shell: &mut Shell, specification: &str, name: &str, rest: &[String]) -> i32 {
     let words: Vec<String> = if rest.is_empty() {
         shell.positional.clone()
     } else {
@@ -29,18 +50,23 @@ pub(super) fn run(shell: &mut Shell, args: &[String]) -> i32 {
     let index = option_index - 1;
 
     let Some(word) = words.get(index) else {
-        shell.set_variable(name, "?");
+        if index > words.len() {
+            shell.set_variable("OPTIND", &(words.len() + 1).to_string());
+        }
+        shell.getopts_offset = 0;
+        shell.unset_variable("OPTARG");
+        set_name(shell, name, "?");
         return 1;
     };
     if shell.getopts_offset == 0 {
         if word == "--" {
             shell.set_variable("OPTIND", &(index + 2).to_string());
             shell.getopts_index = index + 2;
-            shell.set_variable(name, "?");
+            set_name(shell, name, "?");
             return 1;
         }
         if !word.starts_with('-') || word == "-" {
-            shell.set_variable(name, "?");
+            set_name(shell, name, "?");
             return 1;
         }
         shell.getopts_offset = 1;
@@ -57,10 +83,10 @@ pub(super) fn run(shell: &mut Shell, args: &[String]) -> i32 {
         if silent {
             shell.set_variable("OPTARG", &option.to_string());
         } else {
-            shell::error(format!("getopts: illegal option -- {option}"));
+            report(shell, format!("getopts: illegal option -- {option}"));
             shell.unset_variable("OPTARG");
         }
-        shell.set_variable(name, "?");
+        set_name(shell, name, "?");
         if at_end {
             finish_word(shell, index);
         }
@@ -69,26 +95,29 @@ pub(super) fn run(shell: &mut Shell, args: &[String]) -> i32 {
             let value: String = characters[shell.getopts_offset..].iter().collect();
             shell.set_variable("OPTARG", &value);
             finish_word(shell, index);
-            shell.set_variable(name, &option.to_string());
+            set_name(shell, name, &option.to_string());
         } else if let Some(value) = words.get(index + 1) {
             shell.set_variable("OPTARG", value);
             shell.getopts_offset = 0;
             shell.set_variable("OPTIND", &(index + 3).to_string());
-            shell.set_variable(name, &option.to_string());
+            set_name(shell, name, &option.to_string());
         } else {
             finish_word(shell, index);
             if silent {
                 shell.set_variable("OPTARG", &option.to_string());
-                shell.set_variable(name, ":");
+                set_name(shell, name, ":");
             } else {
-                shell::error(format!("getopts: option requires an argument -- {option}"));
+                report(
+                    shell,
+                    format!("getopts: option requires an argument -- {option}"),
+                );
                 shell.unset_variable("OPTARG");
-                shell.set_variable(name, "?");
+                set_name(shell, name, "?");
             }
         }
     } else {
         shell.unset_variable("OPTARG");
-        shell.set_variable(name, &option.to_string());
+        set_name(shell, name, &option.to_string());
         if at_end {
             finish_word(shell, index);
         }

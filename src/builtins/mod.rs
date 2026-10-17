@@ -287,12 +287,31 @@ fn explain(shell: &mut Shell, args: &[String]) -> i32 {
     }
 }
 
-pub(super) fn parse_count(command: &str, args: &[String], default: i32) -> Result<i32, i32> {
-    match args.first() {
-        None => Ok(default),
-        Some(argument) => argument.parse().map_err(|_| {
-            shell::error(format!("{command}: {argument}: numeric argument required"));
-            2
-        }),
+pub(super) fn parse_count(
+    shell: &mut Shell,
+    command: &str,
+    args: &[String],
+    default: i64,
+) -> Result<i64, i32> {
+    let args = match args.first() {
+        Some(first) if first == "--" => &args[1..],
+        _ => args,
+    };
+    let Some(argument) = args.first() else {
+        return Ok(default);
+    };
+    let Ok(value) = argument.trim().parse::<i64>() else {
+        shell::error(format!("{command}: {argument}: numeric argument required"));
+        return Err(2);
+    };
+    if args.len() > 1 {
+        shell::error(format!("{command}: too many arguments"));
+        if shell.command_string && !shell.interactive {
+            shell.flow = shell::Flow::Exit;
+            return Err(1);
+        }
+        shell.flow = shell::Flow::Abort;
+        return Err(2);
     }
+    Ok(value)
 }

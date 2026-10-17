@@ -117,6 +117,7 @@ impl Shell {
                 Ok(0) => {
                     self.enter_child(self.interactive.then_some(pgid), true);
                     if text == super::SUBSHELL_TEXT {
+                        self.loop_depth = 0;
                         self.jobs.clear();
                     }
                     if index > 0 {

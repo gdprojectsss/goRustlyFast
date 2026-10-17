@@ -1135,9 +1135,10 @@ impl<'a> Parser<'a> {
         };
         let name = name.as_str();
         let eligible = command_position || self.alias_eligible.contains(&position);
-        let blocked = self.alias_spans.iter().any(|span| {
-            span.name == name && span.start <= position && position < span.end
-        });
+        let blocked = self
+            .alias_spans
+            .iter()
+            .any(|span| span.name == name && span.start <= position && position < span.end);
         if !eligible || blocked {
             return Ok(false);
         }

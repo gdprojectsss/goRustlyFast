@@ -103,16 +103,24 @@ pub(crate) fn strip_prefixes(shell: &Shell, argv: &mut Vec<String>) -> Result<Pr
                 prefixes.default_path |= default_path;
             }
             Some("builtin") => {
-                let Some(name) = argv.get(1) else {
+                let skip = if argv.get(1).is_some_and(|word| word == "--") {
+                    2
+                } else {
+                    1
+                };
+                let Some(name) = argv.get(skip) else {
                     argv.clear();
                     return Ok(prefixes);
                 };
                 if !is_active(shell, name) {
                     return Err(format!("builtin: {name}: not a shell builtin"));
                 }
-                argv.remove(0);
+                let nested = name == "command" || name == "builtin";
+                argv.drain(..skip);
                 prefixes.bypass_functions = true;
-                return Ok(prefixes);
+                if !nested {
+                    return Ok(prefixes);
+                }
             }
             _ => return Ok(prefixes),
         }
@@ -351,6 +359,10 @@ pub(super) fn print_functions(
 }
 
 pub(super) fn builtin(shell: &mut Shell, args: &[String]) -> i32 {
+    let args = match args.first() {
+        Some(first) if first == "--" => &args[1..],
+        _ => args,
+    };
     let Some(name) = args.first() else {
         return 0;
     };

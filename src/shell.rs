@@ -877,6 +877,8 @@ fn startup_variables() -> Vec<(&'static str, String)> {
         ("MACHTYPE", machine_type(&operating_system)),
         ("OSTYPE", operating_system),
         ("PS4", "+ ".to_string()),
+        ("OPTIND", "1".to_string()),
+        ("OPTERR", "1".to_string()),
         ("GRFSH_VERSION", env!("CARGO_PKG_VERSION").to_string()),
     ]
 }

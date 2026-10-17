@@ -1,0 +1,13 @@
+rc=0 opt=a OPTARG=x OPTIND=3
+past end rc=1 OPTIND=2 OPTARG=unset
+quiet rc=0 opt=?
+break capped
+continue capped
+after g 1
+after g 2
+status 44
+builtin dash 0
+via builtin command
+shift bad 2
+done
+--- exit 0
