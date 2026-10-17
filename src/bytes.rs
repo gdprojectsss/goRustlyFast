@@ -129,9 +129,6 @@ impl LineReader {
             Ok(_) => {
                 if line.ends_with(b"\n") {
                     line.pop();
-                    if line.ends_with(b"\r") {
-                        line.pop();
-                    }
                 }
                 Some(decode(&line))
             }
@@ -313,7 +310,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!("grfsh_line_reader_{}", std::process::id()));
         std::fs::write(&path, b"one\xe9\r\ntwo\nthree").unwrap();
         let mut reader = LineReader::open(&from_path(&path)).unwrap();
-        assert_eq!(&*encode(&reader.next_line().unwrap()), b"one\xe9");
+        assert_eq!(&*encode(&reader.next_line().unwrap()), b"one\xe9\r");
         assert_eq!(reader.next_line().unwrap(), "two");
         assert_eq!(reader.next_line().unwrap(), "three");
         assert!(reader.next_line().is_none());

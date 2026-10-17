@@ -1,0 +1,14 @@
+matched
+quoted
+letter
+digit
+other
+[a]
+) (
+a b
+nested subshell
+7
+inner
+heredoc in substitution
+backtick
+--- exit 0

@@ -184,7 +184,7 @@ fn letter_option(letter: char) -> Option<&'static str> {
     })
 }
 
-fn set_option_state(shell: &Shell, name: &str) -> bool {
+pub(super) fn set_option_state(shell: &Shell, name: &str) -> bool {
     let mut options = shell.options;
     match name {
         "emacs" => options.emacs || (shell.interactive && !options.vi),
@@ -313,6 +313,9 @@ fn shopt_state(shell: &Shell, name: &str) -> Option<bool> {
 fn change_shopt(shell: &mut Shell, name: &str, enable: bool) -> bool {
     if let Some(flag) = shopt_flag(&mut shell.options, name) {
         *flag = enable;
+        if name == "extglob" {
+            crate::expand::glob::set_extglob(enable);
+        }
         return true;
     }
     let Some(bit) = stored_bit(name) else {

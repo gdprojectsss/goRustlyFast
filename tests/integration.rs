@@ -1411,3 +1411,119 @@ fn verbose_and_noexec_options_in_scripts() {
         "echo shown\nset +v\n"
     );
 }
+
+fn run_script_text(name: &str, text: &str) -> (String, String, i32) {
+    let path = std::env::temp_dir().join(format!("grfsh_parse_{name}_{}.sh", std::process::id()));
+    std::fs::write(&path, text).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_grfsh"))
+        .arg(&path)
+        .env("HOME", "/tmp/grfsh_test_home")
+        .stdin(Stdio::null())
+        .output()
+        .expect("failed to run grfsh");
+    let _ = std::fs::remove_file(&path);
+    assert!(output.status.code().is_some(), "{name}: killed by a signal");
+    (
+        String::from_utf8_lossy(&output.stdout).to_string(),
+        String::from_utf8_lossy(&output.stderr).to_string(),
+        output.status.code().unwrap_or(-1),
+    )
+}
+
+#[test]
+fn syntax_errors_stop_the_script_without_running_the_broken_command() {
+    let (out, error, status) = run_script_text(
+        "syntax",
+        "echo one\nif [[ -o errexit ]]; then echo BODY; fi\nif then (\necho two\nfi\necho three\n",
+    );
+    assert_eq!(out, "one\n");
+    assert!(error.contains("line 3"), "{error}");
+    assert_eq!(status, 2);
+    let (out, status) = run_args(&["-c", "echo one; if then (; echo two; fi; echo three"]);
+    assert_eq!((out.as_str(), status), ("", 2));
+    assert_eq!(run("echo a\nfi\necho b\n"), "a\n");
+}
+
+#[test]
+fn scripts_keep_blank_lines_and_carriage_returns() {
+    let (out, _, _) = run_script_text("blank", "cat <<E\na\n\nb\nE\nx=\"1\n\n2\"\necho \"$x\"\n");
+    assert_eq!(out, "a\n\nb\n1\n\n2\n");
+    let (out, _, _) = run_script_text("crlf", "echo hi\r\n");
+    assert_eq!(out, "hi\r\n");
+}
+
+#[test]
+fn heredoc_at_end_of_file_warns_and_keeps_its_text() {
+    let (out, error, status) = run_script_text("heredoc", "cat <<EOF\na\nb\n");
+    assert_eq!(out, "a\nb\n");
+    assert!(
+        error.contains("here-document at line 1 delimited by end-of-file (wanted `EOF')"),
+        "{error}"
+    );
+    assert_eq!(status, 0);
+}
+
+#[test]
+fn long_scripts_are_parsed_in_linear_time() {
+    let body: String = (0..20_000)
+        .map(|index| format!("  echo line {index}\n"))
+        .collect();
+    let heredoc: String = (0..20_000).map(|index| format!("row {index}\n")).collect();
+    let script = format!("f() {{\n{body}}}\nf | tail -1\ncat <<EOF | tail -1\n{heredoc}EOF\n");
+    let started = std::time::Instant::now();
+    let (out, _, _) = run_script_text("long", &script);
+    assert_eq!(out, "line 19999\nrow 19999\n");
+    assert_eq!(run(&script), "line 19999\nrow 19999\n");
+    assert!(started.elapsed() < std::time::Duration::from_secs(30));
+}
+
+#[test]
+fn deep_nesting_is_an_error_instead_of_a_crash() {
+    let braces = format!(
+        "{}echo deep; {}\necho after\n",
+        "{ ".repeat(10_000),
+        "} ".repeat(10_000)
+    );
+    let (out, error, status) = run_script_text("braces", &braces);
+    assert_eq!(out, "");
+    assert!(error.contains("maximum nesting depth exceeded"), "{error}");
+    assert_eq!(status, 2);
+    let parens = format!("{}echo deep{}\n", "(".repeat(100_000), ")".repeat(100_000));
+    run_script_text("parens", &parens);
+    let defaults = format!("echo {}x{}\n", "${x:-".repeat(10_000), "}".repeat(10_000));
+    run_script_text("defaults", &defaults);
+    let arithmetic = format!(
+        "echo $(({}1{}))\necho after\n",
+        "(".repeat(100_000),
+        ")".repeat(100_000)
+    );
+    let (out, _, _) = run_script_text("arithmetic", &arithmetic);
+    assert!(out.ends_with("after\n"));
+    let (out, error, _) = run_script_text(
+        "source",
+        "depth=$((depth + 1))\nif (( depth < 100000 )); then . \"$0\"; fi\necho done $depth\n",
+    );
+    assert!(error.contains("maximum nesting depth exceeded"), "{error}");
+    assert!(out.contains("done"));
+    let (_, error, _) = run_script_text("functions", "f() { g; }\ng() { f; }\nf\n");
+    assert!(
+        error.contains("maximum function nesting exceeded"),
+        "{error}"
+    );
+}
+
+#[test]
+fn select_is_a_loop_only_with_loop_syntax() {
+    let directory = std::env::temp_dir().join(format!("grfsh_select_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(directory.join("a"), "").unwrap();
+    let dir = directory.display();
+    let (out, _, status) = run_command(&format!("files {dir} | select name"));
+    assert_eq!((out.as_str(), status), ("name\na\n", 0));
+    let (out, _, _) = run_command("select x in red; do echo \"picked $x\"; break; done <<< 1");
+    assert_eq!(out, "picked red\n");
+    let (out, _, _) = run_command("set -- p q; select x\ndo echo \"got $x\"; break; done <<< 2");
+    assert_eq!(out, "got q\n");
+    let _ = std::fs::remove_dir_all(&directory);
+}

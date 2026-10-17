@@ -194,7 +194,7 @@ const TOPICS: &[(&str, &str, &str)] = &[
     (
         "shopt",
         "shopt [-pqsu] [-o] [name ...]",
-        "set or show shell options such as globstar, nullglob, failglob, nocasematch",
+        "set or show shell options such as globstar, nullglob, extglob, failglob, nocasematch",
     ),
     (
         "source",

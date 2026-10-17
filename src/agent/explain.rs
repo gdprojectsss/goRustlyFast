@@ -362,6 +362,13 @@ impl Explainer<'_> {
                 self.emit(line, "for (( ... )) loop".into());
                 self.list(body);
             }
+            CommandKind::Select { variable, body, .. } => {
+                self.emit(line, format!("select menu setting {variable}"));
+                self.list(body);
+            }
+            CommandKind::Coproc { name, .. } => {
+                self.emit(line, format!("starts coprocess {name}"));
+            }
             CommandKind::FunctionDefinition { name, .. } => {
                 self.emit(line, format!("defines function {name}"));
                 self.functions.insert(name.clone(), line);

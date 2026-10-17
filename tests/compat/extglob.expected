@@ -1,0 +1,30 @@
+conditional always extended
+pattern from variable
+quoted is literal
+quoted does not match
+off: [   hi]
+optional:a
+plus:ab
+at:abc
+at:abcd
+optional:
+plus:b
+star:c
+star:cc
+not a header
+1
+2
+3
+4
+5
+6
+7
+[lead  trail  ] [  lead  trail] [  l__d  tr_il  ]
+[-] [foo.bar] [bar.baz]
+Xbbb Ybbb
+a.c c.txt
+a.c b.h
+a.c b.h
+a.c
+@(nomatch|none)
+--- exit 0

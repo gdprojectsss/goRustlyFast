@@ -360,8 +360,7 @@ fn load_file(shell: &mut Shell, path: &std::path::Path) {
     let Ok(contents) = std::fs::read(path).map(|bytes| crate::bytes::decode(&bytes)) else {
         return;
     };
-    let mut lines = contents.lines().map(String::from);
-    shell.run_lines(|| lines.next());
+    shell.run_text(&contents);
 }
 
 fn warn_once(message: String) {

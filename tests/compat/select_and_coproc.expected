@@ -1,0 +1,15 @@
+f=[banana] REPLY=[2]
+f=[] REPLY=[9]
+f=[] REPLY=[x]
+f=[apple] REPLY=[1]
+select status 0
+got a
+
+eof status 1
+positional q
+empty status 0
+[b] [ 2 ]
+got hello
+has pid
+SHOUT
+--- exit 0

@@ -12,8 +12,10 @@ use crate::sys;
 use crate::table;
 use crate::variables::{Array, Evaluated, Key};
 
+mod coproc;
 mod process;
 mod redirect;
+mod select;
 
 const MAX_FUNCTION_DEPTH: usize = 1000;
 const SUBSHELL_TEXT: &str = "( ... )";
@@ -21,57 +23,84 @@ const SUBSHELL_TEXT: &str = "( ... )";
 impl Shell {
     pub(crate) fn run_source(&mut self, source: &str) -> i32 {
         let first_line = self.current_line.max(1);
-        match parser::parse_from_line(source, self.active_aliases(), first_line) {
-            Ok(list) => self.run_list(&list),
-            Err(error) => {
-                self.report_parse_error(error);
-                2
-            }
-        }
+        let mut parser = parser::Parser::for_text(source, first_line);
+        self.run_parsed(&mut parser, false, None)
     }
 
-    pub(crate) fn run_lines(&mut self, mut next_line: impl FnMut() -> Option<String>) -> i32 {
-        let mut buffer = String::new();
-        let mut lines_read = 0;
-        let mut chunk_start = 1;
-        while let Some(line) = next_line() {
-            if buffer.is_empty() {
-                chunk_start = lines_read + 1;
-            }
-            lines_read += 1;
-            if self.options.verbose {
+    pub(crate) fn run_text(&mut self, text: &str) -> i32 {
+        let mut parser = parser::Parser::for_text(text, 1);
+        self.run_parsed(&mut parser, true, None)
+    }
+
+    pub(crate) fn run_lines<'a>(
+        &mut self,
+        mut next_line: impl FnMut() -> Option<String> + 'a,
+    ) -> i32 {
+        let verbose = Rc::new(std::cell::Cell::new(self.options.verbose));
+        let echo = Rc::clone(&verbose);
+        let reader = move || {
+            let line = next_line()?;
+            if echo.get() {
                 eprintln!("{}", line.trim_end_matches('\n'));
             }
-            buffer.push_str(&line);
-            if !buffer.ends_with('\n') {
-                buffer.push('\n');
-            }
-            match parser::parse_from_line(&buffer, self.active_aliases(), chunk_start) {
-                Err(error) if error.incomplete => continue,
-                Err(error) => self.report_parse_error(error),
-                Ok(_) if self.options.noexec && !self.interactive => {}
-                Ok(list) => {
-                    self.run_list(&list);
-                    self.reap_jobs();
-                }
-            }
-            buffer.clear();
-            match self.flow {
-                Flow::Exit | Flow::Return => return self.last_status,
-                _ => self.flow = Flow::Normal,
-            }
+            Some(line)
+        };
+        let mut parser = parser::Parser::for_lines(Box::new(reader));
+        self.run_parsed(&mut parser, true, Some(&verbose))
+    }
+
+    fn run_parsed(
+        &mut self,
+        parser: &mut parser::Parser<'_>,
+        file: bool,
+        verbose: Option<&std::cell::Cell<bool>>,
+    ) -> i32 {
+        if crate::stack::exhausted() {
+            shell::error("maximum nesting depth exceeded");
+            self.last_status = 2;
+            return 2;
         }
-        if !buffer.trim().is_empty() {
-            match parser::parse_from_line(&buffer, self.active_aliases(), chunk_start) {
-                Ok(list) => {
+        loop {
+            if let Some(verbose) = verbose {
+                verbose.set(self.options.verbose);
+            }
+            parser.set_aliases(self.active_aliases());
+            let unit = parser.next_unit();
+            for warning in parser.take_warnings() {
+                self.report_parse_warning(warning);
+            }
+            match unit {
+                Ok(None) => break,
+                Ok(Some(_)) if self.options.noexec && !self.interactive => {}
+                Ok(Some(list)) => {
                     self.run_list(&list);
+                    if file {
+                        self.reap_jobs();
+                    }
                 }
                 Err(error) => {
-                    self.report_parse_error(error.at_line(chunk_start));
+                    self.report_parse_error(error);
+                    return 2;
                 }
+            }
+            match self.flow {
+                Flow::Normal => {}
+                Flow::Abort => self.flow = Flow::Normal,
+                Flow::Exit | Flow::Return => return self.last_status,
+                _ if file => self.flow = Flow::Normal,
+                _ => return self.last_status,
             }
         }
         self.last_status
+    }
+
+    fn report_parse_warning(&mut self, warning: parser::ParseError) {
+        if let Some(line) = warning.line
+            && !self.interactive
+        {
+            shell::set_location(None, line);
+        }
+        shell::error(&warning.message);
     }
 
     fn report_parse_error(&mut self, error: parser::ParseError) {
@@ -362,6 +391,11 @@ impl Shell {
     }
 
     pub(crate) fn run_compound(&mut self, kind: &CommandKind) -> i32 {
+        if crate::stack::exhausted() {
+            shell::error("maximum nesting depth exceeded");
+            self.flow = Flow::Abort;
+            return 2;
+        }
         match kind {
             CommandKind::Group(list) => self.run_list(list),
             CommandKind::Subshell(list) => {
@@ -416,7 +450,7 @@ impl Shell {
             CommandKind::Arithmetic(expression) => match expand::arithmetic(self, expression) {
                 Ok(value) => i32::from(value == 0),
                 Err(error) => {
-                    shell::error(error);
+                    shell::error(format!("((: {error}"));
                     1
                 }
             },
@@ -542,6 +576,12 @@ impl Shell {
                 self.loop_depth -= 1;
                 status
             }
+            CommandKind::Select {
+                variable,
+                items,
+                body,
+            } => self.run_select(variable, items.as_deref(), body),
+            CommandKind::Coproc { name, body } => self.run_coproc(name, body),
             CommandKind::Simple(_) | CommandKind::FunctionDefinition { .. } => unreachable!(),
         }
     }
@@ -565,7 +605,7 @@ impl Shell {
                 self.flow = Flow::Normal;
                 false
             }
-            Flow::Return | Flow::Exit | Flow::Interrupted => true,
+            Flow::Return | Flow::Exit | Flow::Interrupted | Flow::Abort => true,
         }
     }
 
@@ -584,7 +624,7 @@ impl Shell {
         shell::error(error);
         if unmatched_glob {
             self.flow = Flow::Interrupted;
-        } else if !self.interactive {
+        } else if !self.interactive && self.flow != Flow::Abort {
             self.flow = Flow::Exit;
             if self.command_string && sys::getpid() == self.shell_pid {
                 return 127;
@@ -667,8 +707,14 @@ impl Shell {
                 match operator.as_str() {
                     "==" | "=" | "!=" => {
                         let pattern = expand::pattern(self, right)?;
-                        let matched =
-                            expand::glob::matches_with(&pattern, &left, self.options.nocasematch);
+                        let matched = if self.options.nocasematch {
+                            expand::glob::matches_extended(
+                                &pattern.to_lowercase(),
+                                &left.to_lowercase(),
+                            )
+                        } else {
+                            expand::glob::matches_extended(&pattern, &left)
+                        };
                         Ok(matched == (operator != "!="))
                     }
                     "=~" => {
@@ -680,6 +726,20 @@ impl Shell {
                             }
                             None => {
                                 self.set_array("BASH_REMATCH", Array::indexed(Vec::new()))?;
+                                Ok(false)
+                            }
+                        }
+                    }
+                    "-eq" | "-ne" | "-lt" | "-le" | "-gt" | "-ge" => {
+                        let right = expand::single(self, right)?;
+                        let left = expand::evaluate_arithmetic(self, &left);
+                        let right = expand::evaluate_arithmetic(self, &right);
+                        match (left, right) {
+                            (Ok(left), Ok(right)) => {
+                                test::binary(operator, &left.to_string(), &right.to_string())
+                            }
+                            (Err(error), _) | (_, Err(error)) => {
+                                shell::error(format!("[[: {error}"));
                                 Ok(false)
                             }
                         }
@@ -1006,7 +1066,7 @@ impl Shell {
     }
 
     pub(crate) fn call_function(&mut self, body: &Rc<Command>, argv: &[String]) -> i32 {
-        if self.locals.len() >= MAX_FUNCTION_DEPTH {
+        if self.locals.len() >= MAX_FUNCTION_DEPTH || crate::stack::exhausted() {
             shell::error(format!("{}: maximum function nesting exceeded", argv[0]));
             return 1;
         }

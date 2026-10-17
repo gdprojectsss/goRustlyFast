@@ -17,6 +17,7 @@ pub enum Flow {
     Return,
     Exit,
     Interrupted,
+    Abort,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

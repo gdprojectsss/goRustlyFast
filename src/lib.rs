@@ -12,6 +12,7 @@ mod jobs;
 pub(crate) mod repl;
 mod shell;
 mod signals;
+mod stack;
 mod startup;
 mod syntax;
 mod sys;
@@ -20,7 +21,10 @@ mod text;
 mod trust;
 mod variables;
 
-pub use repl::run;
+pub fn run() -> i32 {
+    stack::init();
+    repl::run()
+}
 
 #[doc(hidden)]
 pub mod fuzzing {

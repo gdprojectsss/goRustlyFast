@@ -1,8 +1,9 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::syntax::ast::*;
-use crate::syntax::lexer::{self, Spanned, Token};
+use crate::syntax::lexer::{self, Lexer, LineSource, Spanned, Token};
 
 pub use crate::syntax::lexer::ParseError;
 
@@ -19,6 +20,8 @@ const RESERVED: &[&str] = &[
     "then", "else", "elif", "fi", "do", "done", "}", "in", "esac", "]]",
 ];
 
+const COMPOUND_STARTS: &[&str] = &["{", "if", "while", "until", "for", "case", "select", "[["];
+
 pub fn parse(source: &str) -> Result<List> {
     parse_with_aliases(source, &HashMap::new())
 }
@@ -32,38 +35,33 @@ pub fn parse_from_line(
     aliases: &HashMap<String, String>,
     first_line: usize,
 ) -> Result<List> {
-    let lexed = lexer::lex(source).map_err(|error| error.shifted(first_line))?;
-    let chars: Vec<char> = source.chars().collect();
-    let newlines = chars
-        .iter()
-        .enumerate()
-        .filter(|(_, character)| **character == '\n')
-        .map(|(index, _)| index)
-        .collect();
-    let mut parser = Parser {
-        tokens: lexed.tokens,
-        heredocs: lexed.heredocs,
-        position: 0,
-        chars,
-        aliases,
-        newlines,
-        first_line,
-    };
-    let list = parser.list(&[]).map_err(|error| parser.located(error))?;
-    if !parser.at_eof() {
-        return Err(parser.located(parser.unexpected()));
+    let mut parser = Parser::new(Lexer::new(source).starting_at_line(first_line));
+    parser.aliases = Cow::Borrowed(aliases);
+    let mut list = Vec::new();
+    while let Some(unit) = parser.next_unit()? {
+        list.extend(unit);
     }
     Ok(list)
 }
 
-struct Parser<'a> {
-    newlines: Vec<usize>,
-    first_line: usize,
+pub(crate) fn substitution_end(lexer: &mut Lexer<'_>) -> Result<usize> {
+    let taken = std::mem::replace(lexer, Lexer::new(""));
+    let mut parser = Parser::new(taken);
+    let condition = parser.lexer.condition;
+    parser.lexer.condition = false;
+    let outcome = parser.substitution_body();
+    let mut restored = parser.lexer;
+    restored.condition = condition;
+    *lexer = restored;
+    outcome
+}
+
+pub struct Parser<'a> {
+    lexer: Lexer<'a>,
     tokens: Vec<Spanned>,
-    heredocs: Vec<Word>,
     position: usize,
-    chars: Vec<char>,
-    aliases: &'a HashMap<String, String>,
+    aliases: Cow<'a, HashMap<String, String>>,
+    failed: Option<ParseError>,
 }
 
 pub fn is_function_name(name: &str) -> bool {
@@ -82,41 +80,208 @@ pub fn is_name(text: &str) -> bool {
         && chars.all(|character| character == '_' || character.is_ascii_alphanumeric())
 }
 
-impl Parser<'_> {
-    fn peek(&self) -> &Token {
-        &self.tokens[self.position].token
+fn stderr_to_stdout() -> Redirect {
+    Redirect {
+        fd: 2,
+        kind: RedirectKind::DuplicateOut,
+        target: Word {
+            parts: vec![WordPart::Literal("1".into())],
+        },
+        variable: None,
+    }
+}
+
+impl<'a> Parser<'a> {
+    fn new(lexer: Lexer<'a>) -> Self {
+        Parser {
+            lexer,
+            tokens: Vec::new(),
+            position: 0,
+            aliases: Cow::Owned(HashMap::new()),
+            failed: None,
+        }
     }
 
-    fn peek_ahead(&self, offset: usize) -> &Token {
+    pub fn for_text(text: &str, first_line: usize) -> Parser<'static> {
+        let mut lexer = Lexer::new(text).starting_at_line(first_line);
+        lexer.final_input = true;
+        Parser::new(lexer)
+    }
+
+    pub fn for_lines(source: LineSource<'a>) -> Self {
+        let mut lexer = Lexer::from_lines(source);
+        lexer.final_input = true;
+        Parser::new(lexer)
+    }
+
+    pub fn set_aliases(&mut self, aliases: &HashMap<String, String>) {
+        if *self.aliases != *aliases {
+            self.aliases = Cow::Owned(aliases.clone());
+        }
+    }
+
+    pub fn take_warnings(&mut self) -> Vec<ParseError> {
+        std::mem::take(&mut self.lexer.warnings)
+    }
+
+    pub fn next_unit(&mut self) -> Result<Option<List>> {
+        let result = self.unit();
+        let result = match self.failed.take() {
+            Some(error) => Err(error),
+            None => result,
+        };
+        result.map_err(|error| self.finish_error(error))
+    }
+
+    fn finish_error(&self, error: ParseError) -> ParseError {
+        if error.incomplete && self.lexer.final_input {
+            let line = self.lexer.line_at(self.lexer.position().saturating_sub(1));
+            return ParseError::syntax(format!("unexpected end of file: {}", error.message))
+                .at_line(line);
+        }
+        self.located(error)
+    }
+
+    fn unit(&mut self) -> Result<Option<List>> {
+        self.tokens.drain(..self.position);
+        self.position = 0;
+        if self.tokens.is_empty() {
+            self.lexer.release_consumed();
+        }
+        self.lexer.condition = false;
+        self.lexer.extglob = crate::expand::glob::extglob();
+        loop {
+            match self.peek() {
+                Token::Newline => {
+                    self.next();
+                }
+                Token::Eof => return Ok(None),
+                _ => break,
+            }
+        }
+        let mut list = Vec::new();
+        loop {
+            let mut item = self.list_item()?;
+            let mut done = false;
+            match self.peek() {
+                Token::Operator(";") => {
+                    self.next();
+                }
+                Token::Operator("&") => {
+                    self.next();
+                    item.background = true;
+                }
+                Token::Newline => {
+                    self.next();
+                    done = true;
+                }
+                Token::Eof => done = true,
+                _ => return Err(self.unexpected()),
+            }
+            list.push(item);
+            if done {
+                break;
+            }
+            match self.peek() {
+                Token::Newline => {
+                    self.next();
+                    break;
+                }
+                Token::Eof => break,
+                _ => {}
+            }
+        }
+        Ok(Some(list))
+    }
+
+    fn substitution_body(&mut self) -> Result<usize> {
+        let result = self.list(&[")"]).and_then(|_| {
+            if self.is_operator(")") {
+                Ok(self.tokens[self.position].start)
+            } else if self.at_eof() {
+                Err(ParseError::incomplete("unclosed $("))
+            } else {
+                Err(self.unexpected())
+            }
+        });
+        let result = match self.failed.take() {
+            Some(error) => Err(error),
+            None => result,
+        };
+        result.map_err(|error| self.located(error))
+    }
+
+    fn fill(&mut self, index: usize) {
+        while self.tokens.len() <= index {
+            if self
+                .tokens
+                .last()
+                .is_some_and(|spanned| spanned.token == Token::Eof)
+            {
+                return;
+            }
+            let spanned = match self.lexer.next_token() {
+                Ok(spanned) => spanned,
+                Err(error) => {
+                    let end = self.lexer.position();
+                    let error = error.at_line(self.lexer.line_at(end));
+                    self.failed.get_or_insert(error);
+                    Spanned {
+                        token: Token::Eof,
+                        start: end,
+                        end,
+                    }
+                }
+            };
+            self.tokens.push(spanned);
+        }
+    }
+
+    fn current(&mut self) -> &Spanned {
+        self.fill(self.position);
+        let index = self.position.min(self.tokens.len() - 1);
+        &self.tokens[index]
+    }
+
+    fn peek(&mut self) -> &Token {
+        &self.current().token
+    }
+
+    fn peek_ahead(&mut self, offset: usize) -> &Token {
+        self.fill(self.position + offset);
         let index = (self.position + offset).min(self.tokens.len() - 1);
         &self.tokens[index].token
     }
 
     fn next(&mut self) -> Token {
-        let token = self.tokens[self.position].token.clone();
-        if self.position < self.tokens.len() - 1 {
+        let token = self.peek().clone();
+        if token != Token::Eof {
             self.position += 1;
         }
         token
     }
 
+    fn start(&mut self) -> usize {
+        self.current().start
+    }
+
     fn required_list(&mut self, terminators: &[&str]) -> Result<List> {
         let list = self.list(terminators)?;
         if list.is_empty() {
-            return Err(self.located(self.unexpected()));
+            return Err(self.located_unexpected());
         }
         Ok(list)
     }
 
-    fn at_eof(&self) -> bool {
+    fn at_eof(&mut self) -> bool {
         matches!(self.peek(), Token::Eof)
     }
 
-    fn is_keyword(&self, keyword: &str) -> bool {
+    fn is_keyword(&mut self, keyword: &str) -> bool {
         matches!(self.peek(), Token::Word(word) if word.as_literal() == Some(keyword))
     }
 
-    fn is_operator(&self, operator: &str) -> bool {
+    fn is_operator(&mut self, operator: &str) -> bool {
         matches!(self.peek(), Token::Operator(candidate) if *candidate == operator)
     }
 
@@ -126,19 +291,24 @@ impl Parser<'_> {
         }
     }
 
-    fn unexpected(&self) -> ParseError {
-        let what = match self.peek() {
+    fn unexpected(&mut self) -> ParseError {
+        let spanned = self.current().clone();
+        let what = match &spanned.token {
             Token::Eof => return ParseError::incomplete("unexpected end of input"),
             Token::Newline => "newline".to_string(),
             Token::Operator(operator) => operator.to_string(),
-            Token::Word(_) => self.text(
-                self.tokens[self.position].start,
-                self.tokens[self.position].end,
-            ),
-            Token::Redirect(..) | Token::Heredoc { .. } => "redirection".to_string(),
+            Token::Word(_) => self.text(spanned.start, spanned.end),
+            Token::Redirect(..) | Token::NamedRedirect(..) | Token::Heredoc { .. } => {
+                "redirection".to_string()
+            }
             Token::Arithmetic(_) => "((".to_string(),
         };
         ParseError::syntax(format!("syntax error near '{what}'"))
+    }
+
+    fn located_unexpected(&mut self) -> ParseError {
+        let error = self.unexpected();
+        self.located(error)
     }
 
     fn expect_keyword(&mut self, keyword: &str) -> Result<()> {
@@ -152,23 +322,22 @@ impl Parser<'_> {
         }
     }
 
-    fn line_at(&self, index: usize) -> usize {
-        self.first_line + self.newlines.partition_point(|&newline| newline < index)
-    }
-
     fn located(&self, error: ParseError) -> ParseError {
         if error.incomplete || error.line.is_some() {
             return error;
         }
-        let index = self.tokens[self.position.min(self.tokens.len() - 1)].start;
-        error.at_line(self.line_at(index))
+        let index = self
+            .tokens
+            .get(self.position.min(self.tokens.len().saturating_sub(1)))
+            .map_or(self.lexer.position(), |spanned| spanned.start);
+        error.at_line(self.lexer.line_at(index))
     }
 
     fn text(&self, start: usize, end: usize) -> String {
-        self.chars[start..end].iter().collect()
+        self.lexer.text(start, end)
     }
 
-    fn at_terminator(&self, terminators: &[&str]) -> bool {
+    fn at_terminator(&mut self, terminators: &[&str]) -> bool {
         terminators.iter().any(|terminator| {
             if matches!(*terminator, ")" | ";;" | ";&" | ";;&") {
                 self.is_operator(terminator)
@@ -178,6 +347,19 @@ impl Parser<'_> {
         })
     }
 
+    fn list_item(&mut self) -> Result<AndOr> {
+        let start = self.start();
+        let mut item = self.and_or()?;
+        let end = if self.position == 0 {
+            start
+        } else {
+            self.tokens[self.position - 1].end.max(start)
+        };
+        item.text = self.text(start, end).trim().to_string();
+        item.line = self.lexer.line_at(start);
+        Ok(item)
+    }
+
     fn list(&mut self, terminators: &[&str]) -> Result<List> {
         let mut list = Vec::new();
         loop {
@@ -185,12 +367,7 @@ impl Parser<'_> {
             if self.at_eof() || self.at_terminator(terminators) {
                 break;
             }
-            let start = self.tokens[self.position].start;
-            let mut item = self.and_or()?;
-            let end = self.tokens[self.position.saturating_sub(1)].end.max(start);
-            item.text = self.text(start, end).trim().to_string();
-            item.line = self.line_at(start);
-
+            let mut item = self.list_item()?;
             let more = match self.peek() {
                 Token::Operator(";") | Token::Newline => {
                     self.next();
@@ -238,12 +415,20 @@ impl Parser<'_> {
         if timed {
             self.next();
         }
-        let negate = self.is_keyword("!");
-        if negate {
+        let mut negate = false;
+        while self.is_keyword("!") {
             self.next();
+            negate = !negate;
         }
         let mut commands = vec![self.command()?];
-        while self.is_operator("|") {
+        loop {
+            if self.is_operator("|&") {
+                if let Some(last) = commands.last_mut() {
+                    last.redirects.push(stderr_to_stdout());
+                }
+            } else if !self.is_operator("|") {
+                break;
+            }
             self.next();
             self.skip_newlines();
             commands.push(self.command()?);
@@ -256,6 +441,17 @@ impl Parser<'_> {
     }
 
     fn command(&mut self) -> Result<Command> {
+        self.lexer.depth += 1;
+        let result = if self.lexer.depth > lexer::MAX_NESTING || crate::stack::exhausted() {
+            Err(ParseError::too_deep())
+        } else {
+            self.command_inner()
+        };
+        self.lexer.depth -= 1;
+        result
+    }
+
+    fn command_inner(&mut self) -> Result<Command> {
         let kind = match self.peek().clone() {
             Token::Arithmetic(source) => {
                 self.next();
@@ -286,12 +482,19 @@ impl Parser<'_> {
                     }
                 }
                 Some("for") => self.for_clause()?,
+                Some("select") if self.select_is_loop() => self.select_clause()?,
                 Some("case") => self.case_clause()?,
+                Some("coproc") => return self.coproc(),
                 Some("[[") => {
                     self.next();
-                    let condition = self.condition_or()?;
-                    self.expect_keyword("]]")?;
-                    CommandKind::Conditional(condition)
+                    self.lexer.condition = true;
+                    let condition = self.condition_or();
+                    let condition = condition.and_then(|condition| {
+                        self.expect_keyword("]]")?;
+                        Ok(condition)
+                    });
+                    self.lexer.condition = false;
+                    CommandKind::Conditional(condition?)
                 }
                 Some("{") => {
                     self.next();
@@ -330,7 +533,9 @@ impl Parser<'_> {
                 }
                 _ => return self.simple(),
             },
-            Token::Redirect(..) | Token::Heredoc { .. } => return self.simple(),
+            Token::Redirect(..) | Token::NamedRedirect(..) | Token::Heredoc { .. } => {
+                return self.simple();
+            }
             _ => return Err(self.unexpected()),
         };
 
@@ -357,6 +562,39 @@ impl Parser<'_> {
         }
         Ok(Command {
             kind: CommandKind::FunctionDefinition {
+                name,
+                body: Rc::new(body),
+            },
+            redirects: Vec::new(),
+        })
+    }
+
+    fn coproc(&mut self) -> Result<Command> {
+        self.next();
+        let named = match self.peek() {
+            Token::Word(word) => word
+                .as_literal()
+                .filter(|name| is_name(name))
+                .map(String::from),
+            _ => None,
+        };
+        let compound_follows = match self.peek_ahead(1) {
+            Token::Word(word) => word
+                .as_literal()
+                .is_some_and(|keyword| COMPOUND_STARTS.contains(&keyword)),
+            Token::Operator("(") | Token::Arithmetic(_) => true,
+            _ => false,
+        };
+        let name = match named {
+            Some(name) if compound_follows => {
+                self.next();
+                name
+            }
+            _ => "COPROC".to_string(),
+        };
+        let body = self.command()?;
+        Ok(Command {
+            kind: CommandKind::Coproc {
                 name,
                 body: Rc::new(body),
             },
@@ -406,7 +644,7 @@ impl Parser<'_> {
     }
 
     fn regex_operand(&mut self) -> Result<Word> {
-        let start = self.tokens[self.position].start;
+        let start = self.start();
         let mut end = start;
         let mut depth = 0usize;
         loop {
@@ -421,7 +659,7 @@ impl Parser<'_> {
                 Token::Operator(")") => depth -= 1,
                 _ => {}
             }
-            end = self.tokens[self.position].end;
+            end = self.current().end;
             self.next();
         }
         if end == start {
@@ -453,6 +691,18 @@ impl Parser<'_> {
     }
 
     fn condition_not(&mut self) -> Result<Condition> {
+        self.lexer.depth += 1;
+        let result = if self.lexer.depth > lexer::MAX_NESTING || crate::stack::exhausted() {
+            Err(ParseError::too_deep())
+        } else {
+            self.condition_primary()
+        };
+        self.lexer.depth -= 1;
+        result
+    }
+
+    fn condition_primary(&mut self) -> Result<Condition> {
+        self.skip_newlines();
         if self.is_keyword("!") {
             self.next();
             return Ok(Condition::Not(Box::new(self.condition_not()?)));
@@ -460,6 +710,7 @@ impl Parser<'_> {
         if self.is_operator("(") {
             self.next();
             let inner = self.condition_or()?;
+            self.skip_newlines();
             self.expect_operator(")")?;
             return Ok(inner);
         }
@@ -602,6 +853,48 @@ impl Parser<'_> {
                 body,
             });
         }
+        let (variable, items) = self.loop_header("for")?;
+        let body = self.loop_body()?;
+        Ok(CommandKind::For {
+            variable,
+            items,
+            body,
+        })
+    }
+
+    fn select_is_loop(&mut self) -> bool {
+        let named = matches!(
+            self.peek_ahead(1),
+            Token::Word(word) if word.as_literal().is_some_and(is_name)
+        );
+        if !named {
+            return false;
+        }
+        let mut offset = 2;
+        if matches!(self.peek_ahead(offset), Token::Operator(";")) {
+            offset += 1;
+        }
+        while matches!(self.peek_ahead(offset), Token::Newline) {
+            offset += 1;
+        }
+        matches!(
+            self.peek_ahead(offset),
+            Token::Word(word) if matches!(word.as_literal(), Some("in" | "do"))
+        )
+    }
+
+    fn select_clause(&mut self) -> Result<CommandKind> {
+        self.next();
+        let (variable, items) = self.loop_header("select")?;
+        let body = self.loop_body()?;
+        Ok(CommandKind::Select {
+            variable,
+            items,
+            body,
+        })
+    }
+
+    fn loop_header(&mut self, keyword: &str) -> Result<(String, Option<Vec<Word>>)> {
         let variable = match self.next() {
             Token::Word(word) => word
                 .as_literal()
@@ -610,7 +903,8 @@ impl Parser<'_> {
             Token::Eof => return Err(ParseError::incomplete("expected loop variable")),
             _ => None,
         };
-        let variable = variable.ok_or_else(|| ParseError::syntax("for: bad variable name"))?;
+        let variable =
+            variable.ok_or_else(|| ParseError::syntax(format!("{keyword}: bad variable name")))?;
         self.skip_newlines();
 
         let mut items = None;
@@ -631,12 +925,7 @@ impl Parser<'_> {
             _ => {}
         }
         self.skip_newlines();
-        let body = self.loop_body()?;
-        Ok(CommandKind::For {
-            variable,
-            items,
-            body,
-        })
+        Ok((variable, items))
     }
 
     fn finish_assignment(&mut self, target: AssignmentTarget) -> Result<Assignment> {
@@ -669,25 +958,56 @@ impl Parser<'_> {
         }
     }
 
+    fn redirect_target(&mut self) -> Result<Word> {
+        match self.next() {
+            Token::Word(target) => Ok(target),
+            _ => Err(ParseError::syntax("expected filename after redirection")),
+        }
+    }
+
     fn redirect(&mut self) -> Result<Option<Redirect>> {
         match self.peek().clone() {
             Token::Redirect(fd, kind) => {
                 self.next();
-                match self.next() {
-                    Token::Word(target) => Ok(Some(Redirect { fd, kind, target })),
-                    _ => Err(ParseError::syntax("expected filename after redirection")),
-                }
+                let target = self.redirect_target()?;
+                Ok(Some(Redirect {
+                    fd,
+                    kind,
+                    target,
+                    variable: None,
+                }))
+            }
+            Token::NamedRedirect(name, kind) => {
+                self.next();
+                let target = self.redirect_target()?;
+                Ok(Some(Redirect {
+                    fd: -1,
+                    kind,
+                    target,
+                    variable: Some(name),
+                }))
             }
             Token::Heredoc { fd, index } => {
                 self.next();
-                let target = self.heredocs[index].clone();
+                self.complete_heredocs();
                 Ok(Some(Redirect {
                     fd,
                     kind: RedirectKind::Heredoc,
-                    target,
+                    target: self.lexer.heredoc_body(index),
+                    variable: None,
                 }))
             }
             _ => Ok(None),
+        }
+    }
+
+    fn complete_heredocs(&mut self) {
+        while self.lexer.has_pending_heredocs() {
+            let length = self.tokens.len();
+            self.fill(length);
+            if self.tokens.len() == length {
+                break;
+            }
         }
     }
 
@@ -1084,5 +1404,123 @@ mod tests {
             let err = parse(source).unwrap_err();
             assert!(err.incomplete, "{source}: {err}");
         }
+    }
+
+    #[test]
+    fn double_negation() {
+        assert!(!parse("! ! true").unwrap()[0].first.negate);
+        assert!(parse("! ! ! true").unwrap()[0].first.negate);
+    }
+
+    #[test]
+    fn pipe_with_errors_adds_redirect() {
+        let list = parse("ls |& wc").unwrap();
+        let commands = &list[0].first.commands;
+        assert_eq!(commands.len(), 2);
+        assert_eq!(commands[0].redirects[0].fd, 2);
+        assert_eq!(commands[0].redirects[0].kind, RedirectKind::DuplicateOut);
+    }
+
+    #[test]
+    fn named_redirects() {
+        let command = first_command("exec {fd}>out");
+        assert_eq!(command.redirects[0].variable.as_deref(), Some("fd"));
+        assert_eq!(command.redirects[0].kind, RedirectKind::Out);
+    }
+
+    #[test]
+    fn option_test_in_conditions() {
+        let command = first_command("[[ -o noclobber ]]");
+        assert!(matches!(
+            command.kind,
+            CommandKind::Conditional(Condition::Unary { ref operator, .. }) if operator == "-o"
+        ));
+    }
+
+    #[test]
+    fn nested_groups_inside_conditions() {
+        let command = first_command("[[ $a == 1 && (( $a == 1 ) || ( $a == 2 )) ]]");
+        assert!(matches!(
+            command.kind,
+            CommandKind::Conditional(Condition::And(..))
+        ));
+    }
+
+    #[test]
+    fn extended_patterns_inside_conditions() {
+        let command = first_command("[[ $x == @(a|b) && $y != +([0-9]) ]]");
+        let CommandKind::Conditional(Condition::And(left, _)) = command.kind else {
+            panic!()
+        };
+        let Condition::Binary { right, .. } = *left else {
+            panic!()
+        };
+        assert_eq!(right.as_literal(), Some("@(a|b)"));
+    }
+
+    #[test]
+    fn case_inside_command_substitution() {
+        let command = first_command("echo $( case x in x) echo m;; esac )");
+        assert!(matches!(
+            simple(&command).words[1].parts[0],
+            WordPart::CommandSubstitution { .. }
+        ));
+    }
+
+    #[test]
+    fn select_and_coproc() {
+        assert!(matches!(
+            first_command("select x in a b; do echo $x; done").kind,
+            CommandKind::Select { ref variable, .. } if variable == "x"
+        ));
+        assert!(matches!(
+            first_command("coproc cat").kind,
+            CommandKind::Coproc { ref name, .. } if name == "COPROC"
+        ));
+        assert!(matches!(
+            first_command("coproc worker { cat; }").kind,
+            CommandKind::Coproc { ref name, .. } if name == "worker"
+        ));
+    }
+
+    #[test]
+    fn units_are_parsed_one_line_at_a_time() {
+        let mut parser = Parser::for_text("echo a; echo b\nif x\nthen y\nfi\nfi\n", 1);
+        assert_eq!(parser.next_unit().unwrap().unwrap().len(), 2);
+        assert_eq!(parser.next_unit().unwrap().unwrap().len(), 1);
+        let error = parser.next_unit().unwrap_err();
+        assert_eq!(error.line, Some(5));
+    }
+
+    #[test]
+    fn line_source_is_read_lazily() {
+        let lines = std::rc::Rc::new(std::cell::RefCell::new(vec![
+            "echo b".to_string(),
+            "echo a".to_string(),
+        ]));
+        let source = std::rc::Rc::clone(&lines);
+        let mut parser = Parser::for_lines(Box::new(move || source.borrow_mut().pop()));
+        parser.next_unit().unwrap().unwrap();
+        assert_eq!(lines.borrow().len(), 1);
+    }
+
+    #[test]
+    fn final_input_reports_end_of_file() {
+        let mut parser = Parser::for_text("if true; then\n", 1);
+        let error = parser.next_unit().unwrap_err();
+        assert!(!error.incomplete);
+        assert!(error.message.contains("end of file"));
+    }
+
+    #[test]
+    fn nesting_limit_is_a_syntax_error() {
+        let deep = format!("{}echo{}", "{ ".repeat(5000), "; }".repeat(5000));
+        let result = std::thread::Builder::new()
+            .stack_size(256 << 20)
+            .spawn(move || parse(&deep).map(|_| ()))
+            .unwrap()
+            .join()
+            .unwrap();
+        assert!(!result.unwrap_err().incomplete);
     }
 }

@@ -170,12 +170,28 @@ impl Printer {
                 self.body(body);
                 self.out.push_str("done");
             }
+            CommandKind::Coproc { name, body } => {
+                self.out.push_str("coproc ");
+                self.out.push_str(name);
+                self.out.push(' ');
+                self.command(body, None);
+            }
             CommandKind::For {
                 variable,
                 items,
                 body,
+            }
+            | CommandKind::Select {
+                variable,
+                items,
+                body,
             } => {
-                self.out.push_str("for ");
+                let keyword = if matches!(command.kind, CommandKind::Select { .. }) {
+                    "select "
+                } else {
+                    "for "
+                };
+                self.out.push_str(keyword);
                 self.out.push_str(variable);
                 self.out.push_str(" in ");
                 match items {
@@ -435,7 +451,7 @@ fn raw_and_or(item: &AndOr) -> Option<String> {
             Token::Newline => continue,
             Token::Word(_) => (text, false),
             Token::Arithmetic(source) => (format!("(( {} ))", source.trim()), false),
-            Token::Redirect(_, kind) => (
+            Token::Redirect(_, kind) | Token::NamedRedirect(_, kind) => (
                 text,
                 matches!(kind, RedirectKind::DuplicateIn | RedirectKind::DuplicateOut),
             ),
