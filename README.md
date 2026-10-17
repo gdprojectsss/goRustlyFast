@@ -79,7 +79,7 @@ grfsh --check script.sh        list what grfsh cannot run, without running it
 grfsh --agent -c 'command'     agent mode, see below
 ```
 
-To make it your login shell, add its path to `/etc/shells` and run `chsh -s "$(command -v grfsh)"`. The [login shell guide](https://grf.sh/docs/login-shell/) covers terminal apps too.
+To make it your login shell, add its path to `/etc/shells` and run `chsh -s "$(command -v grfsh)"`. The [login shell guide](https://grf.sh/docs/login-shell/) covers terminal apps too. `grfsh --check ~/.zshrc` shows which lines of your zsh or bash files grfsh cannot run. To switch back, run `chsh -s /bin/zsh` (or your old shell); if a startup file breaks grfsh, start it with `grfsh -l --noprofile --norc`. See [switching back and recovering](docs/switching-back.md).
 
 A few things to try once it is running:
 

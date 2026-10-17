@@ -51,6 +51,29 @@ case ":$PATH:" in
     *":$install_dir:"*) ;;
     *) echo "Add $install_dir to your PATH to run it by name." ;;
 esac
+case "${SHELL:-}" in
+    "" | */grfsh)
+        if [ "$(uname -s)" = Darwin ]; then current_shell=/bin/zsh; else current_shell=/bin/bash; fi
+        ;;
+    *) current_shell="$SHELL" ;;
+esac
+echo
+echo "Try it first without switching:"
+echo "  $install_dir/grfsh -l"
+echo "  $install_dir/grfsh --check ~/.zshrc    # shows which lines of a zsh or bash file grfsh cannot run"
+echo "Type exit to get back to your current shell."
+echo
 echo "To make it your login shell:"
-echo "  echo $install_dir/grfsh | sudo tee -a /etc/shells"
+echo "  grep -qx $install_dir/grfsh /etc/shells || echo $install_dir/grfsh | sudo tee -a /etc/shells"
 echo "  chsh -s $install_dir/grfsh"
+echo "Keep a terminal with your current shell open until a new one starts grfsh correctly."
+echo
+echo "To switch back:"
+echo "  chsh -s $current_shell"
+if [ "$(uname -s)" = Darwin ]; then
+    echo "  Terminal: Settings > General > Shells open with: Default login shell"
+    echo "  iTerm2: Settings > Profiles > General > Command: Login Shell"
+fi
+echo "  Ghostty: remove the command = line from its config file"
+echo "If a startup file breaks grfsh, start it with grfsh -l --noprofile --norc and fix the file."
+echo "More: https://github.com/gdprojectsss/goRustlyFast/blob/main/docs/switching-back.md"

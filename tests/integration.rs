@@ -1562,3 +1562,12 @@ fn readonly_assignment_aborts_only_its_line_in_command_strings() {
     assert_eq!(out, "next 1\nunset 1\n");
     assert_eq!(status, 0);
 }
+
+#[test]
+fn search_fails_when_nothing_matches() {
+    let path = write_fixture("search_status.txt", "alpha\nbeta\n");
+    let (_, _, missing) = run_command(&format!("search zzz_absent {path} >/dev/null"));
+    assert_eq!(missing, 1);
+    let (_, _, found) = run_command(&format!("search beta {path} >/dev/null"));
+    assert_eq!(found, 0);
+}

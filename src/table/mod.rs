@@ -79,6 +79,7 @@ pub(crate) fn consumes_tables(command: &Command) -> bool {
 pub(crate) fn run(shell: &mut Shell, argv: &[String]) -> i32 {
     let name = argv[0].as_str();
     let args = &argv[1..];
+    let mut matched = true;
     let result = match name {
         "files" => sources::files(args).map(Output::Table),
         "procs" => sources::procs(args).map(Output::Table),
@@ -88,6 +89,7 @@ pub(crate) fn run(shell: &mut Shell, argv: &[String]) -> i32 {
             search::parse(args)
                 .and_then(|search| search.run())
                 .map(|(hits, files_only)| {
+                    matched = !hits.is_empty();
                     if shell.pipe_to_table || sys::isatty(1) {
                         Output::Table(search::to_table(&hits, files_only))
                     } else {
@@ -138,7 +140,7 @@ pub(crate) fn run(shell: &mut Shell, argv: &[String]) -> i32 {
     match result {
         Ok(output) => {
             emit(shell, output);
-            0
+            i32::from(!matched)
         }
         Err(message) => {
             shell::error(format!("{name}: {message}"));
