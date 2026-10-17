@@ -24,7 +24,7 @@ The first stable release.
 - A panic handler that restores the terminal, and hangup handling that ends jobs.
 - Startup files and plugins are skipped when another user can change them.
 - `NO_COLOR`, 256 and 24 bit color detection, ASCII fallbacks outside UTF-8 locales, `help` for every builtin, and a first run hint.
-- Release binaries for five targets including a static musl build, `.deb` and `.rpm` packages, a cosign signed `SHA256SUMS`, an install script, an AUR package, a Nix flake, a Homebrew formula and a man page.
+- Release binaries for five targets including a static musl build, `.deb` and `.rpm` packages, a cosign signed `SHA256SUMS`, an install script, Arch PKGBUILDs for a binary and a source package, a Nix flake, a Homebrew formula and a man page.
 - Documentation at [grf.sh/docs](https://grf.sh/docs/).
 
 ### Changed

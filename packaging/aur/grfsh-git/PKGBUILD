@@ -1,8 +1,8 @@
 pkgname=grfsh-git
 _name=grfsh
-pkgver=1.0.0
+pkgver=1.0.0.r60.edb9ed9
 pkgrel=1
-pkgdesc="Small Unix shell with bash style scripting, prompt themes and typed table pipelines"
+pkgdesc="Small Unix shell with bash style scripting, typed table pipelines and an agent mode"
 arch=('x86_64' 'aarch64')
 url="https://grf.sh"
 license=('MIT')

@@ -44,7 +44,7 @@ jobs:
 
       - if: contains(matrix.target, 'musl')
         run: |
-          file "target/${{ matrix.target }}/release/grfsh" | grep -q 'statically linked'
+          file "target/${{ matrix.target }}/release/grfsh" | grep -qE 'static(ally|-pie) linked'
           "target/${{ matrix.target }}/release/grfsh" -c 'echo $((6 * 7))' | grep -qx 42
 
       - name: Package

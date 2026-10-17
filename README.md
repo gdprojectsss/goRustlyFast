@@ -64,7 +64,7 @@ The script picks the release binary for your system, checks its SHA-256 sum and 
 | Homebrew | `brew install --HEAD ./packaging/homebrew/grfsh.rb` |
 | Debian, Ubuntu | `sudo apt install ./grfsh_1.0.0_amd64.deb` from a [release](https://github.com/gdprojectsss/goRustlyFast/releases) |
 | Fedora, RHEL | `sudo dnf install ./grfsh-1.0.0.x86_64.rpm` from a release |
-| Arch Linux | `makepkg -si` in [`packaging/aur`](packaging/aur/PKGBUILD) |
+| Arch Linux | `makepkg -si` in [`packaging/aur/grfsh-bin`](packaging/aur/grfsh-bin) or [`grfsh-git`](packaging/aur/grfsh-git), AUR packages coming |
 | Nix | `nix run github:gdprojectsss/goRustlyFast` |
 | Cargo | `cargo install --git https://github.com/gdprojectsss/goRustlyFast` |
 
