@@ -1,28 +1,28 @@
 class Grfsh < Formula
   desc "Small Unix shell with bash style scripting, typed tables and an agent mode"
   homepage "https://grf.sh"
-  version "1.1.0"
+  version "1.1.1"
   license "MIT"
 
   on_macos do
     on_arm do
-      url "https://github.com/gdprojectsss/goRustlyFast/releases/download/v1.1.0/grfsh-v1.1.0-aarch64-apple-darwin.tar.gz"
-      sha256 "41fcad63be4b9aa5a6f6d33bc671e2417a74bb19136139bbdc2c04890c5d0be3"
+      url "https://github.com/gdprojectsss/goRustlyFast/releases/download/v1.1.1/grfsh-v1.1.1-aarch64-apple-darwin.tar.gz"
+      sha256 "ee34c4410d3946a049e7dbeb393921383fa38a32de67ba5f0f1b9e731599c24e"
     end
     on_intel do
-      url "https://github.com/gdprojectsss/goRustlyFast/releases/download/v1.1.0/grfsh-v1.1.0-x86_64-apple-darwin.tar.gz"
-      sha256 "09b80d1a0d38b3543059ec520656a945714875aebb40add5fbfeb37db34c692b"
+      url "https://github.com/gdprojectsss/goRustlyFast/releases/download/v1.1.1/grfsh-v1.1.1-x86_64-apple-darwin.tar.gz"
+      sha256 "5b3f98c56f31b9c0bdc445ed08a04075fea8cc4dec640721f46394730dad4c4c"
     end
   end
 
   on_linux do
     on_arm do
-      url "https://github.com/gdprojectsss/goRustlyFast/releases/download/v1.1.0/grfsh-v1.1.0-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "3d2b81b859d2abc14e7af469db3d9febb854190fe33a6cb596fb0e6e569eb5c7"
+      url "https://github.com/gdprojectsss/goRustlyFast/releases/download/v1.1.1/grfsh-v1.1.1-aarch64-unknown-linux-gnu.tar.gz"
+      sha256 "523cb7c436d117cf4eb707b678ea81483ba1b100b8ec93058c2de05fa42c6726"
     end
     on_intel do
-      url "https://github.com/gdprojectsss/goRustlyFast/releases/download/v1.1.0/grfsh-v1.1.0-x86_64-unknown-linux-musl.tar.gz"
-      sha256 "a94c19514d019f88b268fdcd371899918d7fa00b606ae7486294ba6a9c1833ef"
+      url "https://github.com/gdprojectsss/goRustlyFast/releases/download/v1.1.1/grfsh-v1.1.1-x86_64-unknown-linux-musl.tar.gz"
+      sha256 "a45a6d18fae1e17631010cb4d746b27727674c73783a5ce2e6e2b0bea15c987d"
     end
   end
 
