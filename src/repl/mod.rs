@@ -127,6 +127,7 @@ pub fn run() -> i32 {
                 shell.arg0 = name.clone();
             }
             shell.positional = args.iter().skip(3).cloned().collect();
+            shell.command_string = true;
             let name = args.get(2).cloned().unwrap_or_default();
             shell::set_location(Some(&name), 0);
             shell.run_source(command);

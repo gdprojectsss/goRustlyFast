@@ -379,8 +379,9 @@ impl Lexer {
                 RedirectKind::Append
             } else if self.eat('&') {
                 RedirectKind::DuplicateOut
+            } else if self.eat('|') {
+                RedirectKind::Clobber
             } else {
-                self.eat('|');
                 RedirectKind::Out
             };
             (1, kind)

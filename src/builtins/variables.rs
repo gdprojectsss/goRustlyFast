@@ -59,6 +59,7 @@ struct Flags {
     print: bool,
     global: bool,
     functions: bool,
+    function_names: bool,
 }
 
 fn parse_flags(command: &str, args: &[String]) -> Result<(Flags, Vec<String>), String> {
@@ -85,7 +86,11 @@ fn parse_flags(command: &str, args: &[String]) -> Result<(Flags, Vec<String>), S
                 'u' => flags.upper = true,
                 'p' => flags.print = true,
                 'g' => flags.global = true,
-                'f' | 'F' => flags.functions = true,
+                'f' => flags.functions = true,
+                'F' => {
+                    flags.functions = true;
+                    flags.function_names = true;
+                }
                 'n' if command == "export" => {}
                 other => return Err(format!("-{other}: invalid option")),
             }
@@ -183,12 +188,7 @@ pub(super) fn declare(
         || (matches!(command, "declare" | "typeset") && !flags.global && !shell.locals.is_empty());
 
     if flags.functions {
-        let mut functions: Vec<&String> = shell.functions.keys().collect();
-        functions.sort();
-        for name in functions {
-            let _ = writeln!(out, "declare -f {name}");
-        }
-        return 0;
+        return super::lookup::print_functions(shell, &names, flags.function_names, out);
     }
     if flags.print || (names.is_empty() && declarations.is_empty()) {
         let listed = if names.is_empty() {

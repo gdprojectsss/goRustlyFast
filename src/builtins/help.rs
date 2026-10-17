@@ -3,7 +3,11 @@ use std::io::Write;
 use crate::shell;
 
 const TOPICS: &[(&str, &str, &str)] = &[
-    (".", ". file [args]", "run a file in the current shell"),
+    (
+        ".",
+        ". [-p path] file [args]",
+        "run a file in the current shell, searching PATH for names without a slash",
+    ),
     (":", ": [args]", "do nothing and succeed"),
     ("[", "[ expression ]", "evaluate a condition, same as test"),
     (
@@ -23,11 +27,30 @@ const TOPICS: &[(&str, &str, &str)] = &[
         "bind keys in the line editor",
     ),
     ("break", "break [n]", "leave the innermost n loops"),
-    ("cd", "cd [dir | -]", "change the working directory"),
+    (
+        "builtin",
+        "builtin name [args]",
+        "run a shell builtin, skipping functions with the same name",
+    ),
+    (
+        "caller",
+        "caller [frame]",
+        "print the line and file of the current function call, or of an outer frame",
+    ),
+    (
+        "cd",
+        "cd [-L | -P [-e]] [dir | -]",
+        "change the working directory, -P resolving symbolic links",
+    ),
     (
         "command",
-        "command [-v] name [args]",
-        "run a command, skipping functions",
+        "command [-pVv] name [args]",
+        "run a command skipping functions, -p with the default PATH, -v/-V describe it",
+    ),
+    (
+        "compgen",
+        "compgen [-abcdefkuv] [-A action] [-W words] [-G glob] [-X filter] [-P prefix] [-S suffix] [word]",
+        "print the completions that match word",
     ),
     (
         "complete",
@@ -46,11 +69,16 @@ const TOPICS: &[(&str, &str, &str)] = &[
     ),
     (
         "declare",
-        "declare [-aAilrux] [name[=value] ...]",
+        "declare [-aAfFilprux] [name[=value] ...]",
         "set variable attributes or list variables",
     ),
     ("dirs", "dirs [-c | -v]", "show the directory stack"),
     ("echo", "echo [-neE] [args]", "print arguments"),
+    (
+        "enable",
+        "enable [-a] [-nps] [name ...]",
+        "list builtins, or turn them off with -n and back on",
+    ),
     ("eval", "eval [args]", "run arguments as shell code"),
     (
         "exec",
@@ -88,13 +116,18 @@ const TOPICS: &[(&str, &str, &str)] = &[
     ("jobs", "jobs", "list background and stopped jobs"),
     ("kill", "kill [-signal] pid | %job", "send a signal"),
     (
+        "let",
+        "let expression ...",
+        "evaluate arithmetic, failing when the last value is 0",
+    ),
+    (
         "local",
         "local [-aA] name[=value] ...",
         "declare variables local to a function",
     ),
     (
         "mapfile",
-        "mapfile [-t] [-n count] [-s skip] [array]",
+        "mapfile [-d delim] [-n count] [-O origin] [-s count] [-t] [-u fd] [-C callback] [-c quantum] [array]",
         "read lines into an array",
     ),
     ("popd", "popd", "leave the top directory of the stack"),
@@ -108,13 +141,21 @@ const TOPICS: &[(&str, &str, &str)] = &[
         "pushd [dir]",
         "push a directory onto the stack and enter it",
     ),
-    ("pwd", "pwd", "print the working directory"),
+    (
+        "pwd",
+        "pwd [-LP]",
+        "print the working directory, -P with symbolic links resolved",
+    ),
     (
         "read",
-        "read [-r] [-a array] [-n n] [-t secs] [-s] [-d delim] [-p prompt] [names]",
+        "read [-ers] [-a array] [-d delim] [-n n] [-N n] [-p prompt] [-t secs] [-u fd] [names]",
         "read a line from input",
     ),
-    ("readarray", "readarray [-t] [array]", "same as mapfile"),
+    (
+        "readarray",
+        "readarray [-d delim] [-n count] [-O origin] [-s count] [-t] [-u fd] [array]",
+        "same as mapfile",
+    ),
     (
         "readonly",
         "readonly [name[=value] ...]",
@@ -128,19 +169,19 @@ const TOPICS: &[(&str, &str, &str)] = &[
     ("return", "return [n]", "leave a function or sourced file"),
     (
         "set",
-        "set [-euxo option] [--] [args]",
-        "set shell options or positional parameters",
+        "set [-abefhkmnptuvxBCEHPT] [-o option] [--] [args]",
+        "set shell options or positional parameters; set -o lists them",
     ),
     ("shift", "shift [n]", "drop positional parameters"),
     (
         "shopt",
-        "shopt [-s | -u | -q] [name ...]",
-        "glob options: globstar nullglob dotglob nocaseglob",
+        "shopt [-pqsu] [-o] [name ...]",
+        "set or show shell options such as globstar, nullglob, failglob, nocasematch",
     ),
     (
         "source",
-        "source file [args]",
-        "run a file in the current shell",
+        "source [-p path] file [args]",
+        "run a file in the current shell, searching PATH for names without a slash",
     ),
     ("test", "test expression", "evaluate a condition"),
     (
@@ -150,11 +191,20 @@ const TOPICS: &[(&str, &str, &str)] = &[
     ),
     (
         "timeout",
-        "timeout [-s signal] [-k duration] duration command [args]",
+        "timeout [-s signal] [-k duration] [--preserve-status] duration command [args]",
         "run a command and stop its whole process group after a time limit",
     ),
+    (
+        "time",
+        "time [-p] pipeline",
+        "run a pipeline and report the elapsed, user and system time",
+    ),
     ("true", "true", "succeed"),
-    ("type", "type name ...", "show how a name would be run"),
+    (
+        "type",
+        "type [-afptP] name ...",
+        "show how a name would be run",
+    ),
     (
         "typeset",
         "typeset [-aAilrux] [name[=value] ...]",
@@ -167,7 +217,7 @@ const TOPICS: &[(&str, &str, &str)] = &[
     ),
     (
         "umask",
-        "umask [-S] [mode]",
+        "umask [-p] [-S] [mode]",
         "show or set the file creation mask",
     ),
     ("unalias", "unalias [-a] name ...", "remove aliases"),
@@ -189,7 +239,7 @@ const TOPICS: &[(&str, &str, &str)] = &[
     ),
     (
         "files",
-        "files [path] [-a] [-r]",
+        "files [-a] [-r] [path...]",
         "table of files with name, type, size, modified",
     ),
     ("procs", "procs", "table of running processes"),
@@ -258,7 +308,7 @@ pub(super) fn run(args: &[String], out: &mut dyn Write) -> i32 {
         }
         let _ = writeln!(
             out,
-            "\nhelp name shows usage. The docs live at https://github.com/gdprojectsss/goRustlyFast"
+            "\nhelp name shows usage. The docs live at https://grf.sh/docs/"
         );
         return 0;
     }

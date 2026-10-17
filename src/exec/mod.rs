@@ -38,6 +38,9 @@ impl Shell {
                 chunk_start = lines_read + 1;
             }
             lines_read += 1;
+            if self.options.verbose {
+                eprintln!("{}", line.trim_end_matches('\n'));
+            }
             buffer.push_str(&line);
             if !buffer.ends_with('\n') {
                 buffer.push('\n');
@@ -45,6 +48,7 @@ impl Shell {
             match parser::parse_from_line(&buffer, &self.aliases, chunk_start) {
                 Err(error) if error.incomplete => continue,
                 Err(error) => self.report_parse_error(error),
+                Ok(_) if self.options.noexec && !self.interactive => {}
                 Ok(list) => {
                     self.run_list(&list);
                     self.reap_jobs();
@@ -283,6 +287,9 @@ impl Shell {
         }
         let status = match pipeline.commands.as_slice() {
             [command] => self.run_command(command, false),
+            commands if self.options.lastpipe && !self.interactive => {
+                self.run_lastpipe(commands, text)
+            }
             commands => self.run_forked(commands, text),
         };
         if pipeline.commands.len() == 1 {
@@ -450,7 +457,11 @@ impl Shell {
                                 return 1;
                             }
                         };
-                        matched = expand::glob::matches_pattern(&pattern, &subject);
+                        matched = expand::glob::matches_with(
+                            &pattern,
+                            &subject,
+                            self.options.nocasematch,
+                        );
                     }
                     run_next = false;
                     if !matched {
@@ -533,9 +544,15 @@ impl Shell {
     }
 
     fn expansion_failed(&mut self, error: String) -> i32 {
+        let unmatched_glob = error.starts_with(expand::NO_MATCH);
         shell::error(error);
-        if !self.interactive {
+        if unmatched_glob {
+            self.flow = Flow::Interrupted;
+        } else if !self.interactive {
             self.flow = Flow::Exit;
+            if self.command_string && sys::getpid() == self.shell_pid {
+                return 127;
+            }
         }
         1
     }
@@ -589,12 +606,13 @@ impl Shell {
                 match operator.as_str() {
                     "==" | "=" | "!=" => {
                         let pattern = expand::pattern(self, right)?;
-                        let matched = expand::glob::matches_pattern(&pattern, &left);
+                        let matched =
+                            expand::glob::matches_with(&pattern, &left, self.options.nocasematch);
                         Ok(matched == (operator != "!="))
                     }
                     "=~" => {
                         let pattern = expand::regex(self, right)?;
-                        match test::regex_match(&left, &pattern)? {
+                        match test::regex_match_case(&left, &pattern, self.options.nocasematch)? {
                             Some(groups) => {
                                 self.set_array("BASH_REMATCH", Array::indexed(groups))?;
                                 Ok(true)
@@ -785,11 +803,19 @@ impl Shell {
             self.trace(&assignments, &argv);
         }
 
-        let mut bypass_functions = false;
-        while argv.len() > 1 && argv[0] == "command" && argv[1] != "-v" {
-            argv.remove(0);
-            bypass_functions = true;
+        let prefixes = match builtins::strip_prefixes(self, &mut argv) {
+            Ok(prefixes) => prefixes,
+            Err(message) => {
+                return self.with_redirects(redirects, |_| {
+                    shell::error(message);
+                    1
+                });
+            }
+        };
+        if argv.is_empty() {
+            return self.with_redirects(redirects, |_| 0);
         }
+        let bypass_functions = prefixes.bypass_functions;
 
         if argv[0] == "exec" {
             return self.exec_builtin(&argv[1..], &assignments, redirects);
@@ -801,7 +827,7 @@ impl Shell {
                 shell.with_temp_env(&assignments, |shell| shell.call_function(&body, &argv))
             });
         }
-        if builtins::is_builtin(name) {
+        if builtins::is_active(self, name) {
             return self.with_redirects(redirects, |shell| {
                 shell.with_temp_env(&assignments, |shell| builtins::run(shell, &argv))
             });
@@ -812,7 +838,13 @@ impl Shell {
             });
         }
 
-        let resolved = self.resolve(name);
+        let resolved = if prefixes.default_path {
+            builtins::path_matches(name, builtins::DEFAULT_PATH, false)
+                .into_iter()
+                .next()
+        } else {
+            self.resolve(name)
+        };
         if self.interactive
             && argv.len() == 1
             && assignments.is_empty()
@@ -912,7 +944,13 @@ impl Shell {
         let saved = std::mem::replace(&mut self.positional, argv[1..].to_vec());
         self.locals.push(HashMap::new());
         self.function_stack.push(argv[0].clone());
+        self.call_frames.push((
+            argv[0].clone(),
+            self.current_line,
+            self.source_stack.last().cloned(),
+        ));
         self.run_command(body, false);
+        self.call_frames.pop();
         self.function_stack.pop();
         if self.flow == Flow::Return {
             self.flow = Flow::Normal;

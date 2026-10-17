@@ -581,7 +581,7 @@ fn nounset_reports_and_exits() {
     let (out, error, status) = run_command("set -u; echo ${fine:-ok}; echo $missing; echo never");
     assert_eq!(out.trim(), "ok");
     assert!(error.contains("missing: unbound variable"));
-    assert_eq!(status, 1);
+    assert_eq!(status, 127);
 }
 
 #[test]

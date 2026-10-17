@@ -19,26 +19,122 @@ pub enum Flow {
     Interrupted,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ShellOptions {
     pub errexit: bool,
     pub nounset: bool,
     pub xtrace: bool,
     pub pipefail: bool,
     pub vi: bool,
+    pub emacs: bool,
     pub globstar: bool,
     pub nullglob: bool,
     pub dotglob: bool,
     pub nocaseglob: bool,
+    pub allexport: bool,
+    pub braceexpand: bool,
+    pub errtrace: bool,
+    pub functrace: bool,
+    pub hashall: bool,
+    pub histexpand: bool,
+    pub history: bool,
+    pub ignoreeof: bool,
+    pub interactive_comments: bool,
+    pub keyword: bool,
+    pub monitor: bool,
+    pub noclobber: bool,
+    pub noexec: bool,
+    pub noglob: bool,
+    pub nolog: bool,
+    pub notify: bool,
+    pub onecmd: bool,
+    pub physical: bool,
+    pub posix: bool,
+    pub privileged: bool,
+    pub verbose: bool,
+    pub nocasematch: bool,
+    pub failglob: bool,
+    pub lastpipe: bool,
+    pub expand_aliases: bool,
+    pub extglob: bool,
+    pub inherit_errexit: bool,
+    pub sourcepath: bool,
+    pub stored_shopts: u64,
+}
+
+impl Default for ShellOptions {
+    fn default() -> Self {
+        ShellOptions {
+            errexit: false,
+            nounset: false,
+            xtrace: false,
+            pipefail: false,
+            vi: false,
+            emacs: false,
+            globstar: false,
+            nullglob: false,
+            dotglob: false,
+            nocaseglob: false,
+            allexport: false,
+            braceexpand: true,
+            errtrace: false,
+            functrace: false,
+            hashall: true,
+            histexpand: false,
+            history: false,
+            ignoreeof: false,
+            interactive_comments: true,
+            keyword: false,
+            monitor: false,
+            noclobber: false,
+            noexec: false,
+            noglob: false,
+            nolog: false,
+            notify: false,
+            onecmd: false,
+            physical: false,
+            posix: false,
+            privileged: false,
+            verbose: false,
+            nocasematch: false,
+            failglob: false,
+            lastpipe: false,
+            expand_aliases: false,
+            extglob: false,
+            inherit_errexit: false,
+            sourcepath: true,
+            stored_shopts: crate::builtins::default_stored_shopts(),
+        }
+    }
 }
 
 impl ShellOptions {
     pub fn flags(&self) -> String {
-        [(self.errexit, 'e'), (self.nounset, 'u'), (self.xtrace, 'x')]
-            .iter()
-            .filter(|(enabled, _)| *enabled)
-            .map(|(_, flag)| *flag)
-            .collect()
+        [
+            (self.allexport, 'a'),
+            (self.notify, 'b'),
+            (self.errexit, 'e'),
+            (self.noglob, 'f'),
+            (self.hashall, 'h'),
+            (self.keyword, 'k'),
+            (self.monitor, 'm'),
+            (self.noexec, 'n'),
+            (self.privileged, 'p'),
+            (self.onecmd, 't'),
+            (self.nounset, 'u'),
+            (self.verbose, 'v'),
+            (self.xtrace, 'x'),
+            (self.braceexpand, 'B'),
+            (self.noclobber, 'C'),
+            (self.errtrace, 'E'),
+            (self.histexpand, 'H'),
+            (self.physical, 'P'),
+            (self.functrace, 'T'),
+        ]
+        .iter()
+        .filter(|(enabled, _)| *enabled)
+        .map(|(_, flag)| *flag)
+        .collect()
     }
 }
 
@@ -102,6 +198,9 @@ pub struct Shell {
     pub path_commands: Option<(String, Vec<String>)>,
     pub directories: DirectoryHistory,
     pub pipe_to_table: bool,
+    pub command_string: bool,
+    pub call_frames: Vec<(String, usize, Option<String>)>,
+    pub disabled_builtins: Vec<String>,
 }
 
 impl Shell {
@@ -154,6 +253,9 @@ impl Shell {
             source_depth: 0,
             path_commands: None,
             pipe_to_table: false,
+            command_string: false,
+            call_frames: Vec::new(),
+            disabled_builtins: Vec::new(),
             directories: DirectoryHistory::new(
                 std::env::var_os("HOME")
                     .map(|home| std::path::Path::new(&home).join(".grfsh_dirs")),
@@ -186,8 +288,17 @@ impl Shell {
             "0" => return Some(self.arg0.clone()),
             "@" | "*" => return Some(self.positional.join(" ")),
             "-" => {
-                let interactive = if self.interactive { "i" } else { "" };
-                return Some(format!("{}{interactive}", self.options.flags()));
+                let mut flags = self.options.flags();
+                if self.interactive {
+                    let position = flags
+                        .find(|flag: char| flag > 'h' || flag.is_ascii_uppercase())
+                        .unwrap_or(flags.len());
+                    flags.insert(position, 'i');
+                }
+                if self.command_string {
+                    flags.push('c');
+                }
+                return Some(flags);
             }
             "RANDOM" => return Some((random() % 32768).to_string()),
             "LINENO" => return Some(self.current_line.to_string()),

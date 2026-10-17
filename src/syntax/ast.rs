@@ -115,6 +115,7 @@ impl Word {
 pub enum RedirectKind {
     In,
     Out,
+    Clobber,
     Append,
     ReadWrite,
     DuplicateIn,

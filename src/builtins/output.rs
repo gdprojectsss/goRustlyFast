@@ -1,9 +1,6 @@
 use std::io::Write;
 
 use crate::shell::{self, Shell};
-use crate::table;
-
-use super::is_builtin;
 
 pub(super) fn echo(args: &[String], out: &mut dyn Write) -> i32 {
     let mut newline = true;
@@ -59,51 +56,6 @@ fn unescape(text: &str) -> String {
         }
     }
     out
-}
-
-pub(super) fn describe(shell: &Shell, args: &[String], out: &mut dyn Write, short: bool) -> i32 {
-    let mut status = 0;
-    for name in args {
-        let line = if let Some(value) = shell.aliases.get(name) {
-            if short {
-                format!("alias {name}='{value}'")
-            } else {
-                format!("{name} is aliased to '{value}'")
-            }
-        } else if shell.functions.contains_key(name) {
-            if short {
-                name.clone()
-            } else {
-                format!("{name} is a function")
-            }
-        } else if is_builtin(name) {
-            if short {
-                name.clone()
-            } else {
-                format!("{name} is a shell builtin")
-            }
-        } else if table::is_command(name) {
-            if short {
-                name.clone()
-            } else {
-                format!("{name} is a grfsh table command")
-            }
-        } else if let Some(path) = shell.resolve(name) {
-            if short {
-                path
-            } else {
-                format!("{name} is {path}")
-            }
-        } else {
-            if !short {
-                shell::error(format!("type: {name}: not found"));
-            }
-            status = 1;
-            continue;
-        };
-        let _ = writeln!(out, "{line}");
-    }
-    status
 }
 
 pub(super) fn history(shell: &mut Shell, args: &[String], out: &mut dyn Write) -> i32 {

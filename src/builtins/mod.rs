@@ -3,12 +3,16 @@ use std::io::{self, Write};
 use crate::shell::{self, Shell};
 
 mod control;
+mod deparse;
 mod directory;
 mod files;
 mod getopts;
 mod help;
+mod input;
 mod interactive;
 mod jobs;
+mod lookup;
+mod options;
 mod output;
 mod printf;
 mod script;
@@ -19,6 +23,8 @@ pub(crate) mod trap;
 mod variables;
 
 pub(crate) use directory::change_directory;
+pub(crate) use lookup::{DEFAULT_PATH, is_active, path_matches, strip_prefixes};
+pub(crate) use options::default_stored_shopts;
 pub(crate) use variables::attribute_letters;
 
 const BUILTINS: &[&str] = &[
@@ -78,6 +84,11 @@ const BUILTINS: &[&str] = &[
     "replace",
     "write-file",
     "explain",
+    "let",
+    "builtin",
+    "caller",
+    "enable",
+    "compgen",
 ];
 
 pub(crate) fn is_builtin(name: &str) -> bool {
@@ -94,7 +105,7 @@ pub(crate) fn run(shell: &mut Shell, argv: &[String]) -> i32 {
     let status = match argv[0].as_str() {
         "cd" => directory::cd(shell, args, &mut out),
         "z" => directory::jump(shell, args, &mut out),
-        "pwd" => directory::pwd(shell, &mut out),
+        "pwd" => directory::pwd(shell, args, &mut out),
         "exit" => control::exit(shell, args),
         "export" | "local" | "declare" | "typeset" | "readonly" => {
             variables::declare(shell, &argv[0], args, &mut out)
@@ -108,8 +119,8 @@ pub(crate) fn run(shell: &mut Shell, argv: &[String]) -> i32 {
         "return" => control::return_from(shell, args),
         "break" | "continue" => control::loop_control(shell, &argv[0], args),
         "shift" => variables::shift(shell, args),
-        "type" => output::describe(shell, args, &mut out, false),
-        "command" => output::describe(shell, &args[args.len().min(1)..], &mut out, true),
+        "type" => lookup::type_command(shell, args, &mut out),
+        "command" => lookup::command(shell, args, &mut out),
         "jobs" => jobs::list(shell, &mut out),
         "fg" | "bg" | "wait" => {
             drop(out);
@@ -120,10 +131,10 @@ pub(crate) fn run(shell: &mut Shell, argv: &[String]) -> i32 {
             };
         }
         "kill" => jobs::kill(shell, args, &mut out),
-        "set" => script::set(shell, args, &mut out),
-        "shopt" => script::shopt(shell, args, &mut out),
+        "set" => options::set(shell, args, &mut out),
+        "shopt" => options::shopt(shell, args, &mut out),
         "getopts" => getopts::run(shell, args),
-        "mapfile" | "readarray" => script::mapfile(shell, args),
+        "mapfile" | "readarray" => input::mapfile(shell, args),
         "umask" => system::umask(args, &mut out),
         "abbr" => interactive::abbr(shell, args, &mut out),
         "help" => help::run(args, &mut out),
@@ -152,15 +163,23 @@ pub(crate) fn run(shell: &mut Shell, argv: &[String]) -> i32 {
         "popd" => directory::popd(shell, &mut out),
         "dirs" => directory::dirs(shell, args, &mut out),
         "history" => output::history(shell, args, &mut out),
-        "read" => script::read(shell, args),
+        "read" => input::read(shell, args),
         "source" | "." => {
             drop(out);
-            return script::source(shell, args);
+            return script::source(shell, &argv[0], args);
         }
         "eval" => {
             drop(out);
             return shell.run_source(&args.join(" "));
         }
+        "let" => control::let_command(shell, args),
+        "builtin" => {
+            drop(out);
+            return lookup::builtin(shell, args);
+        }
+        "caller" => control::caller(shell, args, &mut out),
+        "enable" => lookup::enable(shell, args, &mut out),
+        "compgen" => lookup::compgen(shell, args, &mut out),
         _ => unreachable!(),
     };
     let _ = out.flush();

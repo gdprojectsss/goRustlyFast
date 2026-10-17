@@ -33,9 +33,11 @@ pub fn words(shell: &mut Shell, words: &[Word]) -> Result<Vec<String>, String> {
                 globstar: shell.options.globstar,
             };
             fields.nullglob = shell.options.nullglob;
+            fields.noglob = shell.options.noglob;
+            fields.failglob = shell.options.failglob;
             fields.ifs = Rc::clone(&ifs);
             expand_into(shell, expanded, &mut fields)?;
-            out.extend(fields.finish());
+            out.extend(fields.finish()?);
         }
     }
     Ok(out)
@@ -468,10 +470,13 @@ struct Fields {
     pattern_mode: bool,
     glob_options: glob::GlobOptions,
     nullglob: bool,
+    noglob: bool,
+    failglob: bool,
     ifs: Rc<str>,
 }
 
 pub(crate) const DEFAULT_IFS: &str = " \t\n";
+pub(crate) const NO_MATCH: &str = "no match: ";
 
 pub(crate) fn split_ifs(text: &str, ifs: &str, limit: Option<usize>) -> Vec<String> {
     let white = |character: char| ifs.contains(character) && character.is_whitespace();
@@ -509,6 +514,8 @@ impl Fields {
             pattern_mode: false,
             glob_options: glob::GlobOptions::default(),
             nullglob: false,
+            noglob: false,
+            failglob: false,
             ifs: DEFAULT_SEPARATORS.with(Rc::clone),
         }
     }
@@ -578,21 +585,25 @@ impl Fields {
         }
     }
 
-    fn finish(mut self) -> Vec<String> {
+    fn finish(mut self) -> Result<Vec<String>, String> {
         self.break_field();
         let mut out = Vec::new();
         for (text, pattern, glob) in self.done {
+            let glob = glob && !self.noglob;
             match glob
                 .then(|| glob::expand(&pattern, self.glob_options))
                 .flatten()
             {
                 Some(matches) => out.extend(matches),
                 None if glob && self.nullglob => {}
+                None if glob && self.failglob => {
+                    return Err(format!("{NO_MATCH}{}", glob::unescape(&pattern)));
+                }
                 None if glob => out.push(glob::unescape(&pattern)),
                 None => out.push(text),
             }
         }
-        out
+        Ok(out)
     }
 }
 
