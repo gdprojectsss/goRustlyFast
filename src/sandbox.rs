@@ -144,6 +144,13 @@ pub(crate) fn after_fork(pid: libc::pid_t) {
     }
 }
 
+pub(crate) fn keeps_signal(signal: libc::c_int) -> bool {
+    enabled()
+        && !IN_CHILD.load(Ordering::SeqCst)
+        && signal != libc::SIGCHLD
+        && signal != libc::SIGPIPE
+}
+
 pub(crate) fn check_exec() -> io::Result<()> {
     if enabled() {
         return Err(denied());

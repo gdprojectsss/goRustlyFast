@@ -30,13 +30,15 @@ jobs:
       - run: cargo test
 
   compat-reference:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
-      - name: Regenerate expected outputs with the system bash
-        run: ./scripts/compat-update.sh
+      - run: brew install bash
+
+      - name: Regenerate expected outputs with bash 5.3
+        run: BASH_REFERENCE="$(brew --prefix)/bin/bash" ./scripts/compat-update.sh
 
       - name: Expected outputs still match bash
         run: git diff --exit-code tests/compat

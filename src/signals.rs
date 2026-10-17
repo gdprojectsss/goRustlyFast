@@ -93,6 +93,9 @@ pub enum Disposition {
 }
 
 pub fn set(signal: libc::c_int, disposition: Disposition) {
+    if crate::sandbox::keeps_signal(signal) {
+        return;
+    }
     let disposition = if is_kept_ignored(signal) {
         Disposition::Ignore
     } else {
