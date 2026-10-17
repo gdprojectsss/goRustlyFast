@@ -18,6 +18,38 @@ const UNSUPPORTED_COMMANDS: &[(&str, &str)] = &[
     ("suspend", "suspend is not supported"),
     ("fc", "use history and !-expansion instead"),
     ("hash", "the command cache is managed automatically"),
+    (
+        "setopt",
+        "zsh only, see https://grf.sh/docs/migrating-from-zsh/",
+    ),
+    (
+        "unsetopt",
+        "zsh only, see https://grf.sh/docs/migrating-from-zsh/",
+    ),
+    (
+        "autoload",
+        "zsh only, see https://grf.sh/docs/migrating-from-zsh/",
+    ),
+    ("zstyle", "zsh only, completion is configured with complete"),
+    ("zmodload", "zsh only"),
+    ("compinit", "zsh only, completion is built in"),
+    ("compdef", "zsh only, use complete instead"),
+    ("zle", "zsh only, use bindkey instead"),
+];
+
+const ZSH_FILES: &[(&str, &str)] = &[
+    (
+        "oh-my-zsh.sh",
+        "oh-my-zsh needs zsh, and grfsh has its main features built in",
+    ),
+    (
+        "p10k",
+        "powerlevel10k needs zsh, run configure-prompt for a similar prompt",
+    ),
+];
+
+const CLOSERS: &[&str] = &[
+    "fi", "done", "esac", "}", "then", "else", "elif", "do", ";;",
 ];
 
 const UNSUPPORTED_TEXT: &[(&str, &str)] = &[
@@ -126,43 +158,103 @@ impl Checker<'_> {
     }
 }
 
-pub fn check_source(source: &str, path_commands: &[String]) -> Vec<Finding> {
+fn without_zsh_flags(line: &str) -> Option<String> {
+    if !line.contains("${(") {
+        return None;
+    }
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(start) = rest.find("${(") {
+        out.push_str(&rest[..start + 2]);
+        let after = &rest[start + 3..];
+        match after.find(')') {
+            Some(end) => {
+                out.push('Z');
+                rest = &after[end + 1..];
+            }
+            None => {
+                out.push('(');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    Some(out)
+}
+
+fn text_findings(source: &str, lines: &mut [String]) -> Vec<Finding> {
     let mut findings = Vec::new();
     for (index, line) in source.lines().enumerate() {
         let code = line.split(" #").next().unwrap_or(line);
         if code.trim_start().starts_with('#') {
             continue;
         }
+        let mut found = |message: String| {
+            findings.push(Finding {
+                line: index + 1,
+                error: true,
+                message,
+            })
+        };
         for (pattern, hint) in UNSUPPORTED_TEXT {
             if code.contains(pattern) {
-                findings.push(Finding {
-                    line: index + 1,
-                    error: true,
-                    message: format!("{hint} ({pattern})"),
-                });
+                found(format!("{hint} ({pattern})"));
             }
         }
-    }
-
-    let list = match parser::parse_from_line(source, &HashMap::new(), 1) {
-        Ok(list) => list,
-        Err(error) => {
-            if let Some(line) = error.line.filter(|line| *line > 1) {
-                let prefix: Vec<&str> = source.lines().take(line - 1).collect();
-                let earlier = check_source(&(prefix.join("\n") + "\n"), path_commands);
-                findings.extend(earlier.into_iter().filter(|finding| finding.line < line));
+        for (pattern, hint) in ZSH_FILES {
+            if code.contains(pattern) {
+                found((*hint).to_string());
             }
-            findings.push(Finding {
-                line: error.line.unwrap_or_else(|| source.lines().count().max(1)),
-                error: true,
-                message: if error.incomplete {
-                    format!("unexpected end of file: {}", error.message)
-                } else {
-                    error.message
-                },
-            });
-            findings.sort_by_key(|finding| finding.line);
-            return findings;
+        }
+        if let Some(replaced) = without_zsh_flags(code) {
+            found("zsh parameter flags such as ${(%)...} are not supported".into());
+            lines[index] = replaced;
+        }
+    }
+    findings
+}
+
+fn first_word(line: &str) -> &str {
+    line.split(|character: char| character.is_whitespace() || character == ';')
+        .find(|word| !word.is_empty())
+        .unwrap_or("")
+}
+
+pub fn check_source(source: &str, path_commands: &[String]) -> Vec<Finding> {
+    let mut lines: Vec<String> = source.lines().map(String::from).collect();
+    let mut findings = text_findings(source, &mut lines);
+    let mut skipped = false;
+    let list = loop {
+        let text = lines.join("\n") + "\n";
+        match parser::parse_from_line(&text, &HashMap::new(), 1) {
+            Ok(list) => break list,
+            Err(error) => {
+                let line = error.line.unwrap_or_else(|| lines.len().max(1));
+                let leftover = skipped
+                    && CLOSERS
+                        .contains(&first_word(lines.get(line - 1).map_or("", String::as_str)));
+                if !leftover
+                    && !findings
+                        .iter()
+                        .any(|finding| finding.line == line && finding.error)
+                {
+                    findings.push(Finding {
+                        line,
+                        error: true,
+                        message: if error.incomplete {
+                            format!("unexpected end of file: {}", error.message)
+                        } else {
+                            error.message
+                        },
+                    });
+                }
+                if error.incomplete || line == 0 || line > lines.len() || lines[line - 1].is_empty()
+                {
+                    break Vec::new();
+                }
+                lines[line - 1].clear();
+                skipped = true;
+            }
         }
     };
 
@@ -253,6 +345,44 @@ mod tests {
         assert_eq!(findings.len(), 2);
         assert_eq!(findings[0].0, 1);
         assert_eq!(findings[1].0, 3);
+    }
+
+    #[test]
+    fn zsh_setups_get_explained_and_checking_continues() {
+        let source = "if [[ -r \"${(%):-%n}.zsh\" ]]; then\n  source \"$HOME/.p10k.zsh\"\nfi\nsetopt autocd\necho ${(s/:/)PATH}\nmystery-tool\n";
+        let findings = check(source);
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.0 == 1 && finding.2.contains("zsh parameter flags"))
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.0 == 2 && finding.2.contains("powerlevel10k"))
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.0 == 4 && finding.2.contains("zsh only"))
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.0 == 6 && finding.2.contains("mystery-tool"))
+        );
+    }
+
+    #[test]
+    fn checking_continues_after_a_syntax_error() {
+        let findings = check("echo ok\nif then\n  echo inside\nfi\nmystery-tool\n");
+        assert!(findings.iter().any(|finding| finding.0 == 2 && finding.1));
+        assert!(!findings.iter().any(|finding| finding.0 == 4));
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.0 == 5 && finding.2.contains("mystery-tool"))
+        );
     }
 
     #[test]

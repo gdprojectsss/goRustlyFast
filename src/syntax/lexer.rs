@@ -48,6 +48,11 @@ impl ParseError {
 }
 
 impl ParseError {
+    pub fn shifted(mut self, first_line: usize) -> Self {
+        self.line = Some(self.line.map_or(first_line, |line| line + first_line - 1));
+        self
+    }
+
     pub fn at_line(mut self, line: usize) -> Self {
         if self.line.is_none() {
             self.line = Some(line);
@@ -72,7 +77,15 @@ pub struct Lexed {
 }
 
 pub fn lex(source: &str) -> Result<Lexed, ParseError> {
-    Lexer::new(source).run()
+    let mut lexer = Lexer::new(source);
+    lexer.run().map_err(|error| {
+        let consumed = lexer.position.min(lexer.chars.len());
+        let line = lexer.chars[..consumed]
+            .iter()
+            .filter(|character| **character == '\n')
+            .count();
+        error.at_line(line + 1)
+    })
 }
 
 fn escape_bracket_spaces(text: &str) -> String {
@@ -243,7 +256,7 @@ impl Lexer {
         });
     }
 
-    fn run(mut self) -> Result<Lexed, ParseError> {
+    fn run(&mut self) -> Result<Lexed, ParseError> {
         while let Some(character) = self.peek() {
             let start = self.position;
             match character {
@@ -335,8 +348,8 @@ impl Lexer {
             end,
         });
         Ok(Lexed {
-            tokens: self.tokens,
-            heredocs: self.heredocs,
+            tokens: std::mem::take(&mut self.tokens),
+            heredocs: std::mem::take(&mut self.heredocs),
         })
     }
 

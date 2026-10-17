@@ -32,7 +32,7 @@ pub fn parse_from_line(
     aliases: &HashMap<String, String>,
     first_line: usize,
 ) -> Result<List> {
-    let lexed = lexer::lex(source).map_err(|error| error.at_line(first_line))?;
+    let lexed = lexer::lex(source).map_err(|error| error.shifted(first_line))?;
     let chars: Vec<char> = source.chars().collect();
     let newlines = chars
         .iter()
@@ -98,6 +98,14 @@ impl Parser<'_> {
             self.position += 1;
         }
         token
+    }
+
+    fn required_list(&mut self, terminators: &[&str]) -> Result<List> {
+        let list = self.list(terminators)?;
+        if list.is_empty() {
+            return Err(self.located(self.unexpected()));
+        }
+        Ok(list)
     }
 
     fn at_eof(&self) -> bool {
@@ -267,9 +275,9 @@ impl Parser<'_> {
                 Some(keyword @ ("while" | "until")) => {
                     let until = keyword == "until";
                     self.next();
-                    let condition = self.list(&["do"])?;
+                    let condition = self.required_list(&["do"])?;
                     self.expect_keyword("do")?;
-                    let body = self.list(&["done"])?;
+                    let body = self.required_list(&["done"])?;
                     self.expect_keyword("done")?;
                     CommandKind::Loop {
                         condition,
@@ -361,21 +369,21 @@ impl Parser<'_> {
         let mut branches = Vec::new();
         let mut otherwise = None;
 
-        let condition = self.list(&["then"])?;
+        let condition = self.required_list(&["then"])?;
         self.expect_keyword("then")?;
-        let body = self.list(&["elif", "else", "fi"])?;
+        let body = self.required_list(&["elif", "else", "fi"])?;
         branches.push((condition, body));
 
         loop {
             if self.is_keyword("elif") {
                 self.next();
-                let condition = self.list(&["then"])?;
+                let condition = self.required_list(&["then"])?;
                 self.expect_keyword("then")?;
-                let body = self.list(&["elif", "else", "fi"])?;
+                let body = self.required_list(&["elif", "else", "fi"])?;
                 branches.push((condition, body));
             } else if self.is_keyword("else") {
                 self.next();
-                otherwise = Some(self.list(&["fi"])?);
+                otherwise = Some(self.required_list(&["fi"])?);
                 self.expect_keyword("fi")?;
                 break;
             } else {
@@ -564,7 +572,7 @@ impl Parser<'_> {
             return Ok(body);
         }
         self.expect_keyword("do")?;
-        let body = self.list(&["done"])?;
+        let body = self.required_list(&["done"])?;
         self.expect_keyword("done")?;
         Ok(body)
     }

@@ -46,6 +46,7 @@ mkdir -p "$install_dir"
 install -m 755 "$work/$name/grfsh" "$install_dir/grfsh"
 
 echo "Installed grfsh $tag to $install_dir/grfsh"
+echo "Run grfsh to try it. Your login shell stays the same until you change it."
 case ":$PATH:" in
     *":$install_dir:"*) ;;
     *) echo "Add $install_dir to your PATH to run it by name." ;;

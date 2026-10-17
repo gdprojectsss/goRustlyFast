@@ -1,4 +1,4 @@
-.TH GRFSH 1 2026-10-16 "grfsh 1.0.0" "User Commands"
+.TH GRFSH 1 2026-10-17 "grfsh 1.0.1" "User Commands"
 .SH NAME
 grfsh \- a small Unix shell with bash style scripting and typed table pipelines
 .SH SYNOPSIS
@@ -129,7 +129,15 @@ Print the version and exit.
 .BR \-h ", " \-\-help
 Print a usage summary and exit.
 .SH STARTUP FILES
-A login shell first runs
+On macOS, a login shell first adds the directories listed in
+.I /etc/paths
+and
+.I /etc/paths.d
+to
+.BR PATH ,
+as
+.BR path_helper (8)
+does for other shells. A login shell then runs
 .I ~/.config/grfsh/profile
 or
 .IR ~/.grfsh_profile .

@@ -339,9 +339,12 @@ impl Shell {
     pub fn export_variable(&mut self, name: &str, value: Option<&str>) {
         let value = value
             .map(String::from)
-            .or_else(|| self.variables.get(name).cloned());
+            .or_else(|| self.variables.get(name).cloned())
+            .or_else(|| std::env::var(name).ok());
         self.variables.remove(name);
-        unsafe { std::env::set_var(name, value.unwrap_or_default()) };
+        if let Some(value) = value {
+            unsafe { std::env::set_var(name, value) };
+        }
     }
 
     pub fn unset_variable(&mut self, name: &str) {

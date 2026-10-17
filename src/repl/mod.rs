@@ -136,9 +136,21 @@ pub fn run() -> i32 {
             shell::error(format!("{option}: unknown option\n{USAGE}"));
             2
         }
+        Some(name)
+            if !std::path::Path::new(name).exists()
+                && (builtins::is_builtin(name) || table::is_command(name)) =>
+        {
+            let words: Vec<String> = args
+                .iter()
+                .map(|word| format!("'{}'", word.replace('\'', "'\\''")))
+                .collect();
+            shell.run_source(&words.join(" "));
+            shell.last_status
+        }
         Some(script) => run_script(&mut shell, script, &args[1..]),
         None => {
             if login {
+                add_system_paths();
                 load_file(&mut shell, &profile_path());
             }
             if shell.flow != Flow::Exit {
@@ -222,6 +234,39 @@ fn first_existing(candidates: [PathBuf; 2]) -> PathBuf {
 
 fn rc_path() -> PathBuf {
     first_existing([config_dir().join("grfshrc"), home_dir().join(".grfshrc")])
+}
+
+fn system_path(listed: &[String], current: &str) -> String {
+    let mut entries: Vec<&str> = Vec::new();
+    for entry in listed.iter().map(String::as_str).chain(current.split(':')) {
+        if !entry.is_empty() && !entries.contains(&entry) {
+            entries.push(entry);
+        }
+    }
+    entries.join(":")
+}
+
+fn add_system_paths() {
+    let mut files = vec![PathBuf::from("/etc/paths")];
+    if let Ok(directory) = std::fs::read_dir("/etc/paths.d") {
+        let mut extra: Vec<PathBuf> = directory.flatten().map(|entry| entry.path()).collect();
+        extra.sort();
+        files.extend(extra);
+    }
+    let listed: Vec<String> = files
+        .iter()
+        .filter_map(|file| std::fs::read_to_string(file).ok())
+        .flat_map(|text| {
+            text.lines()
+                .map(|line| line.trim().to_string())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    if listed.is_empty() {
+        return;
+    }
+    let current = std::env::var("PATH").unwrap_or_default();
+    unsafe { std::env::set_var("PATH", system_path(&listed, &current)) };
 }
 
 fn profile_path() -> PathBuf {
@@ -516,5 +561,23 @@ fn completion_names(shell: &mut Shell) -> ShellNames {
             .map(|job| format!("%{}", job.id))
             .collect(),
         specs: shell.completion_specs.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn system_paths_come_first_without_duplicates() {
+        let listed = vec![
+            "/usr/local/bin".to_string(),
+            "/usr/bin".to_string(),
+            "/opt/homebrew/bin".to_string(),
+        ];
+        assert_eq!(
+            system_path(&listed, "/usr/bin:/home/me/bin::/usr/local/bin"),
+            "/usr/local/bin:/usr/bin:/opt/homebrew/bin:/home/me/bin"
+        );
     }
 }

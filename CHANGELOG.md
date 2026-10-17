@@ -2,6 +2,17 @@
 
 All notable changes to grfsh are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [semantic versioning](https://semver.org). See the [stability promise](https://grf.sh/docs/stability/) for what that covers.
 
+## [1.0.1] - 2026-10-17
+
+### Fixed
+
+- `export NAME` and `export NAME=value` emptied variables inherited from the environment, including `PATH`. Exporting a variable that was never set no longer creates an empty one.
+- Login shells on macOS now add `/etc/paths` and `/etc/paths.d` to `PATH`, like `path_helper`, so Homebrew and other system wide tools are found.
+- `grfsh --check` reports syntax errors on the line where they occur, explains zsh syntax such as `${(%)...}` flags, `setopt`, `autoload`, oh-my-zsh and powerlevel10k, and keeps checking the rest of the file after an error.
+- Empty `if`, `elif`, `else`, `while` and `for` conditions or bodies are syntax errors, as in bash.
+- `grfsh configure-prompt` and other builtins or table commands named on the command line run directly.
+- The installer says how to try grfsh without changing the login shell.
+
 ## [1.0.0] - 2026-10-17
 
 The first stable release.
@@ -45,4 +56,5 @@ Never tagged. The version in Cargo.toml during phases 3 and 4.
 
 Never tagged. The first versions: commands, pipes, redirections, colors, history, globs, command substitution and syntax highlighting.
 
+[1.0.1]: https://github.com/gdprojectsss/goRustlyFast/releases/tag/v1.0.1
 [1.0.0]: https://github.com/gdprojectsss/goRustlyFast/releases/tag/v1.0.0
