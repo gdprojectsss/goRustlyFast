@@ -1,4 +1,4 @@
-printf '[%s]\n' "$IFS" | od -c | sed -n 1p
+printf '[%s]\n' "$IFS" | od -An -c | tr -s ' ' | sed -n 1p
 saved=$IFS
 IFS=,
 set -- "a b" c

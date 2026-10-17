@@ -1066,6 +1066,7 @@ mod tests {
     fn length_counts_bytes_in_the_c_locale() {
         let mut shell = Shell::new();
         shell.set_variable("text", "\u{e9}");
+        shell.unexport_variable("LC_ALL");
         shell.set_variable("LC_ALL", "en_US.UTF-8");
         assert_eq!(expand(&mut shell, "${#text}"), ["1"]);
         shell.set_variable("LC_ALL", "C");

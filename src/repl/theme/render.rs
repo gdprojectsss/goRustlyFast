@@ -301,7 +301,9 @@ mod tests {
         assert_eq!(strip(&render(&pure, &context).left), "/tmp\n> ");
         let rainbow = Theme::preset("rainbow").unwrap();
         let rendered = render(&rainbow, &context);
-        assert!(rendered.left.contains("\u{e0b0}"));
+        if crate::text::unicode_terminal() {
+            assert!(rendered.left.contains("\u{e0b0}"), "{:?}", rendered.left);
+        }
         assert!(strip(&rendered.right).contains("1"));
     }
 }

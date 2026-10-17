@@ -22,7 +22,7 @@ sparse=([3]=x)
 show "${sparse[@]-d}" "${sparse-d}"
 s=a,b,c
 echo "${s//,/$'\n'}"
-echo "${s/,/$'\t'}" | od -c | sed -n 1p
+echo "${s/,/$'\t'}" | od -An -c | tr -s ' ' | sed -n 1p
 v=${s//,/$'-'}
 echo "$v"
 s=é
