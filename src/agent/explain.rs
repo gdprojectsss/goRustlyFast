@@ -49,6 +49,7 @@ fn source_of(word: &Word) -> String {
                 format!("{}({source})", if *output { '>' } else { '<' })
             }
             WordPart::Arithmetic { expression, .. } => format!("$(({}))", source_of(expression)),
+            WordPart::BadSubstitution(text) => text.clone(),
         })
         .collect()
 }

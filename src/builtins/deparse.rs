@@ -656,14 +656,21 @@ fn expansion(part: &WordPart, next: Option<&WordPart>) -> String {
         WordPart::Length {
             name,
             subscript: index,
+            ..
         } => format!("${{#{name}{}}}", subscript(index)),
+        WordPart::BadSubstitution(text) => text.clone(),
         WordPart::Indices { name, .. } => format!("${{!{name}[@]}}"),
-        WordPart::Indirect { name, operator, .. } => {
+        WordPart::Indirect {
+            name,
+            subscript: index,
+            operator,
+            ..
+        } => {
             let operation = operator
                 .as_deref()
                 .map(parameter_operation)
                 .unwrap_or_default();
-            format!("${{!{name}{operation}}}")
+            format!("${{!{name}{}{operation}}}", subscript(index))
         }
         WordPart::Names { prefix, joined, .. } => {
             format!("${{!{prefix}{}}}", if *joined { '*' } else { '@' })

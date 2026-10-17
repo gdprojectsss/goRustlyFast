@@ -14,6 +14,7 @@ pub enum WordPart {
     Length {
         name: String,
         subscript: Option<Subscript>,
+        quoted: bool,
     },
     Indices {
         name: String,
@@ -22,6 +23,7 @@ pub enum WordPart {
     },
     Indirect {
         name: String,
+        subscript: Option<Subscript>,
         operator: Option<Box<ParameterOperation>>,
         quoted: bool,
     },
@@ -42,6 +44,7 @@ pub enum WordPart {
         expression: Word,
         quoted: bool,
     },
+    BadSubstitution(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]

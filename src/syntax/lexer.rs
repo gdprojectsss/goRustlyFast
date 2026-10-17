@@ -147,6 +147,10 @@ pub fn parse_regex_word(text: &str) -> Result<Word, ParseError> {
     Ok(word)
 }
 
+pub fn parse_subscript_word(text: &str) -> Option<Word> {
+    Lexer::new(text).brace_word(&[]).ok().map(|(word, _)| word)
+}
+
 pub fn ansi_c(text: &str) -> String {
     Lexer::new(&format!("{}'", text.replace('\'', "\\'")))
         .ansi_quoted()
@@ -899,8 +903,14 @@ impl<'a> Lexer<'a> {
                 Ok(WordPart::CommandSubstitution { source, quoted })
             }
             Some('{') => {
+                let start = self.position - 1;
                 self.position += 1;
-                self.brace_parameter(quoted)
+                match self.brace_parameter(quoted) {
+                    Err(error) if !error.incomplete && error.message == "bad substitution" => {
+                        self.bad_substitution(start)
+                    }
+                    other => other,
+                }
             }
             Some(character) if is_name_start(character) => {
                 let name = self.read_name();
@@ -925,6 +935,28 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    fn bad_substitution(&mut self, start: usize) -> Result<WordPart, ParseError> {
+        self.position = start + 2;
+        let mut depth = 0usize;
+        loop {
+            match self.bump() {
+                None => return Err(ParseError::incomplete("unclosed ${")),
+                Some('\\') => {
+                    self.bump();
+                }
+                Some('\'') => {
+                    self.single_quoted()?;
+                }
+                Some('"') => self.skip_double_quoted()?,
+                Some('{') => depth += 1,
+                Some('}') if depth == 0 => break,
+                Some('}') => depth -= 1,
+                _ => {}
+            }
+        }
+        Ok(WordPart::BadSubstitution(self.text(start, self.position)))
+    }
+
     fn read_name(&mut self) -> String {
         let mut name = String::new();
         while let Some(character) = self.peek().filter(|&character| is_name_char(character)) {
@@ -942,7 +974,11 @@ impl<'a> Lexer<'a> {
             if !self.eat('}') {
                 return Err(ParseError::syntax("bad substitution"));
             }
-            return Ok(WordPart::Length { name, subscript });
+            return Ok(WordPart::Length {
+                name,
+                subscript,
+                quoted,
+            });
         }
         if self.peek() == Some('!') && self.peek_at(1).is_some_and(starts_indirect_name) {
             self.position += 1;
@@ -956,28 +992,27 @@ impl<'a> Lexer<'a> {
                     quoted,
                 });
             }
-            return match self.subscript()? {
-                Some(subscript @ (Subscript::All | Subscript::Joined)) if self.eat('}') => {
-                    Ok(WordPart::Indices {
-                        name,
-                        quoted,
-                        joined: subscript == Subscript::Joined,
-                    })
-                }
-                None => {
-                    let operator = if self.eat('}') {
-                        None
-                    } else {
-                        Some(Box::new(self.parameter_operation()?))
-                    };
-                    Ok(WordPart::Indirect {
-                        name,
-                        operator,
-                        quoted,
-                    })
-                }
-                Some(_) => Err(ParseError::syntax("bad substitution")),
+            let subscript = self.subscript()?;
+            if let Some(whole @ (Subscript::All | Subscript::Joined)) = &subscript
+                && self.eat('}')
+            {
+                return Ok(WordPart::Indices {
+                    name,
+                    quoted,
+                    joined: *whole == Subscript::Joined,
+                });
+            }
+            let operator = if self.eat('}') {
+                None
+            } else {
+                Some(Box::new(self.parameter_operation(quoted)?))
             };
+            return Ok(WordPart::Indirect {
+                name,
+                subscript,
+                operator,
+                quoted,
+            });
         }
 
         let name = self.parameter_name()?;
@@ -985,7 +1020,7 @@ impl<'a> Lexer<'a> {
         let operator = if self.eat('}') {
             None
         } else {
-            Some(Box::new(self.parameter_operation()?))
+            Some(Box::new(self.parameter_operation(quoted)?))
         };
         Ok(WordPart::Parameter {
             name,
@@ -1025,7 +1060,7 @@ impl<'a> Lexer<'a> {
         }))
     }
 
-    fn parameter_operation(&mut self) -> Result<ParameterOperation, ParseError> {
+    fn parameter_operation(&mut self, quoted: bool) -> Result<ParameterOperation, ParseError> {
         let Some(first) = self.bump() else {
             return Err(ParseError::incomplete("unclosed ${"));
         };
@@ -1035,11 +1070,14 @@ impl<'a> Lexer<'a> {
                 ParameterOperation::Fallback {
                     kind,
                     colon: true,
-                    word: self.brace_word(&['}'])?.0,
+                    word: self.fallback_word(quoted)?,
                 }
             }
             ':' => {
                 let (offset, stop) = self.brace_word(&[':', '}'])?;
+                if offset.parts.is_empty() && stop == '}' {
+                    return Err(ParseError::syntax("bad substitution"));
+                }
                 let length = if stop == ':' {
                     Some(self.brace_word(&['}'])?.0)
                 } else {
@@ -1050,7 +1088,7 @@ impl<'a> Lexer<'a> {
             '-' | '=' | '+' | '?' => ParameterOperation::Fallback {
                 kind: fallback_kind(Some(first)),
                 colon: false,
-                word: self.brace_word(&['}'])?.0,
+                word: self.fallback_word(quoted)?,
             },
             '#' => ParameterOperation::RemovePrefix {
                 longest: self.eat('#'),
@@ -1071,7 +1109,11 @@ impl<'a> Lexer<'a> {
                 } else {
                     Anchor::Anywhere
                 };
-                let (pattern, stop) = self.brace_word(&['/', '}'])?;
+                let leading_slash = anchor == Anchor::Anywhere && self.eat('/');
+                let (mut pattern, stop) = self.brace_word(&['/', '}'])?;
+                if leading_slash {
+                    pattern.parts.insert(0, WordPart::Literal("/".into()));
+                }
                 let replacement = if stop == '/' {
                     self.brace_word(&['}'])?.0
                 } else {
@@ -1129,6 +1171,52 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    fn fallback_word(&mut self, quoted: bool) -> Result<Word, ParseError> {
+        if !quoted {
+            return Ok(self.brace_word(&['}'])?.0);
+        }
+        let mut word = WordBuf::default();
+        let mut single = false;
+        loop {
+            match self.bump() {
+                None => return Err(ParseError::incomplete("unclosed ${")),
+                Some('}') if !single => break,
+                Some('\'') => {
+                    single = !single;
+                    word.quoted('\'');
+                }
+                Some('\\') => match self.peek() {
+                    Some('\n') => self.position += 1,
+                    Some(character) if matches!(character, '$' | '`' | '\\' | '"' | '}') => {
+                        self.position += 1;
+                        word.quoted(character);
+                    }
+                    _ => word.quoted('\\'),
+                },
+                Some('"') if !single => {
+                    let parts = self.double_quoted_until(Some('"'))?;
+                    if parts.is_empty() {
+                        word.quoted_text("");
+                    }
+                    parts.into_iter().for_each(|part| word.part(part));
+                }
+                Some('$') => {
+                    let part = self.dollar(true)?;
+                    word.part(part);
+                }
+                Some('`') => {
+                    let source = self.backtick()?;
+                    word.part(WordPart::CommandSubstitution {
+                        source,
+                        quoted: true,
+                    });
+                }
+                Some(character) => word.quoted(character),
+            }
+        }
+        Ok(word.finish())
+    }
+
     fn brace_word(&mut self, stops: &[char]) -> Result<(Word, char), ParseError> {
         let mut word = WordBuf::default();
         let stop = loop {
@@ -1142,6 +1230,7 @@ impl<'a> Lexer<'a> {
                     word.quoted_text(&text);
                 }
                 Some('\\') => match self.bump() {
+                    Some('\n') => {}
                     Some(character) => word.quoted(character),
                     None => return Err(ParseError::incomplete("unclosed ${")),
                 },
