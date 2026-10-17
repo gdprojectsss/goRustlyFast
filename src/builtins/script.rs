@@ -11,8 +11,8 @@ pub(super) fn source(shell: &mut Shell, args: &[String]) -> i32 {
         shell::error("source: filename argument required");
         return 2;
     };
-    let contents = match std::fs::read_to_string(path) {
-        Ok(contents) => contents,
+    let mut reader = match crate::bytes::LineReader::open(path) {
+        Ok(reader) => reader,
         Err(error) => {
             shell::error(format!("source: {path}: {}", sys::error_message(&error)));
             return 1;
@@ -24,8 +24,7 @@ pub(super) fn source(shell: &mut Shell, args: &[String]) -> i32 {
     shell.source_depth += 1;
     shell.source_stack.push(path.clone());
     let line = shell.current_line;
-    let mut lines = contents.lines().map(String::from);
-    let status = shell.run_lines(|| lines.next());
+    let status = shell.run_lines(|| reader.next_line());
     shell.current_line = line;
     shell.source_stack.pop();
     shell.source_depth -= 1;
@@ -130,7 +129,9 @@ fn read_input(options: &ReadOptions) -> (Vec<u8>, Ending) {
         .map(|seconds| std::time::Instant::now() + std::time::Duration::from_secs_f64(seconds));
     let mut bytes = Vec::new();
     loop {
-        if options.count.is_some_and(|count| bytes.len() >= count) {
+        if options.count.is_some_and(|count| {
+            bytes.len() >= count && crate::bytes::complete_characters(&bytes) >= count
+        }) {
             return (bytes, Ending::Count);
         }
         if let Some(deadline) = deadline {
@@ -175,7 +176,7 @@ pub(super) fn read(shell: &mut Shell, args: &[String]) -> i32 {
         names.push("REPLY".into());
     }
     if let Some(prompt) = &options.prompt {
-        eprint!("{prompt}");
+        let _ = std::io::stderr().write_all(&crate::bytes::encode(prompt));
         let _ = std::io::stderr().flush();
     }
 
@@ -186,7 +187,7 @@ pub(super) fn read(shell: &mut Shell, args: &[String]) -> i32 {
         eprintln!();
     }
 
-    let mut line = String::from_utf8_lossy(&bytes).into_owned();
+    let mut line = crate::bytes::decode(&bytes);
     if !options.raw {
         line = remove_backslashes(&line);
     }

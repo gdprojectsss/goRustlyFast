@@ -15,13 +15,11 @@ fn visible(name: &str, component: &str, options: GlobOptions) -> bool {
 
 fn descendants(base: &str, include_files: bool, options: GlobOptions, out: &mut Vec<String>) {
     let directory = if base.is_empty() { "." } else { base };
-    let Ok(entries) = std::fs::read_dir(directory) else {
+    let Ok(entries) = std::fs::read_dir(crate::bytes::to_path(directory)) else {
         return;
     };
     for entry in entries.flatten() {
-        let Ok(name) = entry.file_name().into_string() else {
-            continue;
-        };
+        let name = crate::bytes::from_os(&entry.file_name());
         if !visible(&name, "", options) {
             continue;
         }
@@ -60,13 +58,11 @@ pub fn expand(pattern: &str, options: GlobOptions) -> Option<Vec<String>> {
         } else {
             for base in &paths {
                 let directory = if base.is_empty() { "." } else { base.as_str() };
-                let Ok(entries) = std::fs::read_dir(directory) else {
+                let Ok(entries) = std::fs::read_dir(crate::bytes::to_path(directory)) else {
                     continue;
                 };
                 for entry in entries.flatten() {
-                    let Ok(name) = entry.file_name().into_string() else {
-                        continue;
-                    };
+                    let name = crate::bytes::from_os(&entry.file_name());
                     if !visible(&name, component, options) {
                         continue;
                     }
@@ -80,12 +76,14 @@ pub fn expand(pattern: &str, options: GlobOptions) -> Option<Vec<String>> {
     }
 
     if pattern.ends_with('/') {
-        paths.retain(|path| std::path::Path::new(path).is_dir());
+        paths.retain(|path| crate::bytes::to_path(path).is_dir());
         paths.iter_mut().for_each(|path| path.push('/'));
     }
     paths.retain(|path| {
         !path.is_empty()
-            && (std::fs::symlink_metadata(path.trim_end_matches('/')).is_ok() || path == "/")
+            && (std::fs::symlink_metadata(crate::bytes::to_path(path.trim_end_matches('/')))
+                .is_ok()
+                || path == "/")
     });
     if paths.is_empty() {
         return None;

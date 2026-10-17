@@ -816,7 +816,7 @@ impl Shell {
         if self.interactive
             && argv.len() == 1
             && assignments.is_empty()
-            && std::path::Path::new(name).is_dir()
+            && crate::bytes::to_path(name).is_dir()
             && (resolved.is_none() || name.contains('/'))
         {
             return builtins::change_directory(self, name);
@@ -888,7 +888,7 @@ impl Shell {
 
     pub(crate) fn resolve(&self, name: &str) -> Option<String> {
         if name.contains('/') {
-            return std::path::Path::new(name)
+            return crate::bytes::to_path(name)
                 .exists()
                 .then(|| name.to_string());
         }
@@ -960,6 +960,9 @@ impl Shell {
 }
 
 fn trace_quote(text: &str) -> String {
+    if crate::escapes::needs_ansi_quote(text) {
+        return crate::escapes::ansi_quote(text);
+    }
     let plain = !text.is_empty()
         && text
             .chars()
@@ -973,6 +976,6 @@ fn trace_quote(text: &str) -> String {
 
 pub(crate) fn is_executable(path: &str) -> bool {
     use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(path)
+    std::fs::metadata(crate::bytes::to_path(path))
         .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
 }

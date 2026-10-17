@@ -1,5 +1,5 @@
 use std::io::Write;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, PathBuf};
 
 use crate::directories;
 use crate::shell::{self, Shell};
@@ -7,9 +7,9 @@ use crate::sys;
 
 fn logical_path(working_directory: &str, target: &str) -> PathBuf {
     let joined = if target.starts_with('/') {
-        PathBuf::from(target)
+        crate::bytes::to_path(target)
     } else {
-        Path::new(working_directory).join(target)
+        crate::bytes::to_path(working_directory).join(crate::bytes::to_path(target))
     };
     let mut out = PathBuf::from("/");
     for component in joined.components() {
@@ -48,9 +48,9 @@ pub(super) fn cd(shell: &mut Shell, args: &[String], out: &mut dyn Write) -> i32
     let searchable = !target.starts_with('/') && !target.starts_with('.');
     if searchable && let Some(cdpath) = shell.get_variable("CDPATH") {
         for base in cdpath.split(':').filter(|base| !base.is_empty()) {
-            let candidate = Path::new(base).join(&target);
+            let candidate = crate::bytes::to_path(base).join(crate::bytes::to_path(&target));
             if candidate.is_dir() {
-                let candidate = candidate.to_string_lossy().into_owned();
+                let candidate = crate::bytes::from_path(&candidate);
                 let status = change_directory(shell, &candidate);
                 if status == 0 {
                     let _ = writeln!(out, "{}", working_directory(shell));
@@ -67,8 +67,13 @@ pub(crate) fn change_directory(shell: &mut Shell, target: &str) -> i32 {
     let logical = logical_path(&previous, target);
     let destination = if std::env::set_current_dir(&logical).is_ok() {
         logical
-    } else if let Err(error) = std::env::set_current_dir(target) {
-        shell::error(format!("cd: {target}: {}", sys::error_message(&error)));
+    } else if let Err(error) = std::env::set_current_dir(crate::bytes::to_path(target)) {
+        let shown = if crate::escapes::needs_ansi_quote(target) {
+            crate::escapes::ansi_quote(target)
+        } else {
+            target.to_string()
+        };
+        shell::error(format!("cd: {shown}: {}", sys::error_message(&error)));
         return 1;
     } else {
         std::env::current_dir().unwrap_or_else(|error| {
@@ -79,7 +84,7 @@ pub(crate) fn change_directory(shell: &mut Shell, target: &str) -> i32 {
             Path::new(&previous).join(target)
         })
     };
-    let destination = destination.to_string_lossy().into_owned();
+    let destination = crate::bytes::from_path(&destination);
     shell.export_variable("OLDPWD", Some(&previous));
     shell.export_variable("PWD", Some(&destination));
     if shell.interactive && destination != previous {
@@ -101,7 +106,7 @@ pub(super) fn jump(shell: &mut Shell, args: &[String], out: &mut dyn Write) -> i
             }
             0
         }
-        Some(single) if args.len() == 1 && Path::new(single).is_dir() => {
+        Some(single) if args.len() == 1 && crate::bytes::to_path(single).is_dir() => {
             change_directory(shell, single)
         }
         Some(_) => {
@@ -127,7 +132,7 @@ fn working_directory(shell: &Shell) -> String {
         .or_else(|| {
             std::env::current_dir()
                 .ok()
-                .map(|path| path.to_string_lossy().into_owned())
+                .map(|path| crate::bytes::from_path(&path))
         })
         .unwrap_or_else(|| "/".into())
 }

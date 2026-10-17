@@ -76,7 +76,8 @@ pub fn restore_fds(saved: Vec<(i32, Option<i32>)>) {
 }
 
 pub fn open(path: &str, flags: libc::c_int) -> io::Result<i32> {
-    let c_path = CString::new(path).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+    let c_path = CString::new(crate::bytes::encode(path))
+        .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
     check(unsafe {
         libc::open(
             c_path.as_ptr(),
@@ -159,7 +160,7 @@ pub fn read_line(fd: i32) -> Option<String> {
             _ => break,
         }
     }
-    Some(String::from_utf8_lossy(&line).into_owned())
+    Some(crate::bytes::decode(&line))
 }
 
 pub fn isatty(fd: i32) -> bool {
@@ -310,12 +311,12 @@ pub fn reset_child_signals() {
 }
 
 pub fn execv(path: &str, argv: &[String]) -> io::Error {
-    let Ok(c_path) = CString::new(path) else {
+    let Ok(c_path) = CString::new(crate::bytes::encode(path)) else {
         return io::Error::from(io::ErrorKind::InvalidInput);
     };
     let c_args: Vec<CString> = argv
         .iter()
-        .map(|argument| CString::new(argument.as_str()).unwrap_or_default())
+        .map(|argument| CString::new(crate::bytes::encode(argument)).unwrap_or_default())
         .collect();
     let mut pointers: Vec<*const libc::c_char> =
         c_args.iter().map(|argument| argument.as_ptr()).collect();

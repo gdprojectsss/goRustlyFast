@@ -1,5 +1,148 @@
 use std::process::{Command, Stdio};
 
+fn run_bytes(
+    args: &[&std::ffi::OsStr],
+    environment: &[(&str, &std::ffi::OsStr)],
+) -> std::process::Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_grfsh"));
+    command.args(args).env("HOME", "/tmp/grfsh_test_home");
+    for (name, value) in environment {
+        command.env(name, value);
+    }
+    command.output().expect("failed to run grfsh")
+}
+
+fn bytes_directory(name: &str) -> std::path::PathBuf {
+    let directory = std::env::temp_dir().join(format!("grfsh_bytes_{name}_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    directory
+}
+
+fn os(bytes: &[u8]) -> &std::ffi::OsStr {
+    use std::os::unix::ffi::OsStrExt;
+    std::ffi::OsStr::from_bytes(bytes)
+}
+
+#[test]
+fn printf_and_echo_write_raw_bytes() {
+    let output = run_bytes(
+        &[
+            os(b"-c"),
+            os(b"printf '\\xc3\\xa9|\\xff|%b|' '\\303\\251'; echo -e '\\033[31m'"),
+        ],
+        &[],
+    );
+    assert_eq!(output.stdout, b"\xc3\xa9|\xff|\xc3\xa9|\x1b[31m\n");
+}
+
+#[test]
+fn scripts_with_latin1_bytes_and_binary_payload_run() {
+    let directory = bytes_directory("script");
+    let script = directory.join("installer.sh");
+    let mut contents = b"# caf\xe9 \xff\necho \"caf\xe9\"\nexit 4\n".to_vec();
+    contents.extend((0..=255u8).chain(*b"'\"`$(\n"));
+    std::fs::write(&script, contents).unwrap();
+    let output = run_bytes(&[script.as_os_str()], &[]);
+    assert_eq!(output.stdout, b"caf\xe9\n");
+    assert_eq!(output.status.code(), Some(4));
+    assert!(
+        output.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let check = run_bytes(&[os(b"--check"), script.as_os_str()], &[]);
+    assert!(
+        !String::from_utf8_lossy(&check.stderr).contains("UTF-8"),
+        "{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn script_reading_survives_low_descriptor_redirections() {
+    let directory = bytes_directory("descriptors");
+    let script = directory.join("fds.sh");
+    std::fs::write(
+        &script,
+        "exec 3>/dev/null 4>/dev/null\nexec 3>&- 4>&-\necho still running\n",
+    )
+    .unwrap();
+    let output = run_bytes(&[script.as_os_str()], &[]);
+    assert_eq!(output.stdout, b"still running\n");
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn non_utf8_arguments_and_environment_round_trip() {
+    let output = run_bytes(
+        &[
+            os(b"-c"),
+            os(b"printf '%s|%s|' \"$1\" \"$BYTES_TEST\"; export -p | grep BYTES_TEST; export AGAIN=\"$1\"; printenv AGAIN"),
+            os(b"name"),
+            os(b"a\xe9\xff"),
+        ],
+        &[("BYTES_TEST", os(b"v\xfe"))],
+    );
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        output.stdout,
+        b"a\xe9\xff|v\xfe|declare -x BYTES_TEST=$'v\\376'\na\xe9\xff\n"
+    );
+}
+
+#[test]
+fn read_and_command_substitution_keep_bytes() {
+    let directory = bytes_directory("read");
+    let data = directory.join("latin1.txt");
+    std::fs::write(&data, b"caf\xe9 \xff\xfe\n").unwrap();
+    let script = format!(
+        "read -r first second < '{0}'; printf '%s|%s|' \"$first\" \"$second\"; captured=$(cat '{0}'); printf '%s|' $captured; cat <<< \"$first\"",
+        data.display()
+    );
+    let output = run_bytes(&[os(b"-c"), os(script.as_bytes())], &[]);
+    assert_eq!(
+        output.stdout,
+        b"caf\xe9|\xff\xfe|caf\xe9|\xff\xfe|caf\xe9\n"
+    );
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn invalid_utf8_file_names_glob_and_open() {
+    let directory = bytes_directory("names");
+    if std::fs::write(directory.join(os(b"bad\xffname")), "content\n").is_err() {
+        let _ = std::fs::remove_dir_all(&directory);
+        return;
+    }
+    let script = format!(
+        "cd '{}' && for file in bad*; do printf '%s\\n' \"$file\"; cat \"$file\"; [ -f \"$file\" ] && echo file; done; echo more >> $'bad\\xffname'; cat bad?name",
+        directory.display()
+    );
+    let output = run_bytes(&[os(b"-c"), os(script.as_bytes())], &[]);
+    assert_eq!(
+        output.stdout,
+        b"bad\xffname\ncontent\nfile\ncontent\nmore\n"
+    );
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn agent_output_keeps_bytes_and_json_stays_valid() {
+    let script = os(b"printf 'a\\xff\\xc3\\xa9'");
+    let plain = run_bytes(&[os(b"--agent"), os(b"-c"), script], &[]);
+    assert_eq!(plain.stdout, b"a\xff\xc3\xa9");
+    let json = run_bytes(&[os(b"--json"), os(b"-c"), script], &[]);
+    let text = String::from_utf8(json.stdout).expect("JSON output is UTF-8");
+    let expected = format!(
+        "\"stdout\":\"a{}{}\"",
+        char::REPLACEMENT_CHARACTER,
+        char::from(0xe9u8)
+    );
+    assert!(text.contains(&expected), "{text}");
+}
+
 fn run(input: &str) -> String {
     let output = Command::new(env!("CARGO_BIN_EXE_grfsh"))
         .stdin(Stdio::piped())

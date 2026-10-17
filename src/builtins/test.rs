@@ -22,7 +22,7 @@ fn accessible(path: &str, mode: libc::c_int) -> bool {
 }
 
 pub(crate) fn unary(shell: &Shell, operator: &str, operand: &str) -> bool {
-    let metadata = || std::fs::metadata(operand).ok();
+    let metadata = || std::fs::metadata(crate::bytes::to_path(operand)).ok();
     match operator {
         "-e" | "-a" => metadata().is_some(),
         "-O" => metadata().is_some_and(|metadata| metadata.uid() == unsafe { libc::geteuid() }),
@@ -37,7 +37,7 @@ pub(crate) fn unary(shell: &Shell, operator: &str, operand: &str) -> bool {
         "-r" => accessible(operand, libc::R_OK),
         "-w" => accessible(operand, libc::W_OK),
         "-x" => accessible(operand, libc::X_OK),
-        "-L" | "-h" => std::fs::symlink_metadata(operand)
+        "-L" | "-h" => std::fs::symlink_metadata(crate::bytes::to_path(operand))
             .is_ok_and(|metadata| metadata.file_type().is_symlink()),
         "-p" => metadata().is_some_and(|metadata| metadata.file_type().is_fifo()),
         "-S" => metadata().is_some_and(|metadata| metadata.file_type().is_socket()),
@@ -58,7 +58,10 @@ fn integer(text: &str) -> Result<i64, String> {
 }
 
 fn modified(path: &str) -> Option<std::time::SystemTime> {
-    std::fs::metadata(path).ok()?.modified().ok()
+    std::fs::metadata(crate::bytes::to_path(path))
+        .ok()?
+        .modified()
+        .ok()
 }
 
 pub(crate) fn binary(operator: &str, left: &str, right: &str) -> Result<bool, String> {
@@ -83,7 +86,10 @@ pub(crate) fn binary(operator: &str, left: &str, right: &str) -> Result<bool, St
             (None, Some(_)) => true,
             _ => false,
         },
-        "-ef" => match (std::fs::metadata(left), std::fs::metadata(right)) {
+        "-ef" => match (
+            std::fs::metadata(crate::bytes::to_path(left)),
+            std::fs::metadata(crate::bytes::to_path(right)),
+        ) {
             (Ok(left), Ok(right)) => left.dev() == right.dev() && left.ino() == right.ino(),
             _ => false,
         },

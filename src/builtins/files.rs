@@ -9,7 +9,8 @@ const REPLACE_USAGE: &str = "replace: usage: replace [--all] [-n] [-v] file old 
 const WRITE_USAGE: &str = "write-file: usage: write-file [-p] [-a] [-v] file < text";
 
 fn target(path: &str) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path))
+    let path = crate::bytes::to_path(path);
+    std::fs::canonicalize(&path).unwrap_or(path)
 }
 
 pub(crate) fn write_atomically(path: &Path, contents: &[u8]) -> std::io::Result<()> {
@@ -60,12 +61,12 @@ fn read_stdin(command: &str) -> Result<String, String> {
     if sys::isatty(0) {
         return Err(format!("{command}: expects text on standard input"));
     }
-    let mut text = String::new();
+    let mut bytes = Vec::new();
     std::io::stdin()
         .lock()
-        .read_to_string(&mut text)
+        .read_to_end(&mut bytes)
         .map_err(|error| format!("{command}: {error}"))?;
-    Ok(text)
+    Ok(crate::bytes::decode(&bytes))
 }
 
 pub(crate) fn parse_blocks(text: &str) -> Result<Vec<(String, String)>, String> {
@@ -272,7 +273,7 @@ fn replace_piped(old: &str, new: &str, dry_run: bool, out: &mut dyn Write) -> i3
     let mut status = 0;
     for (file, lines) in files {
         let path = target(&file);
-        let contents = match std::fs::read_to_string(&path) {
+        let contents = match std::fs::read(&path).map(|bytes| crate::bytes::decode(&bytes)) {
             Ok(contents) => contents,
             Err(error) => {
                 shell::error(format!("replace: {file}: {}", sys::error_message(&error)));
@@ -292,7 +293,7 @@ fn replace_piped(old: &str, new: &str, dry_run: bool, out: &mut dyn Write) -> i3
             show_change(out, &file, &contents, &updated);
             continue;
         }
-        if let Err(error) = write_atomically(&path, updated.as_bytes()) {
+        if let Err(error) = write_atomically(&path, &crate::bytes::encode(&updated)) {
             shell::error(format!("replace: {file}: {}", sys::error_message(&error)));
             status = 1;
             continue;
@@ -338,7 +339,7 @@ pub(super) fn replace(args: &[String], out: &mut dyn Write) -> i32 {
     };
     let file = &positional[0];
     let path = target(file);
-    let contents = match std::fs::read_to_string(&path) {
+    let contents = match std::fs::read(&path).map(|bytes| crate::bytes::decode(&bytes)) {
         Ok(contents) => contents,
         Err(error) => {
             shell::error(format!("replace: {file}: {}", sys::error_message(&error)));
@@ -356,7 +357,7 @@ pub(super) fn replace(args: &[String], out: &mut dyn Write) -> i32 {
         show_change(out, file, &contents, &updated);
         return 0;
     }
-    if let Err(error) = write_atomically(&path, updated.as_bytes()) {
+    if let Err(error) = write_atomically(&path, &crate::bytes::encode(&updated)) {
         shell::error(format!("replace: {file}: {}", sys::error_message(&error)));
         return 1;
     }
@@ -409,9 +410,9 @@ pub(super) fn write_file(args: &[String], out: &mut dyn Write) -> i32 {
             .append(true)
             .create(true)
             .open(&path)
-            .and_then(|mut handle| handle.write_all(text.as_bytes()))
+            .and_then(|mut handle| handle.write_all(&crate::bytes::encode(&text)))
     } else {
-        write_atomically(&path, text.as_bytes())
+        write_atomically(&path, &crate::bytes::encode(&text))
     };
     if let Err(error) = result {
         shell::error(format!(

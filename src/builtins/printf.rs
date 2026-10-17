@@ -1,5 +1,7 @@
 use std::io::Write;
 
+use crate::bytes;
+use crate::escapes;
 use crate::shell::{self, Shell};
 
 struct Spec {
@@ -17,6 +19,7 @@ struct Arguments<'a> {
     values: &'a [String],
     position: usize,
     failed: bool,
+    stopped: bool,
 }
 
 impl<'a> Arguments<'a> {
@@ -34,10 +37,9 @@ impl<'a> Arguments<'a> {
         };
         let text = text.trim();
         if let Some(quoted) = text.strip_prefix(['\'', '"']) {
-            return quoted
-                .chars()
-                .next()
-                .map_or(0, |character| character as i64);
+            return quoted.chars().next().map_or(0, |character| {
+                bytes::raw_byte(character).map_or(character as i64, i64::from)
+            });
         }
         let parsed = if let Some(hex) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X"))
         {
@@ -67,63 +69,27 @@ impl<'a> Arguments<'a> {
 }
 
 fn escape(text: &str, out: &mut String, in_format: bool) -> bool {
-    let mut chars = text.chars().peekable();
-    while let Some(character) = chars.next() {
-        if character != '\\' {
-            out.push(character);
-            continue;
-        }
-        match chars.next() {
-            Some('n') => out.push('\n'),
-            Some('t') => out.push('\t'),
-            Some('r') => out.push('\r'),
-            Some('a') => out.push('\x07'),
-            Some('b') => out.push('\x08'),
-            Some('f') => out.push('\x0c'),
-            Some('v') => out.push('\x0b'),
-            Some('e') => out.push('\x1b'),
-            Some('\\') => out.push('\\'),
-            Some('c') if !in_format => return false,
-            Some('x') => {
-                let mut value = 0u32;
-                let mut digits = 0;
-                while digits < 2
-                    && let Some(digit) = chars.peek().and_then(|next| next.to_digit(16))
-                {
-                    value = value * 16 + digit;
-                    chars.next();
-                    digits += 1;
-                }
-                out.push(char::from_u32(value).unwrap_or('\u{fffd}'));
-            }
-            Some(first @ '0'..='7') => {
-                let mut value = first.to_digit(8).unwrap_or(0);
-                let limit = if first == '0' && !in_format { 3 } else { 2 };
-                let mut digits = 0;
-                while digits < limit
-                    && let Some(digit) = chars.peek().and_then(|next| next.to_digit(8))
-                {
-                    value = value * 8 + digit;
-                    chars.next();
-                    digits += 1;
-                }
-                out.push(char::from_u32(value).unwrap_or('\u{fffd}'));
-            }
-            Some(other) => {
-                out.push('\\');
-                out.push(other);
-            }
-            None => out.push('\\'),
-        }
+    let mode = if in_format {
+        escapes::Mode::PrintfFormat
+    } else {
+        escapes::Mode::PrintfArgument
+    };
+    let expanded = escapes::expand(text, mode);
+    for message in &expanded.errors {
+        shell::error(format!("printf: {message}"));
     }
-    true
+    out.push_str(&expanded.text);
+    !expanded.stopped
 }
 
 fn shell_quote(text: &str) -> String {
+    if escapes::needs_ansi_quote(text) {
+        return escapes::ansi_quote(text);
+    }
     if !text.is_empty()
         && text
             .chars()
-            .all(|character| character.is_ascii_alphanumeric() || "-_./=:@%+,".contains(character))
+            .all(|character| character.is_alphanumeric() || "-_./=:@%+,".contains(character))
     {
         return text.to_string();
     }
@@ -160,8 +126,8 @@ fn signed(spec: &Spec, value: String, negative: bool) -> String {
     }
 }
 
-fn convert(spec: &Spec, arguments: &mut Arguments) -> Option<String> {
-    let text = match spec.conversion {
+fn convert(spec: &Spec, arguments: &mut Arguments) -> String {
+    match spec.conversion {
         'd' | 'i' => {
             let value = arguments.integer();
             let digits = match spec.precision {
@@ -225,12 +191,11 @@ fn convert(spec: &Spec, arguments: &mut Arguments) -> Option<String> {
         }
         'b' => {
             let mut body = String::new();
-            let keep_going = escape(arguments.next().unwrap_or_default(), &mut body, false);
-            let padded = pad(spec, body, false);
-            if !keep_going {
-                return None;
+            arguments.stopped = !escape(arguments.next().unwrap_or_default(), &mut body, false);
+            if let Some(precision) = spec.precision {
+                body = body.chars().take(precision).collect();
             }
-            padded
+            pad(spec, body, false)
         }
         'q' => pad(
             spec,
@@ -242,8 +207,7 @@ fn convert(spec: &Spec, arguments: &mut Arguments) -> Option<String> {
             arguments.failed = true;
             String::new()
         }
-    };
-    Some(text)
+    }
 }
 
 fn c_exponent(value: f64, precision: usize, upper: bool) -> String {
@@ -337,6 +301,7 @@ fn format(template: &str, values: &[String]) -> (String, bool) {
         values,
         position: 0,
         failed: false,
+        stopped: false,
     };
     let chars: Vec<char> = template.chars().collect();
     loop {
@@ -353,9 +318,9 @@ fn format(template: &str, values: &[String]) -> (String, bool) {
                     escape(&std::mem::take(&mut literal), &mut out, true);
                     index += 1;
                     let spec = parse_spec(&chars, &mut index, &mut arguments);
-                    match convert(&spec, &mut arguments) {
-                        Some(text) => out.push_str(&text),
-                        None => return (out, arguments.failed),
+                    out.push_str(&convert(&spec, &mut arguments));
+                    if arguments.stopped {
+                        return (out, arguments.failed);
                     }
                 }
                 character => {
@@ -382,6 +347,7 @@ pub(super) fn run(shell: &mut Shell, args: &[String], out: &mut dyn Write) -> i3
         return 2;
     };
     let (text, failed) = format(template, values);
+    let text = bytes::canonical(&text);
     match target {
         Some(name) => shell.set_variable(&name, &text),
         None => {

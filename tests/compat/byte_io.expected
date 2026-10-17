@@ -1,0 +1,18 @@
+ 63 61 66 e9 20 6e 61 ef 76 65 7c 6c 69 6e 65 32 20 ff fe 7c 
+ 5b 63 61 66 e9 5d 5b 6e 61 ef 76 65 5d 
+4
+ 28 63 61 66 e9 20 6e 61 ef 76 65 29 28 6c 69 6e 65 32 20 ff fe 29 
+ ff fe 20 61 e9 62 
+ 3c ff fe 3e 3c 61 e9 62 3e 
+ 7b ff fe 20 61 7d 7b 62 7d 
+ 63 61 66 e9 20 6e 61 ef 76 65 0a 6c 69 6e 65 32 20 ff fe 
+ 63 61 66 e9 20 6e 61 ef 76 65 0a 6c 69 6e 65 32 20 ff fe 
+ 63 61 66 e9 20 6c 69 6e 65 32 20 ff fe 0a 
+ 6e 61 ef 76 65 0a 
+ fe ff 0a 
+declare -x BYTES_VALUE=$'\376\377'
+matched
+equal
+ c3 a9 
+ ff fe 
+--- exit 0

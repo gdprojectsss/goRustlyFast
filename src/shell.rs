@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fmt::Display;
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Write};
 use std::rc::Rc;
 
 use crate::directories::DirectoryHistory;
@@ -203,8 +203,7 @@ impl Shell {
         let Ok(current_dir) = std::env::current_dir() else {
             return;
         };
-        let pwd_matches = std::env::var("PWD")
-            .ok()
+        let pwd_matches = std::env::var_os("PWD")
             .and_then(|path| std::fs::canonicalize(path).ok())
             .zip(std::fs::canonicalize(&current_dir).ok())
             .is_some_and(|(from_pwd, from_cwd)| from_pwd == from_cwd);
@@ -252,7 +251,7 @@ impl Shell {
         self.variables
             .get(name)
             .cloned()
-            .or_else(|| std::env::var(name).ok())
+            .or_else(|| std::env::var_os(name).map(|value| crate::bytes::from_os(&value)))
     }
 
     pub fn snapshot(&self, name: &str) -> Saved {
@@ -374,7 +373,7 @@ impl Shell {
             return array.set(Key::Index(0), value);
         }
         if !self.variables.contains_key(name) && std::env::var_os(name).is_some() {
-            unsafe { std::env::set_var(name, value) };
+            unsafe { std::env::set_var(name, crate::bytes::to_os(&value)) };
         } else {
             self.variables.insert(name.into(), value);
         }
@@ -391,10 +390,10 @@ impl Shell {
         let value = value
             .map(String::from)
             .or_else(|| self.variables.get(name).cloned())
-            .or_else(|| std::env::var(name).ok());
+            .or_else(|| std::env::var_os(name).map(|value| crate::bytes::from_os(&value)));
         self.variables.remove(name);
         if let Some(value) = value {
-            unsafe { std::env::set_var(name, value) };
+            unsafe { std::env::set_var(name, crate::bytes::to_os(&value)) };
         }
     }
 
@@ -483,11 +482,12 @@ pub fn error(message: impl Display) {
         Some((script, _)) => format!("{script}: "),
         None => String::new(),
     });
-    if crate::text::colors_enabled() && std::io::stderr().is_terminal() {
-        eprintln!("\x1b[1;31mgrfsh:\x1b[0m {prefix}{message}");
+    let line = if crate::text::colors_enabled() && std::io::stderr().is_terminal() {
+        format!("\x1b[1;31mgrfsh:\x1b[0m {prefix}{message}\n")
     } else {
-        eprintln!("grfsh: {prefix}{message}");
-    }
+        format!("grfsh: {prefix}{message}\n")
+    };
+    let _ = std::io::stderr().write_all(&crate::bytes::encode(&line));
 }
 
 #[cfg(test)]

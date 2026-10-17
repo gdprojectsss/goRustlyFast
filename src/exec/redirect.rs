@@ -66,8 +66,10 @@ impl Shell {
                 (open(libc::O_WRONLY | libc::O_CREAT | libc::O_APPEND)?, true)
             }
             RedirectKind::ReadWrite => (open(libc::O_RDWR | libc::O_CREAT)?, true),
-            RedirectKind::Heredoc => (temp(target.as_bytes())?, true),
-            RedirectKind::HereString => (temp(format!("{target}\n").as_bytes())?, true),
+            RedirectKind::Heredoc => (temp(&crate::bytes::encode(&target))?, true),
+            RedirectKind::HereString => {
+                (temp(&crate::bytes::encode(&format!("{target}\n")))?, true)
+            }
             RedirectKind::DuplicateIn | RedirectKind::DuplicateOut if target == "-" => {
                 saved.push((redirect.fd, sys::save_fd(redirect.fd)));
                 sys::close(redirect.fd);

@@ -201,7 +201,7 @@ impl Shell {
                     return String::new();
                 }
             };
-            return match std::fs::read_to_string(&path) {
+            return match crate::bytes::read_file(&path) {
                 Ok(mut text) => {
                     while text.ends_with('\n') {
                         text.pop();
@@ -249,7 +249,7 @@ impl Shell {
                     .flatten()
                     .map_or(1, WaitResult::status);
                 self.substitution_status = Some(status);
-                let mut output = String::from_utf8_lossy(&out).into_owned();
+                let mut output = crate::bytes::decode(&out);
                 while output.ends_with('\n') {
                     output.pop();
                 }
