@@ -1,0 +1,3 @@
+# Intentional differences between grfsh and bash; one case id per line, then the reason
+control-flow:68  printf %q quotes with single quotes, bash uses backslashes; both read back the same
+options-and-builtins:31  timeout is a grfsh builtin; bash needs the external coreutils timeout

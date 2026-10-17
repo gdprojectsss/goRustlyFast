@@ -1,0 +1,5 @@
+s="héllo wörld ✓ 日本"
+echo "${#s}"
+echo "${s:1:4}"
+echo "${s^^}"
+LC_ALL=C; t="é"; echo "${#t}"
