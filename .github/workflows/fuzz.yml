@@ -46,9 +46,9 @@ jobs:
       - name: Run untrusted scripts in the sandbox for two minutes
         working-directory: fuzz
         run: |
-          mkdir -p corpus/run
+          mkdir -p corpus/run artifacts
           cp ../tests/compat/*.sh corpus/run/
-          cargo fuzz run -s none run corpus/run -- -max_total_time=120 -max_len=2048 -timeout=10 -rss_limit_mb=2048 -close_fd_mask=3
+          cargo fuzz run -s none run "$PWD/corpus/run" -- -max_total_time=120 -max_len=2048 -timeout=10 -rss_limit_mb=2048 -close_fd_mask=3 -artifact_prefix="$PWD/artifacts/"
 
       - uses: actions/upload-artifact@v4
         if: failure()
