@@ -11,8 +11,6 @@ use crate::table;
 
 enum Trigger {
     Command(&'static str),
-    Flag(&'static str, char),
-    Argument(&'static str, &'static str),
     Variable(&'static str),
 }
 
@@ -29,32 +27,8 @@ const UNSUPPORTED: &[Unsupported] = &[
     entry(Trigger::Command("bind"), "use bindkey instead"),
     entry(Trigger::Command("suspend"), "suspend is not supported"),
     entry(
-        Trigger::Flag("declare", 'n'),
-        "name references are not supported",
-    ),
-    entry(
-        Trigger::Flag("typeset", 'n'),
-        "name references are not supported",
-    ),
-    entry(
-        Trigger::Flag("local", 'n'),
-        "name references are not supported",
-    ),
-    entry(
-        Trigger::Flag("set", 'a'),
-        "set -a (allexport) is not supported",
-    ),
-    entry(
-        Trigger::Argument("set", "allexport"),
-        "set -o allexport is not supported",
-    ),
-    entry(
         Trigger::Variable("BASH_VERSINFO"),
         "grfsh does not set BASH_VERSINFO, since it is not bash",
-    ),
-    entry(
-        Trigger::Variable("BASH_LINENO"),
-        "BASH_LINENO is not set in grfsh",
     ),
 ];
 
@@ -120,23 +94,10 @@ fn word_text(word: &Word) -> Option<String> {
         .collect()
 }
 
-fn has_flag(argument: &str, letter: char) -> bool {
-    argument.len() > 1
-        && argument.starts_with('-')
-        && !argument.starts_with("--")
-        && argument[1..].contains(letter)
-}
-
-fn command_matches(trigger: &Trigger, name: &str, args: &[String]) -> bool {
+fn command_matches(trigger: &Trigger, name: &str) -> bool {
     match *trigger {
         Trigger::Command(command) => command == name && !builtins::is_builtin(name),
-        Trigger::Flag(command, letter) => {
-            command == name && args.iter().any(|argument| has_flag(argument, letter))
-        }
-        Trigger::Argument(command, expected) => {
-            command == name && args.iter().any(|argument| argument == expected)
-        }
-        _ => false,
+        Trigger::Variable(_) => false,
     }
 }
 
@@ -692,12 +653,12 @@ impl Checker<'_> {
         let CommandKind::Simple(simple) = &command.kind else {
             return;
         };
-        let Some((name, args)) = simple_name(command) else {
+        let Some((name, _)) = simple_name(command) else {
             return;
         };
         if let Some(unsupported) = UNSUPPORTED
             .iter()
-            .find(|unsupported| command_matches(&unsupported.trigger, name, &args))
+            .find(|unsupported| command_matches(&unsupported.trigger, name))
             .filter(|_| !self.functions.contains(name))
         {
             let message = match unsupported.trigger {
@@ -1007,7 +968,7 @@ mod tests {
             check(source).into_iter().map(|finding| finding.2).collect()
         };
         assert!(messages("trap 'echo x' DEBUG\n").is_empty());
-        assert!(messages("declare -rn ref=x\n")[0].contains("name references"));
+        assert!(messages("declare -rn ref=x\n").is_empty());
         assert!(messages("echo ${BASH_VERSINFO[0]}\n")[0].contains("BASH_VERSINFO"));
         assert!(messages("printf '%(%Y)T' -1\n").is_empty());
         assert!(messages("select x in a b; do echo $x; done\n").is_empty());
