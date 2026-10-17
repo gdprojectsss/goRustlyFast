@@ -4,7 +4,7 @@ use crate::shell::{self, Shell};
 
 mod aliases;
 mod control;
-mod deparse;
+pub(crate) mod deparse;
 mod directory;
 mod files;
 mod getopts;

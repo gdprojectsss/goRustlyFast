@@ -1,0 +1,15 @@
+hello
+ambiguous 1
+moved
+again
+err
+out
+err at status 3
+after f 3
+dbg
+dbg
+trap -- 'echo usr' SIGUSR1
+trap -- 'echo usr' SIGUSR1
+EXIT
+done
+--- exit 0

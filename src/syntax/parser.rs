@@ -447,6 +447,8 @@ impl<'a> Parser<'a> {
             self.next();
             negate = !negate;
         }
+        let start = self.start();
+        let mut lines = vec![self.lexer.line_at(start)];
         let mut commands = vec![self.command()?];
         loop {
             if self.is_operator("|&") {
@@ -458,12 +460,15 @@ impl<'a> Parser<'a> {
             }
             self.next();
             self.skip_newlines();
+            let start = self.start();
+            lines.push(self.lexer.line_at(start));
             commands.push(self.command()?);
         }
         Ok(Pipeline {
             negate,
             timed,
             commands,
+            lines,
         })
     }
 

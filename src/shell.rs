@@ -210,6 +210,10 @@ pub struct Shell {
     pub reading_stdin: bool,
     pub disabled_builtins: Vec<String>,
     pub trap_depth: u32,
+    pub active_traps: Vec<String>,
+    pub compound_status: bool,
+    pub skip_debug_trap: bool,
+    pub subshell_traps: Option<std::collections::BTreeMap<String, String>>,
 }
 
 impl Shell {
@@ -266,6 +270,10 @@ impl Shell {
             reading_stdin: false,
             disabled_builtins: Vec::new(),
             trap_depth: 0,
+            active_traps: Vec::new(),
+            compound_status: false,
+            skip_debug_trap: false,
+            subshell_traps: None,
             directories: DirectoryHistory::new(
                 std::env::var_os("HOME")
                     .map(|home| std::path::Path::new(&home).join(".grfsh_dirs")),

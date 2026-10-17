@@ -59,6 +59,9 @@ impl Shell {
         sys::reset_child_signals();
         let errtrace = self.options.errtrace;
         let functrace = self.options.functrace;
+        if self.subshell_traps.is_none() && !self.traps.is_empty() {
+            self.subshell_traps = Some(self.traps.clone());
+        }
         self.traps.retain(|name, command| {
             let kept = command.is_empty()
                 || (errtrace && name == "ERR")
@@ -129,6 +132,7 @@ impl Shell {
                     close_pipes(&pipes);
                     self.pipe_to_table =
                         commands.get(index + 1).is_some_and(table::consumes_tables);
+                    self.skip_debug_trap = stage_count > 1 && super::is_debug_point(command);
                     let status = self.run_command(command, true);
                     self.exit_child(status)
                 }
@@ -501,6 +505,7 @@ impl Shell {
                     let _ = sys::dup2(pipes[index].1, 1);
                     close_pipes(&pipes);
                     self.pipe_to_table = table::consumes_tables(&commands[index + 1]);
+                    self.skip_debug_trap = super::is_debug_point(command);
                     let status = self.run_command(command, true);
                     self.exit_child(status)
                 }

@@ -1,3 +1,4 @@
+use crate::builtins::deparse;
 use crate::expand;
 use crate::shell::{self, Shell};
 use crate::syntax::ast::{Redirect, RedirectKind, Word};
@@ -16,12 +17,19 @@ impl Shell {
         let mut saved = Vec::new();
         if let Err(error) = self.redirect_saving(redirects, &mut saved) {
             sys::restore_fds(saved);
-            shell::error(error);
-            return 1;
+            return self.redirect_failed(error);
         }
         let status = action(self);
         sys::restore_fds(saved);
         status
+    }
+
+    pub(crate) fn redirect_failed(&mut self, error: String) -> i32 {
+        if error.starts_with(expand::NO_MATCH) {
+            self.flow = shell::Flow::Interrupted;
+        }
+        shell::error(error);
+        1
     }
 
     pub(crate) fn apply_redirects(&mut self, redirects: &[Redirect]) -> Result<(), String> {
@@ -56,15 +64,29 @@ impl Shell {
         if let Some(variable) = &redirect.variable {
             return self.redirect_named(variable, redirect);
         }
-        let target = expand::single(self, &redirect.target)?;
+        let target = self.redirect_target(redirect)?;
+        let mut kind = redirect.kind;
+        if matches!(kind, RedirectKind::DuplicateIn | RedirectKind::DuplicateOut) {
+            match duplicate_target(redirect, &target)? {
+                Duplicate::Close => {
+                    saved.push((redirect.fd, sys::save_fd(redirect.fd)));
+                    sys::close(redirect.fd);
+                    return Ok(());
+                }
+                Duplicate::Descriptor(fd, move_source) => {
+                    return self.duplicate(redirect, fd, move_source, saved);
+                }
+                Duplicate::File => kind = RedirectKind::OutAndError,
+            }
+        }
         let open = |flags| {
             sys::open(&target, flags)
                 .map_err(|error| format!("{target}: {}", sys::error_message(&error)))
         };
-        let (source, owned) = match redirect.kind {
+        let (source, owned) = match kind {
             RedirectKind::In => (open(libc::O_RDONLY)?, true),
             RedirectKind::Out | RedirectKind::OutAndError | RedirectKind::Clobber => {
-                if redirect.kind != RedirectKind::Clobber
+                if kind != RedirectKind::Clobber
                     && self.options.noclobber
                     && std::path::Path::new(&target).is_file()
                 {
@@ -81,16 +103,8 @@ impl Shell {
                 here_document(&crate::bytes::encode(&format!("{target}\n")))?,
                 true,
             ),
-            RedirectKind::DuplicateIn | RedirectKind::DuplicateOut if target == "-" => {
-                saved.push((redirect.fd, sys::save_fd(redirect.fd)));
-                sys::close(redirect.fd);
-                return Ok(());
-            }
             RedirectKind::DuplicateIn | RedirectKind::DuplicateOut => {
-                let fd = target
-                    .parse()
-                    .map_err(|_| format!("{target}: bad file descriptor"))?;
-                (fd, false)
+                return Err(format!("{target}: ambiguous redirect"));
             }
         };
 
@@ -106,7 +120,7 @@ impl Shell {
             sys::clear_cloexec(redirect.fd);
         }
         if matches!(
-            redirect.kind,
+            kind,
             RedirectKind::OutAndError | RedirectKind::AppendAndError
         ) {
             saved.push((2, sys::save_fd(2)));
@@ -114,6 +128,40 @@ impl Shell {
         }
         Ok(())
     }
+}
+
+enum Duplicate {
+    Close,
+    Descriptor(i32, bool),
+    File,
+}
+
+fn duplicate_target(redirect: &Redirect, target: &str) -> Result<Duplicate, String> {
+    if target == "-" {
+        return Ok(Duplicate::Close);
+    }
+    let (number, move_source) = match target.strip_suffix('-') {
+        Some(number) => (number, true),
+        None => (target, false),
+    };
+    if !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit()) {
+        return match number.parse::<i32>() {
+            Ok(fd) => Ok(Duplicate::Descriptor(fd, move_source)),
+            Err(_) => Err(bad_descriptor(redirect)),
+        };
+    }
+    if redirect.kind == RedirectKind::DuplicateOut && redirect.fd == 1 {
+        return Ok(Duplicate::File);
+    }
+    Err(format!(
+        "{}: ambiguous redirect",
+        deparse::word(&redirect.target)
+    ))
+}
+
+fn bad_descriptor(redirect: &Redirect) -> String {
+    let word = deparse::word(&redirect.target);
+    format!("{}: Bad file descriptor", word.trim_end_matches('-'))
 }
 
 const PIPE_LIMIT: usize = 4096;
@@ -134,12 +182,50 @@ fn here_document(content: &[u8]) -> Result<i32, String> {
 }
 
 impl Shell {
+    fn duplicate(
+        &mut self,
+        redirect: &Redirect,
+        source: i32,
+        move_source: bool,
+        saved: &mut Vec<(i32, Option<i32>)>,
+    ) -> Result<(), String> {
+        if unsafe { libc::fcntl(source, libc::F_GETFD) } < 0 {
+            return Err(bad_descriptor(redirect));
+        }
+        if source == redirect.fd {
+            return Ok(());
+        }
+        saved.push((redirect.fd, sys::save_fd(redirect.fd)));
+        sys::dup2(source, redirect.fd).map_err(|_| bad_descriptor(redirect))?;
+        if move_source {
+            sys::close(source);
+        }
+        Ok(())
+    }
+
     fn named_fd_word(variable: &str) -> Result<Word, String> {
         lexer::parse_double_quoted_text(&format!("${{{variable}}}")).map_err(|error| error.message)
     }
 
+    fn redirect_target(&mut self, redirect: &Redirect) -> Result<String, String> {
+        if matches!(
+            redirect.kind,
+            RedirectKind::Heredoc | RedirectKind::HereString
+        ) {
+            return expand::single(self, &redirect.target);
+        }
+        let fields = expand::words(self, std::slice::from_ref(&redirect.target))?;
+        match <[String; 1]>::try_from(fields) {
+            Ok([target]) => Ok(target),
+            Err(_) => Err(format!(
+                "{}: ambiguous redirect",
+                deparse::word(&redirect.target)
+            )),
+        }
+    }
+
     fn redirect_named(&mut self, variable: &str, redirect: &Redirect) -> Result<(), String> {
-        let target = expand::single(self, &redirect.target)?;
+        let target = self.redirect_target(redirect)?;
         let duplicate = matches!(
             redirect.kind,
             RedirectKind::DuplicateIn | RedirectKind::DuplicateOut
@@ -172,10 +258,10 @@ impl Shell {
                 true,
             ),
             RedirectKind::DuplicateIn | RedirectKind::DuplicateOut => {
-                let fd = target
-                    .parse()
-                    .map_err(|_| format!("{target}: bad file descriptor"))?;
-                (fd, false)
+                match duplicate_target(redirect, &target)? {
+                    Duplicate::Descriptor(fd, _) => (fd, false),
+                    _ => return Err(format!("{target}: ambiguous redirect")),
+                }
             }
         };
         let fd = unsafe { libc::fcntl(source, libc::F_DUPFD, 10) };
@@ -183,7 +269,7 @@ impl Shell {
             sys::close(source);
         }
         if fd < 0 {
-            return Err(format!("{target}: bad file descriptor"));
+            return Err(bad_descriptor(redirect));
         }
         self.assign_named_fd(variable, fd)
     }

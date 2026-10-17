@@ -152,6 +152,9 @@ impl Shell {
                 self.run_and_or(item);
             }
         }
+        if signals::any_pending() && self.flow == Flow::Normal {
+            self.handle_signals();
+        }
         self.last_status
     }
 
@@ -178,7 +181,7 @@ impl Shell {
             self.set_variable("BASH_COMMAND", item.text.trim());
         }
         let last = item.rest.len();
-        let mut status = self.run_guarded(&item.first, &item.text, last > 0);
+        let mut status = self.run_guarded(&item.first, &item.text, last > 0 || item.first.negate);
         let mut ran_last = last == 0;
         let mut negated = item.first.negate;
         for (index, (connector, pipeline)) in item.rest.iter().enumerate() {
@@ -190,7 +193,8 @@ impl Shell {
                 Connector::Or => status != 0,
             };
             if run {
-                status = self.run_guarded(pipeline, &item.text, index + 1 < last);
+                status =
+                    self.run_guarded(pipeline, &item.text, index + 1 < last || pipeline.negate);
                 ran_last = index + 1 == last;
                 negated = pipeline.negate;
             }
@@ -198,6 +202,7 @@ impl Shell {
         if status != 0
             && ran_last
             && !negated
+            && !self.compound_status
             && self.condition_depth == 0
             && self.flow == Flow::Normal
         {
@@ -225,23 +230,19 @@ impl Shell {
     }
 
     fn command_failed(&mut self, status: i32) {
-        if let Some(command) = self.traps.get("ERR").cloned()
-            && !command.is_empty()
-        {
-            self.run_trap(&command);
-        }
+        self.run_named_trap("ERR");
         if self.options.errexit {
             self.last_status = status;
             self.flow = Flow::Exit;
         }
     }
 
-    fn run_trap(&mut self, command: &str) {
+    fn run_trap(&mut self, name: &str, command: &str) {
         let status = self.last_status;
         self.trap_depth += 1;
-        self.condition_depth += 1;
+        self.active_traps.push(name.to_string());
         self.run_source(command);
-        self.condition_depth -= 1;
+        self.active_traps.pop();
         self.trap_depth -= 1;
         if self.flow != Flow::Exit {
             self.last_status = status;
@@ -270,7 +271,7 @@ impl Shell {
     fn handle_signal(&mut self, signal: libc::c_int) {
         let name = sys::signal_name(signal).unwrap_or_default();
         match self.traps.get(name).cloned() {
-            Some(command) if !command.is_empty() => self.run_trap(&command),
+            Some(command) if !command.is_empty() => self.run_signal_trap(name, &command),
             Some(_) => {}
             None if signal == libc::SIGHUP && self.interactive => {
                 self.hang_up_jobs();
@@ -284,6 +285,16 @@ impl Shell {
             }
             None if !self.interactive && trap::is_terminating(signal) => self.die_by_signal(signal),
             None => {}
+        }
+    }
+
+    fn run_signal_trap(&mut self, name: &str, command: &str) {
+        let line = self.current_line;
+        self.current_line = 0;
+        self.run_trap(name, command);
+        self.current_line = line;
+        if !self.interactive && line > 0 {
+            shell::set_location(None, line);
         }
     }
 
@@ -342,13 +353,18 @@ impl Shell {
         if pipeline.timed {
             return self.run_timed(pipeline, text);
         }
+        let lastpipe = self.options.lastpipe && !self.interactive;
+        if pipeline.commands.len() > 1 && !self.debug_before_pipeline(pipeline, lastpipe) {
+            return self.last_status;
+        }
         let status = match pipeline.commands.as_slice() {
             [command] => self.run_command(command, false),
-            commands if self.options.lastpipe && !self.interactive => {
-                self.run_lastpipe(commands, text)
-            }
+            commands if lastpipe => self.run_lastpipe(commands, text),
             commands => self.run_forked(commands, text),
         };
+        if pipeline.commands.len() > 1 {
+            self.compound_status = false;
+        }
         if pipeline.commands.len() == 1 {
             self.last_pipe_statuses.clear();
             self.last_pipe_statuses.push(status);
@@ -362,6 +378,25 @@ impl Shell {
         };
         self.last_status = status;
         status
+    }
+
+    fn debug_before_pipeline(&mut self, pipeline: &Pipeline, lastpipe: bool) -> bool {
+        if !self.traps.contains_key("DEBUG") {
+            return true;
+        }
+        let forked = pipeline.commands.len() - usize::from(lastpipe);
+        for (index, command) in pipeline.commands[..forked].iter().enumerate() {
+            if !is_debug_point(command) {
+                continue;
+            }
+            if let Some(line) = pipeline.lines.get(index) {
+                self.current_line = *line;
+            }
+            if !self.run_debug_trap() {
+                return false;
+            }
+        }
+        true
     }
 
     fn run_timed(&mut self, pipeline: &Pipeline, text: &str) -> i32 {
@@ -408,13 +443,29 @@ impl Shell {
     fn run_command_kind(&mut self, command: &Command, exec_in_place: bool) -> i32 {
         match &command.kind {
             CommandKind::Simple(simple) => {
-                self.run_simple(simple, &command.redirects, exec_in_place)
+                let status = self.run_simple(simple, &command.redirects, exec_in_place);
+                self.compound_status = false;
+                status
             }
             CommandKind::FunctionDefinition { name, body, source } => {
                 self.define_function(name, body, source);
+                self.compound_status = false;
                 0
             }
-            kind => self.with_redirects(&command.redirects, |shell| shell.run_compound(kind)),
+            kind => {
+                self.compound_status = false;
+                self.with_redirects(&command.redirects, |shell| {
+                    let status = shell.run_compound(kind);
+                    shell.compound_status = !matches!(
+                        kind,
+                        CommandKind::Subshell(_)
+                            | CommandKind::Arithmetic(_)
+                            | CommandKind::Conditional(_)
+                            | CommandKind::Coproc { .. }
+                    );
+                    status
+                })
+            }
         }
     }
 
@@ -478,6 +529,11 @@ impl Shell {
                 self.loop_depth -= 1;
                 status
             }
+            CommandKind::Arithmetic(_) | CommandKind::Conditional(_) | CommandKind::Case { .. }
+                if !self.run_debug_trap() =>
+            {
+                self.last_status
+            }
             CommandKind::Arithmetic(expression) => match expand::arithmetic(self, expression) {
                 Ok(value) => i32::from(value == 0),
                 Err(error) => {
@@ -491,7 +547,12 @@ impl Shell {
                 step,
                 body,
             } => {
+                let line = self.current_line;
                 let evaluate = |shell: &mut Shell, word: &Word| -> Result<i64, String> {
+                    shell.current_line = line;
+                    if shell.flow != Flow::Normal || !shell.run_debug_trap() {
+                        return Ok(0);
+                    }
                     if word.parts.is_empty() {
                         Ok(1)
                     } else {
@@ -538,10 +599,7 @@ impl Shell {
             CommandKind::Case { subject, arms } => {
                 let subject = match expand::single(self, subject) {
                     Ok(value) => value,
-                    Err(error) => {
-                        shell::error(error);
-                        return 1;
-                    }
+                    Err(error) => return self.expansion_failed(error),
                 };
                 let mut status = 0;
                 let mut run_next = false;
@@ -588,17 +646,20 @@ impl Shell {
                 let values = match items {
                     Some(words) => match expand::words(self, words) {
                         Ok(value) => value,
-                        Err(error) => {
-                            shell::error(error);
-                            return 1;
-                        }
+                        Err(error) => return self.expansion_failed(error),
                     },
                     None => self.positional.clone(),
                 };
                 let mut status = 0;
                 self.loop_depth += 1;
                 let reference = self.is_reference(variable);
+                let line = self.current_line;
                 for value in values {
+                    self.current_line = line;
+                    if !self.run_debug_trap() {
+                        status = self.last_status;
+                        break;
+                    }
                     if reference {
                         self.variables.insert(variable.clone(), value);
                     } else if let Err(error) = self.try_set_variable(variable, &value) {
@@ -687,10 +748,7 @@ impl Shell {
         let Some(name) = argv.first() else {
             return match self.apply_redirects(redirects) {
                 Ok(()) => 0,
-                Err(error) => {
-                    shell::error(format!("exec: {error}"));
-                    1
-                }
+                Err(error) => self.redirect_failed(error),
             };
         };
         let Some(path) = self.resolve(name) else {
@@ -1027,7 +1085,9 @@ impl Shell {
         exec_in_place: bool,
     ) -> i32 {
         self.substitution_status = None;
-        self.run_named_trap("DEBUG");
+        if !self.run_debug_trap() {
+            return self.last_status;
+        }
         let mut argv = match expand::words(self, &simple.words) {
             Ok(arguments) => arguments,
             Err(error) => return self.expansion_failed(error),
@@ -1268,14 +1328,27 @@ impl Shell {
     }
 
     pub(crate) fn run_named_trap(&mut self, name: &str) {
-        if self.trap_depth > 0 {
+        let blocked = if name == "RETURN" {
+            self.trap_depth > 0
+        } else {
+            self.active_traps.iter().any(|active| active == name)
+        };
+        if blocked {
             return;
         }
         if let Some(command) = self.traps.get(name).cloned()
             && !command.is_empty()
         {
-            self.run_trap(&command);
+            self.run_trap(name, &command);
         }
+    }
+
+    pub(crate) fn run_debug_trap(&mut self) -> bool {
+        if std::mem::take(&mut self.skip_debug_trap) {
+            return true;
+        }
+        self.run_named_trap("DEBUG");
+        self.flow == Flow::Normal
     }
 
     pub(crate) fn with_temp_env(
@@ -1356,6 +1429,16 @@ fn parse_exec_options(argv: &[String]) -> Result<(ExecOptions, &[String]), Strin
         }
     }
     Ok((options, &argv[index..]))
+}
+
+pub(crate) fn is_debug_point(command: &Command) -> bool {
+    matches!(
+        command.kind,
+        CommandKind::Simple(_)
+            | CommandKind::Arithmetic(_)
+            | CommandKind::Conditional(_)
+            | CommandKind::Case { .. }
+    )
 }
 
 fn take_posix_flag(pipeline: &mut Pipeline) -> bool {

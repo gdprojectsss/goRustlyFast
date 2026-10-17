@@ -247,6 +247,7 @@ pub struct Pipeline {
     pub negate: bool,
     pub timed: bool,
     pub commands: Vec<Command>,
+    pub lines: Vec<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

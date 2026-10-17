@@ -426,7 +426,7 @@ pub fn execv(path: &str, argv: &[String]) -> io::Error {
 
 pub fn signal_number(name: &str) -> Option<libc::c_int> {
     if let Ok(number) = name.parse() {
-        let known = number == 0 || SIGNALS.iter().any(|&(_, signal)| signal == number);
+        let known = number == 0 || signal_name(number).is_some();
         return known.then_some(number);
     }
     let name = name.to_ascii_uppercase();
@@ -435,6 +435,7 @@ pub fn signal_number(name: &str) -> Option<libc::c_int> {
         .iter()
         .find(|(signal_name, _)| *signal_name == name)
         .map(|&(_, number)| number)
+        .or_else(|| realtime_number(name))
 }
 
 pub fn signal_name(number: libc::c_int) -> Option<&'static str> {
@@ -442,6 +443,61 @@ pub fn signal_name(number: libc::c_int) -> Option<&'static str> {
         .iter()
         .find(|(_, signal)| *signal == number)
         .map(|&(name, _)| name)
+        .or_else(|| realtime_name(number))
+}
+
+#[cfg(target_os = "linux")]
+fn realtime_range() -> Option<(libc::c_int, libc::c_int)> {
+    Some((libc::SIGRTMIN(), libc::SIGRTMAX()))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn realtime_range() -> Option<(libc::c_int, libc::c_int)> {
+    None
+}
+
+const REALTIME_MIN_NAMES: [&str; 17] = [
+    "RTMIN", "RTMIN+1", "RTMIN+2", "RTMIN+3", "RTMIN+4", "RTMIN+5", "RTMIN+6", "RTMIN+7",
+    "RTMIN+8", "RTMIN+9", "RTMIN+10", "RTMIN+11", "RTMIN+12", "RTMIN+13", "RTMIN+14", "RTMIN+15",
+    "RTMIN+16",
+];
+
+const REALTIME_MAX_NAMES: [&str; 17] = [
+    "RTMAX", "RTMAX-1", "RTMAX-2", "RTMAX-3", "RTMAX-4", "RTMAX-5", "RTMAX-6", "RTMAX-7",
+    "RTMAX-8", "RTMAX-9", "RTMAX-10", "RTMAX-11", "RTMAX-12", "RTMAX-13", "RTMAX-14", "RTMAX-15",
+    "RTMAX-16",
+];
+
+fn realtime_name(number: libc::c_int) -> Option<&'static str> {
+    let (minimum, maximum) = realtime_range()?;
+    if number < minimum || number > maximum {
+        return None;
+    }
+    let offset = (number - minimum) as usize;
+    let span = (maximum - minimum) as usize;
+    if offset <= span / 2 {
+        REALTIME_MIN_NAMES.get(offset).copied()
+    } else {
+        REALTIME_MAX_NAMES.get(span - offset).copied()
+    }
+}
+
+fn realtime_number(name: &str) -> Option<libc::c_int> {
+    let (minimum, maximum) = realtime_range()?;
+    let offset = |text: &str| -> Option<libc::c_int> {
+        if text.is_empty() {
+            Some(0)
+        } else {
+            text.parse().ok()
+        }
+    };
+    let number = if let Some(rest) = name.strip_prefix("RTMIN") {
+        minimum + offset(rest.strip_prefix('+').unwrap_or(rest))?
+    } else {
+        let rest = name.strip_prefix("RTMAX")?;
+        maximum - offset(rest.strip_prefix('-').unwrap_or(rest))?
+    };
+    (minimum..=maximum).contains(&number).then_some(number)
 }
 
 pub const SIGNALS: &[(&str, libc::c_int)] = &[
@@ -486,6 +542,11 @@ pub const SIGNALS: &[(&str, libc::c_int)] = &[
 
 pub fn signals_by_number() -> Vec<(&'static str, libc::c_int)> {
     let mut signals = SIGNALS.to_vec();
+    if let Some((minimum, maximum)) = realtime_range() {
+        signals.extend(
+            (minimum..=maximum).filter_map(|number| Some((realtime_name(number)?, number))),
+        );
+    }
     signals.sort_by_key(|&(_, number)| number);
     signals
 }

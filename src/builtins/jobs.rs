@@ -434,6 +434,10 @@ pub(super) fn wait(shell: &mut Shell, args: &[String]) -> i32 {
 fn signal_for_listing(argument: &str, out: &mut dyn Write) -> bool {
     if let Ok(number) = argument.parse::<i32>() {
         let number = if number > 128 { number - 128 } else { number };
+        if number == 0 {
+            let _ = writeln!(out, "EXIT");
+            return true;
+        }
         if let Some(name) = sys::signal_name(number) {
             let _ = writeln!(out, "{name}");
             return true;

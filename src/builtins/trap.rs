@@ -92,8 +92,9 @@ fn listing_name(name: &str) -> String {
 fn print_traps(shell: &Shell, names: &[String], out: &mut dyn Write) -> i32 {
     let mut status = 0;
     let mut selected: Vec<String> = Vec::new();
+    let traps = shell.subshell_traps.as_ref().unwrap_or(&shell.traps);
     if names.is_empty() {
-        selected = shell.traps.keys().cloned().collect();
+        selected = traps.keys().cloned().collect();
     } else {
         for name in names {
             match canonical(name) {
@@ -107,7 +108,7 @@ fn print_traps(shell: &Shell, names: &[String], out: &mut dyn Write) -> i32 {
     }
     selected.sort_by_key(|name| listing_order(name));
     for name in selected {
-        if let Some(command) = shell.traps.get(&name) {
+        if let Some(command) = traps.get(&name) {
             let _ = writeln!(out, "trap -- {} {}", quote(command), listing_name(&name));
         }
     }
@@ -124,6 +125,11 @@ pub(super) fn run(shell: &mut Shell, args: &[String], out: &mut dyn Write) -> i3
             return 0;
         }
         Some("--") => args = &args[1..],
+        Some(option) if option.len() > 1 && option.starts_with('-') => {
+            shell::error(format!("trap: {option}: invalid option"));
+            eprintln!("trap: usage: trap [-Plp] [[action] signal_spec ...]");
+            return 2;
+        }
         _ => {}
     }
     if args.is_empty() {
@@ -138,6 +144,7 @@ pub(super) fn run(shell: &mut Shell, args: &[String], out: &mut dyn Write) -> i3
         (action, &args[1..])
     };
 
+    shell.subshell_traps = None;
     let mut status = 0;
     for name in names {
         let Some(canonical) = canonical(name) else {
