@@ -66,8 +66,8 @@ impl Shell {
                 (open(libc::O_WRONLY | libc::O_CREAT | libc::O_APPEND)?, true)
             }
             RedirectKind::ReadWrite => (open(libc::O_RDWR | libc::O_CREAT)?, true),
-            RedirectKind::Heredoc => (temp(target.as_bytes())?, true),
-            RedirectKind::HereString => (temp(format!("{target}\n").as_bytes())?, true),
+            RedirectKind::Heredoc => (here_document(target.as_bytes())?, true),
+            RedirectKind::HereString => (here_document(format!("{target}\n").as_bytes())?, true),
             RedirectKind::DuplicateIn | RedirectKind::DuplicateOut if target == "-" => {
                 saved.push((redirect.fd, sys::save_fd(redirect.fd)));
                 sys::close(redirect.fd);
@@ -88,6 +88,9 @@ impl Shell {
                 sys::close(source);
             }
             result.map_err(|error| format!("{target}: {}", sys::error_message(&error)))?;
+        } else if owned {
+            saved.push((redirect.fd, None));
+            sys::clear_cloexec(redirect.fd);
         }
         if matches!(
             redirect.kind,
@@ -98,6 +101,23 @@ impl Shell {
         }
         Ok(())
     }
+}
+
+const PIPE_LIMIT: usize = 4096;
+
+fn here_document(content: &[u8]) -> Result<i32, String> {
+    if content.len() > PIPE_LIMIT {
+        return temp(content);
+    }
+    let failed = |error: std::io::Error| format!("here-document: {}", sys::error_message(&error));
+    let (read_end, write_end) = sys::pipe().map_err(failed)?;
+    let written = sys::write_all(write_end, content);
+    sys::close(write_end);
+    if let Err(error) = written {
+        sys::close(read_end);
+        return Err(failed(error));
+    }
+    Ok(read_end)
 }
 
 fn temp(content: &[u8]) -> Result<i32, String> {

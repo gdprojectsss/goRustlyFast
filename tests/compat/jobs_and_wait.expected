@@ -1,0 +1,28 @@
+remembered 0
+exited 3
+again 3
+not a child 127
+next 4
+next 0
+none left 127
+wait -p 5
+found the pid
+[1]-  Running                    sleep 1 &
+[2]+  Exit 1                     false
+running:
+[1]+  Running                    sleep 1 &
+stopped:
+after listing:
+[1]+  Running                    sleep 1 &
+killed 143
+disowned 0
+missing job 1
+wait without arguments 0
+subshell function 3
+group function 4
+2
+explicit subshell:
+pipeline:
+[1]+  Running                    sleep 1 &
+substitution: [1]+  Running                    sleep 1 &
+--- exit 0

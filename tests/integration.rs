@@ -373,7 +373,10 @@ fn background_job_and_wait() {
 
 #[test]
 fn kill_job_by_spec() {
-    assert_eq!(run("sleep 5 &\nkill %1\nwait\necho $?\n").trim(), "143");
+    assert_eq!(
+        run("sleep 5 &\nkill %1\nwait %1\necho $?\nwait\necho $?\n").trim(),
+        "143\n0"
+    );
 }
 
 #[test]

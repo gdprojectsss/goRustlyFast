@@ -81,6 +81,7 @@ pub fn run() -> i32 {
         Some(option) => !option.starts_with('-') || option == "-",
         None => false,
     };
+    sys::init_shell_signals(agent);
     let mut capture = None;
     if agent {
         crate::agent::prepare_environment();

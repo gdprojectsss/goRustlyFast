@@ -47,6 +47,8 @@ const BUILTINS: &[&str] = &[
     "bg",
     "wait",
     "kill",
+    "disown",
+    "times",
     "source",
     ".",
     "read",
@@ -90,7 +92,7 @@ pub(crate) fn names() -> &'static [&'static str] {
 
 pub(crate) fn run(shell: &mut Shell, argv: &[String]) -> i32 {
     let args = &argv[1..];
-    let mut out = io::stdout().lock();
+    let mut out = Output::new();
     let status = match argv[0].as_str() {
         "cd" => directory::cd(shell, args, &mut out),
         "z" => directory::jump(shell, args, &mut out),
@@ -110,16 +112,16 @@ pub(crate) fn run(shell: &mut Shell, argv: &[String]) -> i32 {
         "shift" => variables::shift(shell, args),
         "type" => output::describe(shell, args, &mut out, false),
         "command" => output::describe(shell, &args[args.len().min(1)..], &mut out, true),
-        "jobs" => jobs::list(shell, &mut out),
-        "fg" | "bg" | "wait" => {
+        "jobs" => jobs::list(shell, args, &mut out),
+        "fg" => jobs::fg(shell, args, &mut out),
+        "bg" => jobs::bg(shell, args, &mut out),
+        "wait" => {
             drop(out);
-            return match argv[0].as_str() {
-                "fg" => jobs::fg(shell, args),
-                "bg" => jobs::bg(shell, args),
-                _ => jobs::wait(shell, args),
-            };
+            return jobs::wait(shell, args);
         }
         "kill" => jobs::kill(shell, args, &mut out),
+        "disown" => jobs::disown(shell, args),
+        "times" => jobs::times(&mut out),
         "set" => script::set(shell, args, &mut out),
         "shopt" => script::shopt(shell, args, &mut out),
         "getopts" => getopts::run(shell, args),
@@ -164,7 +166,82 @@ pub(crate) fn run(shell: &mut Shell, argv: &[String]) -> i32 {
         _ => unreachable!(),
     };
     let _ = out.flush();
-    status
+    match out.error.take() {
+        Some(error) => report_write_error(shell, &argv[0], &error),
+        None => status,
+    }
+}
+
+fn report_write_error(shell: &Shell, name: &str, error: &io::Error) -> i32 {
+    let broken_pipe = error.raw_os_error() == Some(libc::EPIPE);
+    let pipe_signal_handled = broken_pipe
+        && crate::signals::is_pending(libc::SIGPIPE)
+        && !shell.traps.contains_key("PIPE");
+    if !pipe_signal_handled {
+        shell::error(format!(
+            "{name}: write error: {}",
+            crate::sys::error_message(error)
+        ));
+    }
+    1
+}
+
+struct Output {
+    buffer: Vec<u8>,
+    error: Option<io::Error>,
+}
+
+impl Output {
+    fn new() -> Self {
+        let _ = io::stdout().flush();
+        Output {
+            buffer: Vec::new(),
+            error: None,
+        }
+    }
+
+    fn send(&mut self) -> io::Result<()> {
+        if self.buffer.is_empty() {
+            return Ok(());
+        }
+        let result = crate::sys::write_all(1, &self.buffer);
+        self.buffer.clear();
+        if let Err(error) = &result
+            && self.error.is_none()
+        {
+            self.error = Some(io::Error::from_raw_os_error(
+                error.raw_os_error().unwrap_or(libc::EIO),
+            ));
+        }
+        result
+    }
+}
+
+impl Write for Output {
+    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+        if self.error.is_some() {
+            return Err(io::Error::from(io::ErrorKind::BrokenPipe));
+        }
+        self.buffer.extend_from_slice(data);
+        if self.buffer.len() >= 8192 {
+            self.send()?;
+        }
+        Ok(data.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        if self.error.is_some() {
+            self.buffer.clear();
+            return Ok(());
+        }
+        self.send()
+    }
+}
+
+impl Drop for Output {
+    fn drop(&mut self) {
+        let _ = self.flush();
+    }
 }
 
 fn explain(shell: &mut Shell, args: &[String]) -> i32 {

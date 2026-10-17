@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::builtins::{self, test};
+use crate::builtins::{self, test, trap};
 use crate::commands;
 use crate::expand;
 use crate::shell::{self, Flow, Shell};
@@ -16,6 +16,7 @@ mod process;
 mod redirect;
 
 const MAX_FUNCTION_DEPTH: usize = 1000;
+const SUBSHELL_TEXT: &str = "( ... )";
 
 impl Shell {
     pub(crate) fn run_source(&mut self, source: &str) -> i32 {
@@ -116,6 +117,9 @@ impl Shell {
                 shell::set_location(None, item.line);
             }
         }
+        if self.trap_depth == 0 && self.traps.contains_key("DEBUG") {
+            self.set_variable("BASH_COMMAND", item.text.trim());
+        }
         let last = item.rest.len();
         let mut status = self.run_guarded(&item.first, &item.text, last > 0);
         let mut ran_last = last == 0;
@@ -177,36 +181,48 @@ impl Shell {
 
     fn run_trap(&mut self, command: &str) {
         let status = self.last_status;
+        self.trap_depth += 1;
         self.condition_depth += 1;
         self.run_source(command);
         self.condition_depth -= 1;
+        self.trap_depth -= 1;
         if self.flow != Flow::Exit {
             self.last_status = status;
         }
     }
 
-    pub(crate) fn handle_signals(&mut self) {
+    pub(crate) fn handle_signals(&mut self) -> Option<libc::c_int> {
         if self.agent && crate::agent::timed_out() {
             self.last_status = 124;
             self.flow = Flow::Interrupted;
         }
+        let mut handled = None;
         for signal in signals::take_pending() {
-            let name = sys::signal_name(signal).unwrap_or_default();
-            match self.traps.get(name).cloned() {
-                Some(command) if !command.is_empty() => self.run_trap(&command),
-                Some(_) => {}
-                None if signal == libc::SIGHUP && self.interactive => {
-                    self.hang_up_jobs();
-                    self.last_status = 128 + libc::SIGHUP;
-                    self.flow = Flow::Exit;
-                }
-                None if signal == libc::SIGINT && self.interactive => {
-                    eprintln!();
-                    self.last_status = 128 + libc::SIGINT;
-                    self.flow = Flow::Interrupted;
-                }
-                None => {}
+            self.handle_signal(signal);
+            if signal != libc::SIGCHLD || self.traps.contains_key("CHLD") {
+                handled = Some(signal);
             }
+        }
+        handled
+    }
+
+    fn handle_signal(&mut self, signal: libc::c_int) {
+        let name = sys::signal_name(signal).unwrap_or_default();
+        match self.traps.get(name).cloned() {
+            Some(command) if !command.is_empty() => self.run_trap(&command),
+            Some(_) => {}
+            None if signal == libc::SIGHUP && self.interactive => {
+                self.hang_up_jobs();
+                self.last_status = 128 + libc::SIGHUP;
+                self.flow = Flow::Exit;
+            }
+            None if signal == libc::SIGINT && self.interactive => {
+                eprintln!();
+                self.last_status = 128 + libc::SIGINT;
+                self.flow = Flow::Interrupted;
+            }
+            None if !self.interactive && trap::is_terminating(signal) => self.die_by_signal(signal),
+            None => {}
         }
     }
 
@@ -242,7 +258,7 @@ impl Shell {
     }
 
     fn hang_up_jobs(&mut self) {
-        for job in self.jobs.iter() {
+        for job in self.jobs.iter().filter(|job| !job.keep_on_hangup) {
             let _ = sys::kill(-job.pgid, libc::SIGHUP);
             let _ = sys::kill(-job.pgid, libc::SIGCONT);
         }
@@ -263,23 +279,7 @@ impl Shell {
 
     pub(crate) fn run_pipeline(&mut self, pipeline: &Pipeline, text: &str) -> i32 {
         if pipeline.timed {
-            let started = std::time::Instant::now();
-            let (user_before, system_before) = sys::cpu_times();
-            let untimed = Pipeline {
-                timed: false,
-                ..pipeline.clone()
-            };
-            let status = self.run_pipeline(&untimed, text);
-            let (user_after, system_after) = sys::cpu_times();
-            let format =
-                |seconds: f64| format!("{}m{:.3}s", (seconds / 60.0) as u64, seconds % 60.0);
-            eprintln!(
-                "\nreal\t{}\nuser\t{}\nsys\t{}",
-                format(started.elapsed().as_secs_f64()),
-                format(user_after - user_before),
-                format(system_after - system_before)
-            );
-            return status;
+            return self.run_timed(pipeline, text);
         }
         let status = match pipeline.commands.as_slice() {
             [command] => self.run_command(command, false),
@@ -300,12 +300,44 @@ impl Shell {
         status
     }
 
+    fn run_timed(&mut self, pipeline: &Pipeline, text: &str) -> i32 {
+        let mut untimed = Pipeline {
+            timed: false,
+            ..pipeline.clone()
+        };
+        let posix = take_posix_flag(&mut untimed);
+        let started = std::time::Instant::now();
+        let before = sys::process_times();
+        let status = self.run_pipeline(&untimed, text);
+        let after = sys::process_times();
+        let real = started.elapsed().as_secs_f64();
+        let user = after[0] - before[0] + after[2] - before[2];
+        let system = after[1] - before[1] + after[3] - before[3];
+        let format = if posix {
+            "real %2R\nuser %2U\nsys %2S".to_string()
+        } else {
+            self.get_variable("TIMEFORMAT")
+                .unwrap_or_else(|| "\nreal\t%3lR\nuser\t%3lU\nsys\t%3lS".into())
+        };
+        if !format.is_empty() {
+            match format_times(&format, real, user, system) {
+                Ok(report) => eprintln!("{report}"),
+                Err(character) => shell::error(format!(
+                    "TIMEFORMAT: `{character}': invalid format character"
+                )),
+            }
+        }
+        self.last_status = status;
+        status
+    }
+
     pub(crate) fn run_command(&mut self, command: &Command, exec_in_place: bool) -> i32 {
         let mark = self.substitution_fds.len();
         let status = self.run_command_kind(command, exec_in_place);
         for fd in self.substitution_fds.drain(mark..) {
             sys::close(fd);
         }
+        self.collect_children();
         status
     }
 
@@ -330,7 +362,7 @@ impl Shell {
                     kind: CommandKind::Group(list.clone()),
                     redirects: Vec::new(),
                 };
-                self.run_forked(std::slice::from_ref(&group), "( ... )")
+                self.run_forked(std::slice::from_ref(&group), SUBSHELL_TEXT)
             }
             CommandKind::If {
                 branches,
@@ -359,7 +391,11 @@ impl Shell {
                 self.loop_depth += 1;
                 loop {
                     self.run_condition(condition);
-                    if self.flow != Flow::Normal || (self.last_status == 0) == *until {
+                    if self.flow != Flow::Normal {
+                        status = self.last_status;
+                        break;
+                    }
+                    if (self.last_status == 0) == *until {
                         break;
                     }
                     status = self.run_list(body);
@@ -546,6 +582,13 @@ impl Shell {
         assignments: &[(String, String)],
         redirects: &[Redirect],
     ) -> i32 {
+        let (options, argv) = match parse_exec_options(argv) {
+            Ok(parsed) => parsed,
+            Err(message) => {
+                shell::error(message);
+                return 2;
+            }
+        };
         let Some(name) = argv.first() else {
             return match self.apply_redirects(redirects) {
                 Ok(()) => 0,
@@ -556,14 +599,32 @@ impl Shell {
             };
         };
         let Some(path) = self.resolve(name) else {
-            self.command_not_found(name);
+            let name = name.clone();
+            let status = self.with_redirects(redirects, |_| {
+                shell::error(format!("exec: {name}: not found"));
+                127
+            });
             if !self.interactive {
                 self.flow = Flow::Exit;
             }
-            return 127;
+            return status;
         };
-        sys::reset_child_signals();
-        self.exec_external(&path, argv, assignments, redirects)
+        if self.interactive {
+            sys::reset_child_signals();
+        }
+        let mut argv = argv.to_vec();
+        if let Some(name) = options.name {
+            argv[0] = name;
+        }
+        if options.login {
+            argv[0] = format!("-{}", argv[0]);
+        }
+        if options.clear_environment {
+            for (name, _) in std::env::vars_os() {
+                unsafe { std::env::remove_var(name) };
+            }
+        }
+        self.exec_external(&path, &argv, assignments, redirects)
     }
 
     fn evaluate_condition(&mut self, condition: &Condition) -> Result<bool, String> {
@@ -726,6 +787,7 @@ impl Shell {
         exec_in_place: bool,
     ) -> i32 {
         self.substitution_status = None;
+        self.run_named_trap("DEBUG");
         let mut argv = match expand::words(self, &simple.words) {
             Ok(arguments) => arguments,
             Err(error) => return self.expansion_failed(error),
@@ -822,8 +884,11 @@ impl Shell {
             return builtins::change_directory(self, name);
         }
         let Some(path) = resolved else {
-            self.command_not_found(name);
-            return 127;
+            let name = name.to_string();
+            return self.with_redirects(redirects, |shell| {
+                shell.command_not_found(&name);
+                127
+            });
         };
         if exec_in_place {
             self.exec_external(&path, &argv, &assignments, redirects)
@@ -847,6 +912,10 @@ impl Shell {
     }
 
     pub(crate) fn command_not_found(&mut self, name: &str) {
+        if name.contains('/') {
+            shell::error(format!("{name}: No such file or directory"));
+            return;
+        }
         let suggestion = self.suggest_command(name);
         match suggestion {
             Some(candidate) => shell::error(format!(
@@ -912,16 +981,59 @@ impl Shell {
         let saved = std::mem::replace(&mut self.positional, argv[1..].to_vec());
         self.locals.push(HashMap::new());
         self.function_stack.push(argv[0].clone());
-        self.run_command(body, false);
-        self.function_stack.pop();
+        let line = self.current_line;
+        let hidden = self.hide_function_traps();
+        if self.options.functrace {
+            self.run_named_trap("DEBUG");
+        }
+        let status = self.run_command(body, false);
+        self.last_status = status;
         if self.flow == Flow::Return {
             self.flow = Flow::Normal;
         }
+        self.run_named_trap("RETURN");
+        self.restore_function_traps(hidden);
+        self.current_line = line;
+        if !self.interactive && line > 0 {
+            shell::set_location(None, line);
+        }
+        self.function_stack.pop();
         for (name, previous) in self.locals.pop().unwrap_or_default() {
             self.restore(name, previous);
         }
         self.positional = saved;
         self.last_status
+    }
+
+    fn hide_function_traps(&mut self) -> Vec<(String, String)> {
+        let mut hidden = Vec::new();
+        for (name, inherited) in [
+            ("ERR", self.options.errtrace),
+            ("DEBUG", self.options.functrace),
+            ("RETURN", self.options.functrace),
+        ] {
+            if !inherited && let Some(command) = self.traps.remove(name) {
+                hidden.push((name.to_string(), command));
+            }
+        }
+        hidden
+    }
+
+    fn restore_function_traps(&mut self, hidden: Vec<(String, String)>) {
+        for (name, command) in hidden {
+            self.traps.entry(name).or_insert(command);
+        }
+    }
+
+    pub(crate) fn run_named_trap(&mut self, name: &str) {
+        if self.trap_depth > 0 {
+            return;
+        }
+        if let Some(command) = self.traps.get(name).cloned()
+            && !command.is_empty()
+        {
+            self.run_trap(&command);
+        }
     }
 
     pub(crate) fn with_temp_env(
@@ -957,6 +1069,112 @@ impl Shell {
         }
         status
     }
+}
+
+struct ExecOptions {
+    name: Option<String>,
+    login: bool,
+    clear_environment: bool,
+}
+
+fn parse_exec_options(argv: &[String]) -> Result<(ExecOptions, &[String]), String> {
+    let mut options = ExecOptions {
+        name: None,
+        login: false,
+        clear_environment: false,
+    };
+    let mut index = 0;
+    while let Some(argument) = argv.get(index) {
+        if argument == "--" {
+            index += 1;
+            break;
+        }
+        let Some(flags) = argument.strip_prefix('-').filter(|flags| !flags.is_empty()) else {
+            break;
+        };
+        index += 1;
+        for (position, flag) in flags.char_indices() {
+            match flag {
+                'c' => options.clear_environment = true,
+                'l' => options.login = true,
+                'a' => {
+                    let attached = &flags[position + 1..];
+                    options.name = Some(if attached.is_empty() {
+                        index += 1;
+                        argv.get(index - 1)
+                            .cloned()
+                            .ok_or("exec: -a: option requires an argument")?
+                    } else {
+                        attached.to_string()
+                    });
+                    break;
+                }
+                other => return Err(format!("exec: -{other}: invalid option")),
+            }
+        }
+    }
+    Ok((options, &argv[index..]))
+}
+
+fn take_posix_flag(pipeline: &mut Pipeline) -> bool {
+    let Some(Command {
+        kind: CommandKind::Simple(simple),
+        ..
+    }) = pipeline.commands.first_mut()
+    else {
+        return false;
+    };
+    let posix = simple
+        .words
+        .first()
+        .is_some_and(|word| word.as_literal() == Some("-p"));
+    if posix {
+        simple.words.remove(0);
+    }
+    posix
+}
+
+fn format_seconds(seconds: f64, precision: usize, long: bool) -> String {
+    if long {
+        let minutes = (seconds / 60.0) as u64;
+        format!("{minutes}m{:.precision$}s", seconds - minutes as f64 * 60.0)
+    } else {
+        format!("{seconds:.precision$}")
+    }
+}
+
+fn format_times(format: &str, real: f64, user: f64, system: f64) -> Result<String, char> {
+    let mut out = String::new();
+    let mut chars = format.chars().peekable();
+    while let Some(character) = chars.next() {
+        if character != '%' {
+            out.push(character);
+            continue;
+        }
+        let mut precision = None;
+        if let Some(digit) = chars.peek().and_then(|next| next.to_digit(10)) {
+            precision = Some((digit as usize).min(3));
+            chars.next();
+        }
+        let long = chars.next_if_eq(&'l').is_some();
+        match chars.next() {
+            Some('%') => out.push('%'),
+            Some('R') => out.push_str(&format_seconds(real, precision.unwrap_or(3), long)),
+            Some('U') => out.push_str(&format_seconds(user, precision.unwrap_or(3), long)),
+            Some('S') => out.push_str(&format_seconds(system, precision.unwrap_or(3), long)),
+            Some('P') => {
+                let percent = if real > 0.0 {
+                    (user + system) / real * 100.0
+                } else {
+                    0.0
+                };
+                out.push_str(&format!("{percent:.*}", precision.unwrap_or(2)));
+            }
+            Some(other) => return Err(other),
+            None => out.push('%'),
+        }
+    }
+    Ok(out)
 }
 
 fn trace_quote(text: &str) -> String {

@@ -30,15 +30,24 @@ pub struct ShellOptions {
     pub nullglob: bool,
     pub dotglob: bool,
     pub nocaseglob: bool,
+    pub errtrace: bool,
+    pub functrace: bool,
+    pub inherit_errexit: bool,
 }
 
 impl ShellOptions {
     pub fn flags(&self) -> String {
-        [(self.errexit, 'e'), (self.nounset, 'u'), (self.xtrace, 'x')]
-            .iter()
-            .filter(|(enabled, _)| *enabled)
-            .map(|(_, flag)| *flag)
-            .collect()
+        [
+            (self.errexit, 'e'),
+            (self.nounset, 'u'),
+            (self.xtrace, 'x'),
+            (self.errtrace, 'E'),
+            (self.functrace, 'T'),
+        ]
+        .iter()
+        .filter(|(enabled, _)| *enabled)
+        .map(|(_, flag)| *flag)
+        .collect()
     }
 }
 
@@ -102,6 +111,7 @@ pub struct Shell {
     pub path_commands: Option<(String, Vec<String>)>,
     pub directories: DirectoryHistory,
     pub pipe_to_table: bool,
+    pub trap_depth: u32,
 }
 
 impl Shell {
@@ -154,6 +164,7 @@ impl Shell {
             source_depth: 0,
             path_commands: None,
             pipe_to_table: false,
+            trap_depth: 0,
             directories: DirectoryHistory::new(
                 std::env::var_os("HOME")
                     .map(|home| std::path::Path::new(&home).join(".grfsh_dirs")),

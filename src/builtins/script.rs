@@ -26,12 +26,13 @@ pub(super) fn source(shell: &mut Shell, args: &[String]) -> i32 {
     let line = shell.current_line;
     let mut lines = contents.lines().map(String::from);
     let status = shell.run_lines(|| lines.next());
-    shell.current_line = line;
-    shell.source_stack.pop();
-    shell.source_depth -= 1;
     if shell.flow == Flow::Return {
         shell.flow = Flow::Normal;
     }
+    shell.run_named_trap("RETURN");
+    shell.current_line = line;
+    shell.source_stack.pop();
+    shell.source_depth -= 1;
     if let Some(positional) = saved_positional {
         shell.positional = positional;
     }
@@ -293,7 +294,15 @@ fn assign_fields(shell: &mut Shell, names: &[String], line: &str) {
     }
 }
 
-const OPTION_NAMES: &[&str] = &["errexit", "nounset", "xtrace", "pipefail", "vi"];
+const OPTION_NAMES: &[&str] = &[
+    "errexit",
+    "errtrace",
+    "functrace",
+    "nounset",
+    "xtrace",
+    "pipefail",
+    "vi",
+];
 
 fn option_flag<'a>(options: &'a mut ShellOptions, name: &str) -> Option<&'a mut bool> {
     match name {
@@ -302,6 +311,8 @@ fn option_flag<'a>(options: &'a mut ShellOptions, name: &str) -> Option<&'a mut 
         "xtrace" | "x" => Some(&mut options.xtrace),
         "pipefail" => Some(&mut options.pipefail),
         "vi" => Some(&mut options.vi),
+        "errtrace" | "E" => Some(&mut options.errtrace),
+        "functrace" | "T" => Some(&mut options.functrace),
         _ => None,
     }
 }
@@ -369,12 +380,19 @@ pub(super) fn set(shell: &mut Shell, args: &[String], out: &mut dyn Write) -> i3
     0
 }
 
-const SHOPT_NAMES: &[&str] = &["dotglob", "globstar", "nocaseglob", "nullglob"];
+const SHOPT_NAMES: &[&str] = &[
+    "dotglob",
+    "globstar",
+    "inherit_errexit",
+    "nocaseglob",
+    "nullglob",
+];
 
 fn shopt_flag<'a>(options: &'a mut ShellOptions, name: &str) -> Option<&'a mut bool> {
     match name {
         "dotglob" => Some(&mut options.dotglob),
         "globstar" => Some(&mut options.globstar),
+        "inherit_errexit" => Some(&mut options.inherit_errexit),
         "nocaseglob" => Some(&mut options.nocaseglob),
         "nullglob" => Some(&mut options.nullglob),
         _ => None,

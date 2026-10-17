@@ -1,3 +1,4 @@
+use crate::builtins::trap;
 use crate::jobs::JobState;
 use crate::shell::{self, Flow, Shell};
 use crate::signals;
@@ -11,7 +12,12 @@ impl Shell {
         let log = self.agent.then(crate::agent::job_log_path).flatten();
         match sys::fork() {
             Ok(0) => {
+                let job_control = self.interactive;
                 self.enter_child(Some(0), false);
+                if !job_control && !self.agent {
+                    signals::keep_ignored(libc::SIGINT);
+                    signals::keep_ignored(libc::SIGQUIT);
+                }
                 if let Some(path) = &log {
                     crate::agent::send_output_to(path);
                 }
@@ -22,7 +28,7 @@ impl Shell {
                     } else {
                         self.run_and_or(item)
                     };
-                sys::exit_now(status)
+                self.exit_child(status)
             }
             Ok(pid) => {
                 sys::setpgid(pid, pid);
@@ -51,16 +57,39 @@ impl Shell {
             }
         }
         sys::reset_child_signals();
+        let errtrace = self.options.errtrace;
+        let functrace = self.options.functrace;
         self.traps.retain(|name, command| {
-            let ignored = command.is_empty();
-            if !ignored && let Some(signal) = sys::signal_number(name) {
-                signals::set(signal, signals::Disposition::Default);
+            let kept = command.is_empty()
+                || (errtrace && name == "ERR")
+                || (functrace && (name == "DEBUG" || name == "RETURN"));
+            if let Some(signal) = sys::signal_number(name) {
+                let disposition = if kept {
+                    signals::Disposition::Ignore
+                } else {
+                    signals::Disposition::Default
+                };
+                signals::set(signal, disposition);
             }
-            ignored
+            kept
         });
         signals::clear();
         self.interactive = false;
-        self.forget_jobs();
+        trap::refresh_terminating(self);
+        self.jobs.inherit();
+    }
+
+    pub(crate) fn exit_child(&mut self, status: i32) -> ! {
+        self.last_status = status;
+        self.run_exit_trap();
+        sys::exit_now(self.last_status)
+    }
+
+    pub(crate) fn die_by_signal(&mut self, signal: libc::c_int) -> ! {
+        signals::take(signal);
+        self.last_status = 128 + signal;
+        self.run_exit_trap();
+        sys::die_by_signal(signal)
     }
 
     pub(crate) fn run_forked(&mut self, commands: &[Command], text: &str) -> i32 {
@@ -83,6 +112,9 @@ impl Shell {
             match sys::fork() {
                 Ok(0) => {
                     self.enter_child(self.interactive.then_some(pgid), true);
+                    if text == super::SUBSHELL_TEXT {
+                        self.jobs.clear();
+                    }
                     if index > 0 {
                         let _ = sys::dup2(pipes[index - 1].0, 0);
                     }
@@ -93,7 +125,7 @@ impl Shell {
                     self.pipe_to_table =
                         commands.get(index + 1).is_some_and(table::consumes_tables);
                     let status = self.run_command(command, true);
-                    sys::exit_now(status)
+                    self.exit_child(status)
                 }
                 Ok(pid) => {
                     if pgid == 0 {
@@ -132,9 +164,46 @@ impl Shell {
         for (name, value) in assignments {
             unsafe { std::env::set_var(name, value) };
         }
-        let err = sys::execv(path, argv);
-        shell::error(format!("{}: {}", argv[0], sys::error_message(&err)));
-        sys::exit_now(126)
+        let error = sys::execv(path, argv);
+        if error.raw_os_error() == Some(libc::ENOEXEC) {
+            self.run_as_script(path, argv);
+        }
+        let message = if std::path::Path::new(path).is_dir() {
+            "Is a directory".to_string()
+        } else {
+            sys::error_message(&error)
+        };
+        shell::error(format!("{}: {message}", argv[0]));
+        let status = if error.kind() == std::io::ErrorKind::NotFound {
+            127
+        } else {
+            126
+        };
+        sys::exit_now(status)
+    }
+
+    fn run_as_script(&mut self, path: &str, argv: &[String]) {
+        if is_binary_file(path) {
+            shell::error(format!(
+                "{}: cannot execute binary file: Exec format error",
+                argv[0]
+            ));
+            sys::exit_now(126);
+        }
+        let Ok(program) = std::env::current_exe() else {
+            return;
+        };
+        let program = program.to_string_lossy().into_owned();
+        let script = if argv[0].contains('/') {
+            argv[0].clone()
+        } else {
+            path.to_string()
+        };
+        let arguments: Vec<String> = ["grfsh".to_string(), script]
+            .into_iter()
+            .chain(argv[1..].iter().cloned())
+            .collect();
+        let _ = sys::execv(&program, &arguments);
     }
 
     pub(crate) fn process_substitution(
@@ -169,7 +238,7 @@ impl Shell {
                         2
                     }
                 };
-                sys::exit_now(status)
+                self.exit_child(status)
             }
             Ok(pid) => {
                 sys::close(given);
@@ -226,6 +295,9 @@ impl Shell {
         match sys::fork() {
             Ok(0) => {
                 self.enter_child(None, false);
+                if !self.options.inherit_errexit {
+                    self.options.errexit = false;
+                }
                 sys::close(read_end);
                 let _ = sys::dup2(write_end, 1);
                 sys::close(write_end);
@@ -237,11 +309,11 @@ impl Shell {
                         2
                     }
                 };
-                sys::exit_now(status)
+                self.exit_child(status)
             }
             Ok(pid) => {
                 sys::close(write_end);
-                let out = sys::read_all(read_end);
+                let out = sys::read_to_end(read_end);
                 sys::close(read_end);
                 let status = sys::waitpid(pid, 0)
                     .ok()
@@ -283,14 +355,24 @@ impl Shell {
         let mut statuses = Vec::with_capacity(pids.len());
         let mut stopped = Vec::new();
         let mut interrupted = false;
+        let cooperative = !self.interactive && !self.traps.contains_key("INT");
+        if cooperative {
+            signals::set(libc::SIGINT, signals::Disposition::Catch);
+        }
         for &pid in &pids {
-            match sys::waitpid(pid, libc::WUNTRACED) {
+            match self.wait_foreground_pid(pid, cooperative) {
                 Ok(Some(WaitResult::Stopped)) => stopped.push(pid),
                 Ok(Some(result)) => {
                     statuses.push(result.status());
                     interrupted |= result == WaitResult::Signaled(libc::SIGINT);
                 }
                 _ => statuses.push(0),
+            }
+        }
+        if cooperative {
+            signals::set(libc::SIGINT, trap::default_disposition(self, libc::SIGINT));
+            if signals::take(libc::SIGINT) && interrupted {
+                self.die_by_signal(libc::SIGINT);
             }
         }
         if self.agent {
@@ -313,7 +395,9 @@ impl Shell {
 
         if !stopped.is_empty() {
             let id = self.jobs.add(id, pgid, stopped, text, JobState::Stopped);
-            eprintln!("\n[{id}]+  Stopped    {text}");
+            if let Some(index) = self.jobs.index_of(id) {
+                eprintln!("\n{}", self.jobs.get(index).line('+', false));
+            }
             return 128 + libc::SIGTSTP;
         }
         if interrupted && self.interactive {
@@ -323,6 +407,37 @@ impl Shell {
         status
     }
 
+    fn wait_foreground_pid(
+        &mut self,
+        pid: i32,
+        cooperative: bool,
+    ) -> std::io::Result<Option<WaitResult>> {
+        loop {
+            match sys::waitpid_interruptible(pid, libc::WUNTRACED) {
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+                    if let Some(signal) = self.fatal_pending_signal(cooperative) {
+                        self.die_by_signal(signal);
+                    }
+                }
+                other => return other,
+            }
+        }
+    }
+
+    fn fatal_pending_signal(&self, cooperative: bool) -> Option<libc::c_int> {
+        if self.interactive {
+            return None;
+        }
+        trap::TERMINATING
+            .iter()
+            .copied()
+            .filter(|&signal| !(cooperative && signal == libc::SIGINT))
+            .filter(|&signal| {
+                sys::signal_name(signal).is_some_and(|name| !self.traps.contains_key(name))
+            })
+            .find(|&signal| signals::is_pending(signal))
+    }
+
     pub(crate) fn started_background(&mut self, pid: i32, text: &str) {
         let id = self.jobs.add(None, pid, vec![pid], text, JobState::Running);
         if self.interactive {
@@ -330,18 +445,55 @@ impl Shell {
         }
     }
 
-    pub(crate) fn forget_jobs(&mut self) {
-        self.jobs.clear();
+    pub(crate) fn collect_children(&mut self) {
+        if !self.substitution_pids.is_empty() {
+            self.substitution_pids
+                .retain(|&pid| matches!(sys::waitpid(pid, libc::WNOHANG), Ok(None)));
+        }
+        if self.jobs.has_running() {
+            self.jobs.reap();
+        }
     }
 
     pub(crate) fn reap_jobs(&mut self) {
-        self.substitution_pids
-            .retain(|&pid| matches!(sys::waitpid(pid, libc::WNOHANG), Ok(None)));
-        for notice in self.jobs.reap() {
-            if self.interactive {
+        self.collect_children();
+        if self.interactive {
+            for notice in self.jobs.take_finished() {
                 eprintln!("{notice}");
             }
         }
+    }
+
+    pub(crate) fn wait_until(&mut self, finished: impl Fn(&Self) -> bool) -> Option<libc::c_int> {
+        let watch_children = !self.traps.contains_key("CHLD");
+        if watch_children {
+            signals::set(libc::SIGCHLD, signals::Disposition::Catch);
+        }
+        let interrupted = loop {
+            let previous = sys::block_signals();
+            if watch_children {
+                signals::take(libc::SIGCHLD);
+            }
+            self.collect_children();
+            if finished(self) {
+                sys::set_signal_mask(&previous);
+                break None;
+            }
+            if signals::any_pending() {
+                sys::set_signal_mask(&previous);
+                let signal = self.handle_signals();
+                if signal.is_some() || self.flow != Flow::Normal {
+                    break Some(signal.unwrap_or(libc::SIGINT));
+                }
+                continue;
+            }
+            sys::suspend(&previous);
+            sys::set_signal_mask(&previous);
+        };
+        if watch_children {
+            signals::set(libc::SIGCHLD, signals::Disposition::Default);
+        }
+        interrupted
     }
 }
 
@@ -350,6 +502,21 @@ fn close_pipes(pipes: &[(i32, i32)]) {
         sys::close(read_end);
         sys::close(write_end);
     }
+}
+
+fn is_binary_file(path: &str) -> bool {
+    use std::io::Read;
+    let mut buffer = [0u8; 80];
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let count = file.read(&mut buffer).unwrap_or(0);
+    let head = &buffer[..count];
+    let line = head
+        .iter()
+        .position(|&byte| byte == b'\n')
+        .map_or(head, |end| &head[..end]);
+    line.contains(&0)
 }
 
 fn file_read_shortcut(source: &str) -> Option<String> {

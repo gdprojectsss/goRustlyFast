@@ -1,0 +1,48 @@
+trap -- 'echo e' EXIT
+trap -- '' SIGHUP
+trap -- 'echo a' SIGINT
+trap -- 'echo a' SIGTERM
+trap -- 'echo a' SIGINT
+trap -- 'echo e' EXIT
+trap -- '' SIGHUP
+trap -- 'echo a' SIGTERM
+trap -- 'echo hi' SIGUSR2
+bogus 1
+TERM
+15
+1
+TERM
+invalid 1
+--- ERR without errtrace
+in f
+ERR line 27 status 1
+--- ERR with errtrace
+ERR line 24 status 1
+in f
+ERR line 26 status 1
+ERR line 31 status 1
+ERR line 32 status 1
+subshell after
+ERR line 34 status 1
+--- RETURN
+in-h
+in-h
+RETURN from h
+in-k
+inner-return
+--- DEBUG
+DEBUG: a=1
+DEBUG: echo "a=$a"
+a=1
+DEBUG: m
+in-m
+DEBUG: trap - DEBUG
+--- subshell EXIT traps
+in subshell
+subshell exit
+[value
+substitution exit]
+not inherited
+nor here
+top exit
+--- exit 0
