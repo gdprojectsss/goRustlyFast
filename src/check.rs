@@ -283,7 +283,7 @@ pub fn run(paths: &[String]) -> i32 {
     let path_commands = commands::on_path(&std::env::var("PATH").unwrap_or_default());
     let mut status = 0;
     for path in paths {
-        let source = match std::fs::read_to_string(path) {
+        let source = match crate::bytes::read_file(path) {
             Ok(source) => source,
             Err(error) => {
                 crate::shell::error(format!("{path}: {}", crate::sys::error_message(&error)));

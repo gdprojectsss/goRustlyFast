@@ -18,7 +18,7 @@ fn walk(
     let entries = std::fs::read_dir(directory)
         .map_err(|error| format!("{}: {error}", directory.display()))?;
     for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
+        let name = crate::bytes::from_os(&entry.file_name());
         if name.starts_with('.') && !show_hidden {
             continue;
         }

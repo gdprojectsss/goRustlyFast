@@ -258,7 +258,7 @@ fn emit(shell: &Shell, output: Output) {
         Output::Table(table) => render::render(&table, Style::Plain, None, datetime::now()),
     };
     let mut out = std::io::stdout().lock();
-    let _ = out.write_all(text.as_bytes());
+    let _ = out.write_all(&crate::bytes::encode(&text));
     let _ = out.flush();
 }
 
@@ -268,7 +268,7 @@ fn read_input(command: &str) -> Result<String, String> {
             "expects input from a pipe, for example: files | {command} ..."
         ));
     }
-    Ok(String::from_utf8_lossy(&sys::read_all(0)).into_owned())
+    Ok(crate::bytes::decode(&sys::read_all(0)))
 }
 
 fn read_table(command: &str) -> Result<Table, String> {

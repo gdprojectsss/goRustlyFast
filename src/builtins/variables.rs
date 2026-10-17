@@ -95,7 +95,17 @@ fn parse_flags(command: &str, args: &[String]) -> Result<(Flags, Vec<String>), S
 }
 
 fn quote(value: &str) -> String {
-    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+    if crate::escapes::needs_ansi_quote(value) {
+        return crate::escapes::ansi_quote(value);
+    }
+    format!(
+        "\"{}\"",
+        value
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('$', "\\$")
+            .replace('`', "\\`")
+    )
 }
 
 pub(crate) fn attribute_letters(shell: &Shell, name: &str) -> String {
@@ -142,7 +152,9 @@ fn describe(shell: &Shell, name: &str) -> Option<String> {
 
 fn listed_names(shell: &Shell, command: &str) -> Vec<String> {
     let mut names: Vec<String> = match command {
-        "export" => std::env::vars().map(|(name, _)| name).collect(),
+        "export" => std::env::vars_os()
+            .map(|(name, _)| crate::bytes::from_os(&name))
+            .collect(),
         "readonly" => shell
             .attributes
             .iter()

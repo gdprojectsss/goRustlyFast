@@ -27,38 +27,15 @@ pub(super) fn echo(args: &[String], out: &mut dyn Write) -> i32 {
     }
     let mut text = rest.join(" ");
     if escapes {
-        text = unescape(&text);
+        let expanded = crate::escapes::expand(&text, crate::escapes::Mode::Echo);
+        newline &= !expanded.stopped;
+        text = expanded.text;
     }
     let _ = write!(out, "{text}");
     if newline {
         let _ = writeln!(out);
     }
     0
-}
-
-fn unescape(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars();
-    while let Some(character) = chars.next() {
-        if character != '\\' {
-            out.push(character);
-            continue;
-        }
-        match chars.next() {
-            Some('n') => out.push('\n'),
-            Some('t') => out.push('\t'),
-            Some('r') => out.push('\r'),
-            Some('e') => out.push('\x1b'),
-            Some('0') => out.push('\0'),
-            Some('\\') => out.push('\\'),
-            Some(other) => {
-                out.push('\\');
-                out.push(other);
-            }
-            None => out.push('\\'),
-        }
-    }
-    out
 }
 
 pub(super) fn describe(shell: &Shell, args: &[String], out: &mut dyn Write, short: bool) -> i32 {
@@ -141,7 +118,8 @@ mod tests {
 
     #[test]
     fn echo_escapes() {
-        assert_eq!(unescape("a\\tb\\n"), "a\tb\n");
-        assert_eq!(unescape("keep\\q"), "keep\\q");
+        let mut out = Vec::new();
+        echo(&["-e".into(), "a\\tb\\cc".into(), "d".into()], &mut out);
+        assert_eq!(out, b"a\tb");
     }
 }

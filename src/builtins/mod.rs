@@ -90,7 +90,7 @@ pub(crate) fn names() -> &'static [&'static str] {
 
 pub(crate) fn run(shell: &mut Shell, argv: &[String]) -> i32 {
     let args = &argv[1..];
-    let mut out = io::stdout().lock();
+    let mut out = crate::bytes::Encoder::new(io::stdout().lock());
     let status = match argv[0].as_str() {
         "cd" => directory::cd(shell, args, &mut out),
         "z" => directory::jump(shell, args, &mut out),

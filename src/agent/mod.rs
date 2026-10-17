@@ -72,7 +72,7 @@ pub(crate) fn send_output_to(path: &std::path::Path) {
 
 pub(crate) fn explain_arguments(shell: &mut crate::shell::Shell, args: &[String]) -> i32 {
     let source = match args {
-        [flag, path] if flag == "-f" || flag == "--file" => match std::fs::read_to_string(path) {
+        [flag, path] if flag == "-f" || flag == "--file" => match crate::bytes::read_file(path) {
             Ok(source) => source,
             Err(error) => {
                 crate::shell::error(format!("explain: {path}: {}", sys::error_message(&error)));
@@ -109,7 +109,7 @@ pub(crate) struct Outcome {
 
 fn environment() -> BTreeMap<String, String> {
     std::env::vars_os()
-        .filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)))
+        .map(|(name, value)| (crate::bytes::from_os(&name), crate::bytes::from_os(&value)))
         .collect()
 }
 
@@ -117,7 +117,7 @@ fn read_back(fd: i32) -> String {
     unsafe { libc::lseek(fd, 0, libc::SEEK_SET) };
     let bytes = sys::read_all(fd);
     sys::close(fd);
-    String::from_utf8_lossy(&bytes).into_owned()
+    crate::bytes::decode(&bytes)
 }
 
 impl Capture {
@@ -192,7 +192,7 @@ fn budgeted(text: &str, label: &str) -> Stream {
 pub(crate) fn print_plain(outcome: &Outcome) {
     let stream = budgeted(&outcome.stdout, "output");
     let mut out = std::io::stdout().lock();
-    let _ = out.write_all(stream.text.as_bytes());
+    let _ = out.write_all(&crate::bytes::encode(&stream.text));
     if let Some(log) = stream.log {
         if !stream.text.ends_with('\n') && !stream.text.is_empty() {
             let _ = out.write_all(b"\n");
@@ -204,7 +204,7 @@ pub(crate) fn print_plain(outcome: &Outcome) {
 
 pub(crate) fn result_json(outcome: &Outcome, status: i32, directory: &str) -> Json {
     let number = |value: u128| Json::Number(value.to_string());
-    let text = |value: &str| Json::String(value.to_string());
+    let text = |value: &str| Json::String(crate::bytes::lossy(value));
     let stdout = budgeted(&outcome.stdout, "stdout");
     let stderr = budgeted(&outcome.stderr, "stderr");
     let log = |stream: &Stream| stream.log.as_deref().map_or(Json::Null, text);

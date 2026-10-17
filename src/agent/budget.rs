@@ -87,7 +87,7 @@ pub(crate) fn save_full_output(text: &str, label: &str) -> Option<PathBuf> {
         .mode(0o600)
         .open(&path)
         .ok()?;
-    file.write_all(text.as_bytes()).ok()?;
+    file.write_all(&crate::bytes::encode(text)).ok()?;
     Some(path)
 }
 

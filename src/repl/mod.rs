@@ -48,7 +48,9 @@ fn install_panic_handler() {
 pub fn run() -> i32 {
     install_panic_handler();
     sys::unblock_signals();
-    let mut args: Vec<String> = std::env::args().collect();
+    let mut args: Vec<String> = std::env::args_os()
+        .map(|argument| crate::bytes::from_os(&argument))
+        .collect();
     let invoked_as = if args.is_empty() {
         String::new()
     } else {
@@ -190,8 +192,8 @@ pub fn run() -> i32 {
 }
 
 fn run_script(shell: &mut Shell, path: &str, args: &[String]) -> i32 {
-    let contents = match std::fs::read_to_string(path) {
-        Ok(contents) => contents,
+    let mut reader = match crate::bytes::LineReader::open(path) {
+        Ok(reader) => reader,
         Err(error) => {
             shell::error(format!("{path}: {}", sys::error_message(&error)));
             return 127;
@@ -201,8 +203,7 @@ fn run_script(shell: &mut Shell, path: &str, args: &[String]) -> i32 {
     shell.source_stack.push(path.to_string());
     shell.positional = args.to_vec();
     shell::set_location(Some(path), 0);
-    let mut lines = contents.lines().map(String::from);
-    shell.run_lines(|| lines.next())
+    shell.run_lines(|| reader.next_line())
 }
 
 fn home_dir() -> PathBuf {
@@ -284,7 +285,7 @@ fn load_file(shell: &mut Shell, path: &std::path::Path) {
         shell::error(format!("not loading {problem}"));
         return;
     }
-    let Ok(contents) = std::fs::read_to_string(path) else {
+    let Ok(contents) = std::fs::read(path).map(|bytes| crate::bytes::decode(&bytes)) else {
         return;
     };
     let mut lines = contents.lines().map(String::from);
@@ -546,7 +547,9 @@ fn completion_names(shell: &mut Shell) -> ShellNames {
     commands.extend(shell.functions.keys().cloned());
     commands.extend(shell.aliases.keys().cloned());
 
-    let mut variables: Vec<String> = std::env::vars().map(|(name, _)| name).collect();
+    let mut variables: Vec<String> = std::env::vars_os()
+        .map(|(name, _)| crate::bytes::from_os(&name))
+        .collect();
     variables.extend(shell.variables.keys().cloned());
     variables.sort();
     variables.dedup();

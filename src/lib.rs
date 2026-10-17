@@ -1,8 +1,10 @@
 mod agent;
 mod builtins;
+mod bytes;
 mod check;
 mod commands;
 mod directories;
+mod escapes;
 mod exec;
 mod expand;
 mod jobs;
